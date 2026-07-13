@@ -1,22 +1,21 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 2.9.6
+ * Version: 2.9.7
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "2.9.6";
+const APP_VERSION = "2.9.7";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
   central: Object.freeze([
-    { emoji: "⚡", text: "بررسی بروزرسانی GitHub با هر ترافیک سامانه و اعمال نسخه جدید بدون انتظار برای Cron" },
-    { emoji: "🔗", text: "بازشدن مستقیم و پایدار لینک ورود مدیریت مرکزی بدون گیرکردن در ریدایرکت" }
+    { emoji: "⚡", text: "حذف کامل انتظار Python Helper از مسیر /start و نمایش فوری منوی ربات" },
+    { emoji: "⏱", text: "اعمال سقف انتظار کوتاه برای تحلیل هوشمند تا هیچ درخواست پنل معطل Helper نماند" }
   ]),
   reseller: Object.freeze([
-    { emoji: "🖥", text: "اصلاح کامل آدرس پنل مدیریت ربات‌های نماینده در معماری سه‌Worker" },
-    { emoji: "🛡", text: "اصلاح خطای ورود ناشی از تشخیص اشتباه Origin در مسیر Service Binding" }
+    { emoji: "🚀", text: "بهینه‌سازی مسیرهای پرتکرار برای واکنش سریع‌تر ربات‌ها و پنل‌ها" }
   ])
 });
 
@@ -75,6 +74,8 @@ const resellerTokenCache = new Map();
 const joinStatusCache = new Map();
 
 const SETTINGS_CACHE_TTL_MS = 15000;
+
+const PY_HELPER_INSIGHT_TIMEOUT_MS = 350;
 
 const RESELLER_TOKEN_CACHE_TTL_MS = 300000;
 
@@ -3376,16 +3377,30 @@ function localDashboardInsight(metrics) {
   return { success: true, score, tone, title, message, recommendations, source: "javascript-fallback" };
 }
 
-async function dashboardInsight(env, metrics) {
+async function dashboardInsight(env, metrics, options = {}) {
   const fallback = localDashboardInsight(metrics);
-  if (!env.PY_HELPER || typeof env.PY_HELPER.fetch !== "function") return fallback;
+  if (options.fast === true || !env.PY_HELPER || typeof env.PY_HELPER.fetch !== "function") return fallback;
+
+  const timeoutMs = Math.max(100, Math.min(1500, Number(options.timeoutMs || PY_HELPER_INSIGHT_TIMEOUT_MS)));
+  const controller = new AbortController();
+  let timeoutId = null;
   try {
-    const response = await env.PY_HELPER.fetch(new Request("https://python-helper/insights", {
+    const helperRequest = new Request("https://python-helper/insights", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(metrics)
-    }));
-    if (!response.ok) return fallback;
+      body: JSON.stringify(metrics),
+      signal: controller.signal
+    });
+    const response = await Promise.race([
+      env.PY_HELPER.fetch(helperRequest),
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          try { controller.abort("python-helper-timeout"); } catch (_) {}
+          reject(new Error("PY_HELPER_TIMEOUT"));
+        }, timeoutMs);
+      })
+    ]);
+    if (!response?.ok) return fallback;
     const data = await response.json();
     if (!data || data.success === false || !Number.isFinite(Number(data.score))) return fallback;
     return {
@@ -3399,6 +3414,8 @@ async function dashboardInsight(env, metrics) {
     };
   } catch (_) {
     return fallback;
+  } finally {
+    if (timeoutId !== null) clearTimeout(timeoutId);
   }
 }
 
@@ -5701,15 +5718,18 @@ function joinedMemberStatus(result) {
 }
 
 async function checkRequiredJoin(apiCall, userId, channels) {
-  const missing = [];
-  for (const channel of channels) {
+  const results = await Promise.all(channels.map(async channel => {
     try {
-      const result = await apiCall("getChatMember", { chat_id: channel.chat_id, user_id: String(userId) });
-      if (!joinedMemberStatus(result)) missing.push(channel);
+      const result = await Promise.race([
+        apiCall("getChatMember", { chat_id: channel.chat_id, user_id: String(userId) }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("JOIN_CHECK_TIMEOUT")), 1800))
+      ]);
+      return joinedMemberStatus(result) ? null : channel;
     } catch (_) {
-      missing.push(channel);
+      return channel;
     }
-  }
+  }));
+  const missing = results.filter(Boolean);
   return { ok: missing.length === 0, missing };
 }
 
@@ -7049,7 +7069,9 @@ async function botSendWelcome(env, account, chatId, fallbackOrigin = "") {
 
 async function botHomeView(env, account) {
   const summary = await botAccountSummary(env, account.user.id);
-  const insight = await dashboardInsight(env, {
+  // The Telegram /start path must never wait for an optional helper Worker.
+  // The local calculation is deterministic and keeps first response latency minimal.
+  const insight = localDashboardInsight({
     wallet_balance: Number(account.user.wallet_balance || 0),
     min_recharge: Number(account.settings.min_recharge || 100000),
     active_agencies: Number(summary.active_agencies || 0),
@@ -10038,7 +10060,7 @@ async function routeApiUnsafe(request, env, path) {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '2.9.6';
+const BLUEPANEL_CORE_VERSION = '2.9.7';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
