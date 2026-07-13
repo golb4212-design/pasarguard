@@ -1,21 +1,22 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 2.9.5
+ * Version: 2.9.6
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "2.9.5";
+const APP_VERSION = "2.9.6";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
   central: Object.freeze([
-    { emoji: "🔐", text: "تشخیص خودکار رمز منقضی یا تغییرکرده پنل نماینده و جلوگیری از نمایش خطای انگلیسی" }
+    { emoji: "⚡", text: "بررسی بروزرسانی GitHub با هر ترافیک سامانه و اعمال نسخه جدید بدون انتظار برای Cron" },
+    { emoji: "🔗", text: "بازشدن مستقیم و پایدار لینک ورود مدیریت مرکزی بدون گیرکردن در ریدایرکت" }
   ]),
   reseller: Object.freeze([
-    { emoji: "♻️", text: "درخواست رمز جدید هنگام تأیید سفارش و ادامه خودکار همان سفارش پس از تأیید رمز" },
-    { emoji: "🧹", text: "حذف امن رمز نامعتبر ذخیره‌شده و جایگزینی آن با رمز جدید بدون قطع اتصال ربات" }
+    { emoji: "🖥", text: "اصلاح کامل آدرس پنل مدیریت ربات‌های نماینده در معماری سه‌Worker" },
+    { emoji: "🛡", text: "اصلاح خطای ورود ناشی از تشخیص اشتباه Origin در مسیر Service Binding" }
   ])
 });
 
@@ -227,7 +228,7 @@ const DEFAULT_SETTINGS = {
   pending_invoice_ttl_hours: "24",
   usage_sync_enabled: "true",
   auto_update: "true",
-  auto_update_interval_seconds: "900",
+  auto_update_interval_seconds: "5",
   auto_update_last_check_epoch: "0",
   auto_update_last_status: "never",
   auto_update_last_version: "",
@@ -1671,7 +1672,7 @@ function adminSettings(settings) {
     pending_invoice_ttl_hours: Number(settings.pending_invoice_ttl_hours || 24),
     usage_sync_enabled: settings.usage_sync_enabled === "true",
     auto_update: true,
-    auto_update_interval_seconds: Number(settings.auto_update_interval_seconds || 900),
+    auto_update_interval_seconds: Number(settings.auto_update_interval_seconds || 5),
     auto_update_ready: Boolean(settings.github_repo && settings.cf_account_id && settings.cf_api_token && settings.cf_worker_name),
     auto_update_last_status: settings.auto_update_last_status || "never",
     auto_update_last_version: settings.auto_update_last_version || "",
@@ -4282,7 +4283,7 @@ async function saveAdminSettings(request, env) {
   // Auto-linking is a core authentication invariant, not an optional feature.
   values.pasarguard_set_telegram_id = "true";
   if (values.auto_update_interval_seconds !== undefined) {
-    values.auto_update_interval_seconds = String(Math.max(300, Math.min(86400, Number(values.auto_update_interval_seconds || 900))));
+    values.auto_update_interval_seconds = String(Math.max(5, Math.min(86400, Number(values.auto_update_interval_seconds || 5))));
   }
   if (values.pending_invoice_ttl_hours !== undefined) {
     values.pending_invoice_ttl_hours = String(Math.max(1, Math.min(720, Number(values.pending_invoice_ttl_hours || 24))));
@@ -5285,7 +5286,7 @@ async function claimAutomaticUpdateCheck(env, intervalSeconds, forceCheck = fals
     await setSettings(env, { auto_update_last_check_epoch: String(now) });
     return true;
   }
-  const cutoff = now - Math.max(300, Number(intervalSeconds || 900));
+  const cutoff = now - Math.max(5, Number(intervalSeconds || 5));
   const result = await env.PASARGUARD_DB.prepare(`
     INSERT INTO app_settings(key, value, updated_at)
     VALUES('auto_update_last_check_epoch', ?, ?)
@@ -5304,7 +5305,7 @@ async function automaticUpdateTick(env, options = {}) {
   // database toggle is intentionally ignored so upgrades never wait for a click.
   // The claim happens before configuration validation to avoid a D1 write on
   // every request while setup or Cloudflare credentials are still incomplete.
-  const intervalSeconds = Math.max(300, Math.min(86400, Number(settings.auto_update_interval_seconds || 900)));
+  const intervalSeconds = Math.max(5, Math.min(86400, Number(options.intervalSeconds ?? settings.auto_update_interval_seconds ?? 5)));
   const claimed = await claimAutomaticUpdateCheck(env, intervalSeconds, options.forceCheck === true);
   if (!claimed) return { checked: false, deployed: false, reason: "throttled" };
 
@@ -5343,8 +5344,9 @@ async function automaticUpdateTick(env, options = {}) {
     try { await audit(env, null, "automatic_update_" + (result.deployed ? "deployed" : "checked"), { source, ...result }); } catch (_) {}
     return result;
   } catch (error) {
-    // A failed check is retried after five minutes instead of waiting the full interval.
-    const retryEpoch = Math.floor(Date.now() / 1000) - intervalSeconds + 300;
+    // A failed request-triggered check is retried quickly instead of waiting for the next Cron.
+    const retryDelay = Math.max(15, Math.min(300, intervalSeconds));
+    const retryEpoch = Math.floor(Date.now() / 1000) - intervalSeconds + retryDelay;
     await setSettings(env, {
       auto_update: "true",
       auto_update_last_check_epoch: String(retryEpoch),
@@ -5541,9 +5543,14 @@ function normalizeWorkerPublicUrl(value) {
 }
 
 function corePublicOrigin(settings, fallbackOrigin = "") {
-  try { if (fallbackOrigin) return new URL(String(fallbackOrigin)).origin; } catch (_) {}
-  try { return new URL(String(settings.app_url || "")).origin; }
-  catch (_) { throw new Error("آدرس عمومی Worker مرکزی در تنظیمات ثبت نشده است"); }
+  const candidates = [fallbackOrigin, settings?.app_url || ""];
+  for (const candidate of candidates) {
+    try {
+      const url = new URL(String(candidate || ""));
+      if (url.protocol === "https:" && !url.hostname.endsWith(".internal")) return url.origin;
+    } catch (_) {}
+  }
+  throw new Error("آدرس عمومی Worker مرکزی در تنظیمات ثبت نشده است");
 }
 
 function edgeWorkerRoutingEnabled(settings) {
@@ -5616,17 +5623,35 @@ async function centralMagicLogin(request, env) {
   const user = await env.PASARGUARD_DB.prepare("SELECT * FROM users WHERE telegram_id=? LIMIT 1").bind(telegramId).first();
   if (!user) return fail("حساب مدیر مرکزی ساخته نشد", 500, "ADMIN_USER_CREATE_FAILED");
   const session = await issueWebSession(request, env, "central", { user_id: user.id });
+  let controlResponse;
+  try {
+    controlResponse = await bluePanelForwardToEdge(new Request(url.origin + "/control", {
+      method: "GET",
+      headers: request.headers,
+      redirect: "manual"
+    }), env);
+  } catch (error) {
+    controlResponse = null;
+  }
+  if (!controlResponse || !controlResponse.ok) {
+    const status = Number(controlResponse?.status || 503);
+    const retryUrl = url.toString();
+    return new Response(`<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;background:#07111f;color:#fff;font-family:Tahoma,sans-serif;display:grid;min-height:100vh;place-items:center;padding:20px}.c{max-width:560px;background:#112944;border-radius:24px;padding:26px;box-shadow:0 20px 60px #0006}.b{display:block;text-align:center;margin-top:18px;padding:13px 16px;border-radius:14px;background:#1976f3;color:#fff;text-decoration:none}.m{color:#bfd0e5;line-height:2}</style><div class="c"><h2>پنل مدیریت هنوز آماده پاسخ نیست</h2><div class="m">اتصال Worker رابط بررسی می‌شود. لینک شما مصرف نشده و می‌توانید دوباره تلاش کنید.</div><a class="b" href="${botEscape(retryUrl)}">تلاش مجدد برای ورود</a></div></html>`, {
+      status: status >= 500 ? 503 : status,
+      headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer" }
+    });
+  }
   await env.PASARGUARD_DB.prepare("UPDATE web_login_codes SET consumed_at=? WHERE id=? AND consumed_at IS NULL").bind(ts, row.id).run();
   await audit(env, user.id, "central_magic_login", { telegram_id: telegramId, magic_id: magicId });
-  return new Response(null, {
-    status: 303,
-    headers: {
-      location: url.origin + "/control",
-      "set-cookie": webCookie(request, CENTRAL_WEB_COOKIE, session.token, session.seconds),
-      "cache-control": "no-store",
-      "referrer-policy": "no-referrer",
-      "x-bluepanel-auth-source": "telegram_magic_link"
-    }
+  const headers = new Headers(controlResponse.headers);
+  headers.set("set-cookie", webCookie(request, CENTRAL_WEB_COOKIE, session.token, session.seconds));
+  headers.set("cache-control", "no-store");
+  headers.set("referrer-policy", "no-referrer");
+  headers.set("x-bluepanel-auth-source", "telegram_magic_link");
+  return new Response(controlResponse.body, {
+    status: controlResponse.status,
+    statusText: controlResponse.statusText,
+    headers
   });
 }
 
@@ -7465,7 +7490,7 @@ async function botInvoicesView(env, account) {
 
 async function botAdminView(env, account) {
   if (!account.isAdmin) throw new Error("این بخش فقط برای مدیر سامانه است");
-  const managementUrl = await issueCentralManagementMagicUrl(env, account.settings, account.user.telegram_id);
+  const managementUrl = await issueCentralManagementMagicUrl(env, account.settings, account.user.telegram_id, account.public_origin || "");
   const stats = await env.PASARGUARD_DB.prepare(`
     SELECT
       (SELECT COUNT(*) FROM users) AS users_count,
@@ -8110,6 +8135,7 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
   const messageId = callback.message.message_id;
   const data = String(callback.data || "");
   const account = await ensureTelegramBotUser(env, callback.from, preloadedSettings);
+  account.public_origin = origin;
   if (callback.message.chat.type && callback.message.chat.type !== "private") throw new Error("برای حفظ امنیت، ربات را در گفت‌وگوی خصوصی استفاده کنید");
   const joinStatus = await centralRequiredJoinStatus(env, account.settings, callback.from.id, account.isAdmin, data === "join:check");
   if (data === "join:check") {
@@ -9438,6 +9464,7 @@ async function telegramWebhook(request, env) {
   const isStartOrMenu = /^\/(?:start|menu)(?:@\w+)?(?:\s+.*)?$/i.test(text);
   try {
     const account = await ensureTelegramBotUser(env, message.from, settings);
+    account.public_origin = origin;
     const joinStatus = await centralRequiredJoinStatus(env, account.settings, message.from.id, account.isAdmin);
     if (!joinStatus.ok) {
       await sendCentralJoinPrompt(env, message.chat.id, joinStatus.missing);
@@ -9572,7 +9599,7 @@ async function installApp(request, env) {
     pending_invoice_ttl_hours: "24",
     usage_sync_enabled: "true",
     auto_update: "true",
-    auto_update_interval_seconds: "900",
+    auto_update_interval_seconds: "5",
     app_url: canonicalAppUrl(body.app_url, new URL(request.url).origin),
     pasarguard_panel_url: cleanText(body.pasarguard_panel_url, 500),
     pasarguard_admin_username: cleanText(body.pasarguard_admin_username, 200),
@@ -10011,7 +10038,7 @@ async function routeApiUnsafe(request, env, path) {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '2.9.5';
+const BLUEPANEL_CORE_VERSION = '2.9.6';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
@@ -10086,10 +10113,26 @@ async function bluePanelCoreHealth(env) {
     installed
   };
 }
+let bluePanelNextRequestUpdateCheckAt = 0;
+const BLUEPANEL_REQUEST_UPDATE_INTERVAL_MS = 5000;
+
+function scheduleRequestTriggeredUpdate(env, ctx, path) {
+  if (!ctx || typeof ctx.waitUntil !== "function") return;
+  if (path === "/health" || path.startsWith("/__bluepanel/")) return;
+  const now = Date.now();
+  if (now < bluePanelNextRequestUpdateCheckAt) return;
+  bluePanelNextRequestUpdateCheckAt = now + BLUEPANEL_REQUEST_UPDATE_INTERVAL_MS;
+  ctx.waitUntil(automaticUpdateTick(env, {
+    source: "request",
+    intervalSeconds: Math.ceil(BLUEPANEL_REQUEST_UPDATE_INTERVAL_MS / 1000)
+  }).catch(error => console.error("request auto-update error", error)));
+}
+
 export default {
   async fetch(request,env,ctx){
     const url=new URL(request.url),path=url.pathname.replace(/\/+$/,'')||'/';
     try {
+      scheduleRequestTriggeredUpdate(env,ctx,path);
       if(request.method==='OPTIONS') return new Response(null,{status:204,headers:{'access-control-allow-origin':'*','access-control-allow-methods':'GET,POST,OPTIONS','access-control-allow-headers':'content-type,x-telegram-init-data,x-web-session,authorization,x-bluepanel-public-origin'}});
       if(path==='/__bluepanel/internal/d1'&&request.method==='POST') return bluePanelCoreD1Rpc(request,env);
       if((path==='/__bluepanel/service/core-local-health'||path==='/__bluepanel/service/core-health')&&bluePanelInternalHost(request)){const h=await bluePanelCoreLocalHealth(env);return bluePanelCoreJson(h,h.ok?200:503,{'x-bluepanel-role':'bluepanel-core','x-bluepanel-version':APP_VERSION});}
