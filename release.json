@@ -1,6 +1,6 @@
 {
-  "version": "3.0.0",
-  "release_id": "3.0.0-20260713-telegram-topic-reporting",
+  "version": "3.0.1",
+  "release_id": "3.0.1-20260713-remove-one-time-admin-login",
   "architecture": "fully-split-three-worker",
   "files": {
     "core": "core/worker.js",
@@ -8,39 +8,44 @@
     "processor": "processor/worker.js"
   },
   "sha256": {
-    "core": "48c6775f011315eea0ecdcb3cc5c5025546db981b1b6d48310d40bf2637dfe91",
-    "edge": "940fd262069914df834e999a5b7610ca989a83255f6db9e5eaa88f681bfcc401",
-    "processor": "c86a757c87f257ee32d5ce263d3fc4eb70b089b57a3a0e8955ba1e86d8dc6a7e"
+    "core": "e2af1d9d460d9290d3ba8f3b8918bec8653b251558b8b9e1a97ac5769fb13850",
+    "edge": "00f1eb4257747e0faaf19b6ce5d6b9ac4e607e12d87b831db223c28f79f4a461",
+    "processor": "01628ea0c623da3b4b73e75639bcb8302fd57c1bf54d18f6f64a291d228b41be"
   },
   "roles": {
-    "core": "central bot, finance, licenses, central report-group setup, central APIs and D1 authority",
-    "edge": "web panels, reseller bots, reseller report-group setup, customer miniapps and real-time event collection",
+    "core": "central bot, finance, licenses, permanent central admin authentication, central APIs and D1 authority",
+    "edge": "web panels, fixed central and reseller management pages, reseller bots and customer miniapps",
     "processor": "report delivery, comprehensive aggregation, scheduled reseller automation, retry queue and background jobs"
   },
   "bindings": {
-    "core": ["PASARGUARD_DB", "EDGE_WORKER", "PROCESSOR_WORKER"],
-    "edge": ["EDGE_DB", "CORE_WORKER", "PROCESSOR_WORKER"],
-    "processor": ["PROCESSOR_DB", "CORE_WORKER", "EDGE_WORKER"]
+    "core": [
+      "PASARGUARD_DB",
+      "EDGE_WORKER",
+      "PROCESSOR_WORKER"
+    ],
+    "edge": [
+      "EDGE_DB",
+      "CORE_WORKER",
+      "PROCESSOR_WORKER"
+    ],
+    "processor": [
+      "PROCESSOR_DB",
+      "CORE_WORKER",
+      "EDGE_WORKER"
+    ]
   },
   "remote_d1": "service-binding-only",
   "request_update_checks": true,
   "request_update_check_interval_seconds": 5,
   "health_check_mode": "cycle-safe-local-endpoints",
-  "reporting": {
-    "central_scope": "comprehensive events and daily aggregate from every reseller bot",
-    "reseller_scope": "events and daily summary only for the owning reseller bot",
-    "delivery": "asynchronous processor outbox with independent central and reseller retry states",
-    "group_requirements": ["Telegram supergroup", "Topics enabled", "bot administrator", "Manage Topics permission"],
-    "commands": ["/setup_reports", "/reports_status", "/reset_reports", "/disable_reports"]
-  },
   "fixes": [
-    "add partitioned Telegram report groups for both the central bot and every reseller bot",
-    "make the central report group comprehensive across all reseller bots with bot identity on every event",
-    "create and persist report topics without duplicating them on repeated setup or reset",
-    "send orders, payments, customers, services, trials, tickets, bot lifecycle events and errors to their matching topics",
-    "add a daily central aggregate for all bots and a separate daily summary for each reseller group",
-    "prevent duplicate central messages when reseller delivery fails and must be retried",
-    "keep reseller reports isolated so one reseller never receives another reseller's data",
-    "release channel announcement contains only version 3.0.0 changes"
+    "remove central one-time management login links completely",
+    "use one permanent management address ending in /control",
+    "restore username and password login for central administrators",
+    "require the configured PasarGuard owner account for central management access",
+    "redirect old magic-link addresses to the permanent login page without consuming any ticket",
+    "delete previously issued central magic-login tickets during migration",
+    "update both the main control dashboard and advanced control page to use the permanent login form",
+    "release channel announcement contains only version 3.0.1 changes"
   ]
 }
