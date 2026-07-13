@@ -1,11 +1,11 @@
 /* BLUEPANEL_PROCESSOR_WORKER
  * Fully split BluePanel runtime.
- * Version: 2.9.9
+ * Version: 3.0.0
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = "2.9.9";
+const APP_VERSION = "3.0.0";
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
@@ -20,6 +20,29 @@ const RESELLER_BACKUP_FIELDS = Object.freeze([
   "fraud_protection_enabled","order_cooldown_seconds","max_pending_orders","daily_order_limit",
   "daily_wallet_charge_limit_toman","duplicate_receipt_protection","auto_block_risk_score",
   "payment_card_enabled","payment_wallet_enabled","payment_method_order","payment_default_method"
+]);
+
+
+
+const CENTRAL_REPORT_TOPICS = Object.freeze([
+  { key: "overview", title: "📊 گزارش جامع همه ربات‌ها", color: 7322096 },
+  { key: "bots", title: "🤖 ربات‌های نماینده", color: 13338331 },
+  { key: "orders", title: "🛒 سفارش‌های همه ربات‌ها", color: 16766590 },
+  { key: "payments", title: "💳 پرداخت‌ها و کیف پول", color: 9367192 },
+  { key: "services", title: "📦 سرویس‌ها و تست‌ها", color: 16478047 },
+  { key: "support", title: "🎫 پشتیبانی و تیکت‌ها", color: 13338331 },
+  { key: "security", title: "⚠️ خطاها و امنیت", color: 16749490 },
+  { key: "system", title: "⚙️ سامانه و بروزرسانی", color: 7322096 }
+]);
+
+const RESELLER_REPORT_TOPICS = Object.freeze([
+  { key: "overview", title: "📊 خلاصه عملکرد", color: 7322096 },
+  { key: "orders", title: "🛒 سفارش‌ها", color: 16766590 },
+  { key: "payments", title: "💳 پرداخت‌ها و کیف پول", color: 9367192 },
+  { key: "customers", title: "👥 کاربران", color: 13338331 },
+  { key: "services", title: "📦 سرویس‌ها و تست‌ها", color: 16478047 },
+  { key: "support", title: "🎫 پشتیبانی", color: 13338331 },
+  { key: "security", title: "⚠️ خطاها و هشدارها", color: 16749490 }
 ]);
 
 const GIB = 1024 * 1024 * 1024;
@@ -80,6 +103,8 @@ const DEFAULT_SETTINGS = {
   release_last_announcement_message_id: "",
   release_last_announcement_at: "",
   release_last_announcement_error: "",
+  central_report_hour_utc: "18",
+  central_report_last_daily_date: "",
   min_recharge: "100000",
   support_username: "",
   blupal_base_url: "https://blupal.net/api",
@@ -351,6 +376,125 @@ async function telegramApiWithToken(token, method, body) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.ok === false) throw new Error(data.description || "Telegram API error");
   return data;
+}
+
+
+
+function reportScopeKey(botId = "") { return botId ? "reseller:" + String(botId) : "central"; }
+function reportTopicDefinition(scopeType, topicKey) { const list=scopeType==="central"?CENTRAL_REPORT_TOPICS:RESELLER_REPORT_TOPICS;return list.find(x=>x.key===topicKey)||list[0]; }
+async function queueReportEvent(env,botId,topicKey,title,messageHtml,dedupeKey){
+  const ts=nowIso();
+  try{
+    await env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO report_outbox(
+      id,bot_id,topic_key,title,message_html,dedupe_key,central_status,reseller_status,attempts,next_attempt_at,created_at,updated_at
+    ) VALUES(?,?,?,?,?,?,'pending','pending',0,?,?,?)`)
+      .bind(id("rpt"),botId,topicKey,cleanText(title,160),cleanText(messageHtml,3500),cleanText(dedupeKey,220),ts,ts,ts).run();
+  }catch(_){}
+}
+async function ensureReportTopic(env,forum,scopeType,topicKey,apiCall){
+  const scopeKey=forum.scope_key,definition=reportTopicDefinition(scopeType,topicKey);
+  let topic=await env.PASARGUARD_DB.prepare("SELECT * FROM report_forum_topics WHERE scope_key=? AND topic_key=?").bind(scopeKey,definition.key).first();
+  if(topic?.thread_id)return topic;
+  const created=await apiCall("createForumTopic",{chat_id:String(forum.chat_id),name:definition.title,icon_color:definition.color});
+  const threadId=Number(created?.result?.message_thread_id||0);if(!threadId)throw new Error("ساخت Topic گزارش ناموفق بود");const ts=nowIso();
+  await env.PASARGUARD_DB.prepare(`INSERT INTO report_forum_topics(scope_key,topic_key,thread_id,title,created_at,updated_at) VALUES(?,?,?,?,?,?)
+    ON CONFLICT(scope_key,topic_key) DO UPDATE SET thread_id=excluded.thread_id,title=excluded.title,updated_at=excluded.updated_at`).bind(scopeKey,definition.key,threadId,definition.title,ts,ts).run();
+  return {scope_key:scopeKey,topic_key:definition.key,thread_id:threadId,title:definition.title};
+}
+async function sendReportMessage(env,scopeKey,scopeType,topicKey,text,apiCall){
+  const forum=await env.PASARGUARD_DB.prepare("SELECT * FROM report_forums WHERE scope_key=? AND status='active'").bind(scopeKey).first();
+  if(!forum)return {skipped:true,reason:"not_configured"};
+  let topic=await ensureReportTopic(env,forum,scopeType,topicKey,apiCall);
+  try{
+    const r=await apiCall("sendMessage",{chat_id:String(forum.chat_id),message_thread_id:Number(topic.thread_id),text:cleanText(text,3900),parse_mode:"HTML",disable_web_page_preview:true});
+    const ts=nowIso();
+    await env.PASARGUARD_DB.prepare("UPDATE report_forums SET last_delivery_at=?,last_error=NULL,updated_at=? WHERE scope_key=?").bind(ts,ts,scopeKey).run();
+    return {delivered:true,message_id:Number(r?.result?.message_id||0)};
+  }catch(error){
+    const msg=String(error?.message||error);
+    if(/thread|topic|message thread/i.test(msg)){
+      await env.PASARGUARD_DB.prepare("DELETE FROM report_forum_topics WHERE scope_key=? AND topic_key=?").bind(scopeKey,topic.topic_key).run();
+      topic=await ensureReportTopic(env,forum,scopeType,topicKey,apiCall);
+      const r=await apiCall("sendMessage",{chat_id:String(forum.chat_id),message_thread_id:Number(topic.thread_id),text:cleanText(text,3900),parse_mode:"HTML",disable_web_page_preview:true});
+      const ts=nowIso();
+      await env.PASARGUARD_DB.prepare("UPDATE report_forums SET last_delivery_at=?,last_error=NULL,updated_at=? WHERE scope_key=?").bind(ts,ts,scopeKey).run();
+      return {delivered:true,message_id:Number(r?.result?.message_id||0),recreated:true};
+    }
+    await env.PASARGUARD_DB.prepare("UPDATE report_forums SET last_error=?,updated_at=? WHERE scope_key=?").bind(cleanText(msg,500),nowIso(),scopeKey).run();
+    throw error;
+  }
+}
+async function processReportOutbox(env,limit=100){
+  const rows=await env.PASARGUARD_DB.prepare(`SELECT * FROM report_outbox
+    WHERE next_attempt_at<=? AND (central_status='pending' OR reseller_status='pending')
+    ORDER BY created_at LIMIT ?`).bind(nowIso(),Math.max(1,Math.min(300,Number(limit||100)))).all();
+  let delivered=0,failed=0;
+  for(const row of rows.results||[]){
+    let centralStatus=String(row.central_status||"pending");
+    let resellerStatus=String(row.reseller_status||"pending");
+    const errors=[];
+    let bot=null;
+    try{
+      if(row.bot_id){
+        bot=await env.PASARGUARD_DB.prepare(`SELECT rb.*,u.telegram_id AS owner_telegram_id,u.username AS owner_username,u.first_name AS owner_first_name
+          FROM reseller_bots rb JOIN users u ON u.id=rb.user_id WHERE rb.id=?`).bind(row.bot_id).first();
+      }
+    }catch(error){ errors.push("خواندن ربات: "+String(error?.message||error)); }
+    const botHeader=bot
+      ? "🤖 ربات: <b>"+botEscape(bot.brand_name||bot.bot_name||bot.bot_username)+"</b> (@"+botEscape(bot.bot_username||"-")+")\n👤 مالک: <code>"+botEscape(bot.owner_telegram_id||"-")+"</code>\n"
+      : row.bot_id ? "🤖 شناسه ربات: <code>"+botEscape(row.bot_id)+"</code>\n" : "";
+    if(centralStatus==="pending"){
+      try{
+        const r=await sendReportMessage(env,"central","central",row.topic_key,"<b>"+botEscape(row.title)+"</b>\n━━━━━━━━━━━━━━\n"+botHeader+row.message_html,(m,b)=>telegramApi(env,m,b));
+        centralStatus=r.skipped?"skipped":"delivered";
+      }catch(error){ errors.push("مرکزی: "+String(error?.message||error)); }
+    }
+    if(resellerStatus==="pending"){
+      if(!bot){ resellerStatus="skipped"; }
+      else{
+        try{
+          const r=await sendReportMessage(env,reportScopeKey(bot.id),"reseller",row.topic_key,"<b>"+botEscape(row.title)+"</b>\n━━━━━━━━━━━━━━\n"+row.message_html,(m,b)=>resellerTelegramApi(env,bot,m,b));
+          resellerStatus=r.skipped?"skipped":"delivered";
+        }catch(error){ errors.push("نماینده: "+String(error?.message||error)); }
+      }
+    }
+    if(errors.length){
+      const attempts=Number(row.attempts||0)+1;
+      const next=new Date(Date.now()+Math.min(3600000,15000*Math.pow(2,Math.min(attempts,8)))).toISOString();
+      await env.PASARGUARD_DB.prepare("UPDATE report_outbox SET central_status=?,reseller_status=?,attempts=?,next_attempt_at=?,last_error=?,updated_at=? WHERE id=?")
+        .bind(centralStatus,resellerStatus,attempts,next,cleanText(errors.join(" | "),600),nowIso(),row.id).run();
+      failed++;
+    }else{
+      await env.PASARGUARD_DB.prepare("UPDATE report_outbox SET central_status=?,reseller_status=?,last_error=NULL,updated_at=? WHERE id=?")
+        .bind(centralStatus,resellerStatus,nowIso(),row.id).run();
+      delivered++;
+    }
+  }
+  await env.PASARGUARD_DB.prepare("DELETE FROM report_outbox WHERE central_status<>'pending' AND reseller_status<>'pending' AND updated_at<?")
+    .bind(new Date(Date.now()-7*86400000).toISOString()).run();
+  return {checked:(rows.results||[]).length,delivered,failed};
+}
+
+async function processCentralComprehensiveReport(env){
+  const forum=await env.PASARGUARD_DB.prepare("SELECT * FROM report_forums WHERE scope_key='central' AND status='active'").first();if(!forum)return {skipped:true};
+  const settings=await getSettings(env),now=new Date(),hour=Math.max(0,Math.min(23,Number(settings.central_report_hour_utc||18))),dateKey=now.toISOString().slice(0,10);if(now.getUTCHours()<hour||String(settings.central_report_last_daily_date||"")===dateKey)return {skipped:true};
+  const start=dateKey+"T00:00:00.000Z";
+  const stats=await env.PASARGUARD_DB.prepare(`SELECT
+    (SELECT COUNT(*) FROM reseller_bots) bots_total,(SELECT COUNT(*) FROM reseller_bots WHERE status='active') bots_active,
+    (SELECT COUNT(*) FROM reseller_bots WHERE license_type='master' AND status='active') masters_active,
+    (SELECT COUNT(*) FROM sales_customers) customers_total,(SELECT COUNT(*) FROM sales_customers WHERE created_at>=?) customers_today,
+    (SELECT COUNT(*) FROM sales_orders WHERE created_at>=?) orders_today,(SELECT COUNT(*) FROM sales_orders WHERE status='delivered' AND created_at>=?) delivered_today,
+    (SELECT COALESCE(SUM(amount_toman),0) FROM sales_orders WHERE status='delivered' AND created_at>=?) revenue_today,
+    (SELECT COUNT(*) FROM sales_orders WHERE status IN ('pending_review','provision_failed')) pending_orders,
+    (SELECT COUNT(*) FROM sales_wallet_requests WHERE status='pending_review') pending_wallet,
+    (SELECT COUNT(*) FROM sales_tickets WHERE status='waiting_owner') waiting_tickets,
+    (SELECT COUNT(*) FROM sales_trials WHERE status='delivered' AND created_at>=?) trials_today,
+    (SELECT COUNT(*) FROM sales_security_events WHERE severity IN ('warning','critical') AND created_at>=?) security_today`).bind(start,start,start,start,start,start).first();
+  const top=await env.PASARGUARD_DB.prepare(`SELECT rb.brand_name,rb.bot_username,COUNT(o.id) orders_count,COALESCE(SUM(o.amount_toman),0) revenue FROM reseller_bots rb LEFT JOIN sales_orders o ON o.bot_id=rb.id AND o.status='delivered' AND o.created_at>=? GROUP BY rb.id ORDER BY revenue DESC,orders_count DESC LIMIT 5`).bind(start).all();
+  const topLines=(top.results||[]).filter(x=>Number(x.orders_count||0)>0).map((x,i)=>(i+1)+". <b>"+botEscape(x.brand_name||x.bot_username)+"</b> · "+botMoney(x.orders_count)+" سفارش · "+botMoney(x.revenue)+" تومان").join("\n")||"امروز فروش موفقی ثبت نشده است.";
+  const text="📊 <b>گزارش جامع روزانه همه ربات‌ها</b>\n━━━━━━━━━━━━━━\n📅 تاریخ UTC: <code>"+dateKey+"</code>\n\n🤖 کل ربات‌ها: <b>"+botMoney(stats?.bots_total)+"</b> · فعال: <b>"+botMoney(stats?.bots_active)+"</b> · مستر: <b>"+botMoney(stats?.masters_active)+"</b>\n👥 کل کاربران: <b>"+botMoney(stats?.customers_total)+"</b> · جدید امروز: <b>"+botMoney(stats?.customers_today)+"</b>\n🛒 سفارش امروز: <b>"+botMoney(stats?.orders_today)+"</b> · تحویل: <b>"+botMoney(stats?.delivered_today)+"</b>\n💰 فروش امروز: <b>"+botMoney(stats?.revenue_today)+" تومان</b>\n⏳ سفارش منتظر: <b>"+botMoney(stats?.pending_orders)+"</b> · شارژ منتظر: <b>"+botMoney(stats?.pending_wallet)+"</b>\n🎫 تیکت منتظر: <b>"+botMoney(stats?.waiting_tickets)+"</b> · تست تحویلی: <b>"+botMoney(stats?.trials_today)+"</b>\n⚠️ هشدار امنیتی امروز: <b>"+botMoney(stats?.security_today)+"</b>\n\n🏆 <b>برترین ربات‌های امروز</b>\n"+topLines;
+  await sendReportMessage(env,"central","central","overview",text,(m,b)=>telegramApi(env,m,b));
+  await env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('central_report_last_daily_date',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(dateKey,nowIso()).run();settingsCache=null;settingsCacheAt=0;return {sent:true};
 }
 
 const agencyPasarguardTokenCache = new Map();
@@ -1213,11 +1357,23 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
     let loyalty = null;
     try { loyalty = await refreshSalesCustomerLoyalty(env, bot, order.customer_record_id); } catch (_) {}
     await salesEvent(env, bot.id, order.customer_record_id, "order_delivered", { orderId: order.id, username, orderType: order.order_type, cashbackToman, loyalty });
+    await queueReportEvent(env, bot.id, "services", "سفارش با موفقیت تحویل شد",
+      "مشتری: <code>" + botEscape(order.customer_telegram_id) + "</code>\n" +
+      "پلن: <b>" + botEscape(order.plan_title) + "</b>\n" +
+      "کاربر سرویس: <code>" + botEscape(username) + "</code>\n" +
+      "مبلغ: <b>" + botMoney(order.amount_toman) + " تومان</b>\n" +
+      "سفارش: <code>" + botEscape(order.id) + "</code>",
+      "order-delivered:" + order.id);
     try { await audit(env, ownerUser.id, "sales_order_delivered", { orderId: order.id, remoteUserId: remoteId, username, orderType: order.order_type, cashbackToman }); } catch (_) {}
     return { ...order, status: "delivered", remote_username: username, subscription_url: subscriptionUrl, cashback_toman: cashbackToman };
   } catch (error) {
     await env.PASARGUARD_DB.prepare("UPDATE sales_orders SET status='provision_failed',error_message=?,updated_at=? WHERE id=?")
       .bind(cleanText(error.message, 1000), nowIso(), order.id).run();
+    await queueReportEvent(env, bot.id, "security", "خطا در ساخت سرویس",
+      "سفارش: <code>" + botEscape(order.id) + "</code>\n" +
+      "پلن: <b>" + botEscape(order.plan_title) + "</b>\n" +
+      "خطا: <code>" + botEscape(cleanText(error.message, 700)) + "</code>",
+      "order-failed:" + order.id + ":" + cleanText(error.message, 80));
     await audit(env, ownerUser.id, "sales_order_provision_failed", { orderId: order.id, message: error.message });
     throw error;
   }
@@ -1291,10 +1447,13 @@ async function processResellerDailyReports(env, limit = 50) {
   const dateKey = now.toISOString().slice(0, 10);
   const startIso = dateKey + "T00:00:00.000Z";
   const bots = await env.PASARGUARD_DB.prepare(`
-    SELECT rb.id,rb.bot_token_enc,rb.bot_username,rb.brand_name,rb.daily_report_hour_utc,rb.updated_at,
+    SELECT rb.id,rb.bot_token_enc,rb.bot_username,rb.brand_name,rb.daily_report_enabled,rb.daily_report_hour_utc,rb.updated_at,
            u.telegram_id AS owner_telegram_id
     FROM reseller_bots rb JOIN users u ON u.id=rb.user_id
-    WHERE rb.status='active' AND COALESCE(rb.daily_report_enabled,0)=1
+    WHERE rb.status='active'
+      AND (COALESCE(rb.daily_report_enabled,0)=1 OR EXISTS(
+        SELECT 1 FROM report_forums rf WHERE rf.scope_key=('reseller:' || rb.id) AND rf.status='active'
+      ))
       AND COALESCE(rb.last_daily_report_date,'')<>? AND COALESCE(rb.daily_report_hour_utc,18)<=?
     ORDER BY rb.updated_at LIMIT ?
   `).bind(dateKey, utcHour, Math.max(1, Math.min(200, Number(limit || 50)))).all();
@@ -1310,21 +1469,31 @@ async function processResellerDailyReports(env, limit = 50) {
           (SELECT COUNT(*) FROM sales_orders WHERE bot_id=? AND status='pending_review') AS pending_orders,
           (SELECT COUNT(*) FROM sales_tickets WHERE bot_id=? AND status='waiting_owner') AS waiting_tickets
       `).bind(bot.id,startIso,bot.id,startIso,bot.id,startIso,bot.id,startIso,bot.id,bot.id).first();
-      await resellerTelegramApi(env, bot, "sendMessage", {
-        chat_id: bot.owner_telegram_id,
-        parse_mode: "HTML",
-        text: "📊 <b>گزارش روزانه ربات نماینده</b>\n━━━━━━━━━━━━━━\n" +
-          "📅 تاریخ UTC: <code>" + dateKey + "</code>\n" +
-          "👤 کاربر جدید: <b>" + botMoney(stats?.new_users) + "</b>\n" +
-          "🧾 سفارش امروز: <b>" + botMoney(stats?.orders_count) + "</b>\n" +
-          "✅ تحویل موفق: <b>" + botMoney(stats?.delivered_count) + "</b>\n" +
-          "💰 فروش امروز: <b>" + botMoney(stats?.revenue) + " تومان</b>\n" +
-          "⏳ رسید در انتظار: <b>" + botMoney(stats?.pending_orders) + "</b>\n" +
-          "🎫 تیکت منتظر پاسخ: <b>" + botMoney(stats?.waiting_tickets) + "</b>"
-      });
-      await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET last_daily_report_date=?,updated_at=? WHERE id=?")
-        .bind(dateKey, nowIso(), bot.id).run();
-      sent += 1;
+      const text = "📊 <b>گزارش روزانه ربات نماینده</b>\n━━━━━━━━━━━━━━\n" +
+        "🤖 ربات: <b>" + botEscape(bot.brand_name || bot.bot_username) + "</b>\n" +
+        "📅 تاریخ UTC: <code>" + dateKey + "</code>\n" +
+        "👤 کاربر جدید: <b>" + botMoney(stats?.new_users) + "</b>\n" +
+        "🧾 سفارش امروز: <b>" + botMoney(stats?.orders_count) + "</b>\n" +
+        "✅ تحویل موفق: <b>" + botMoney(stats?.delivered_count) + "</b>\n" +
+        "💰 فروش امروز: <b>" + botMoney(stats?.revenue) + " تومان</b>\n" +
+        "⏳ رسید در انتظار: <b>" + botMoney(stats?.pending_orders) + "</b>\n" +
+        "🎫 تیکت منتظر پاسخ: <b>" + botMoney(stats?.waiting_tickets) + "</b>";
+      let deliveredSomewhere = false;
+      if (Number(bot.daily_report_enabled || 0) === 1) {
+        try {
+          await resellerTelegramApi(env, bot, "sendMessage", { chat_id: bot.owner_telegram_id, parse_mode: "HTML", text });
+          deliveredSomewhere = true;
+        } catch (_) {}
+      }
+      try {
+        const result = await sendReportMessage(env, reportScopeKey(bot.id), "reseller", "overview", text, (method, body) => resellerTelegramApi(env, bot, method, body));
+        if (!result?.skipped) deliveredSomewhere = true;
+      } catch (_) {}
+      if (deliveredSomewhere) {
+        await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET last_daily_report_date=?,updated_at=? WHERE id=?")
+          .bind(dateKey, nowIso(), bot.id).run();
+        sent += 1;
+      }
     } catch (_) {}
   }
   return { sent };
@@ -1668,7 +1837,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_PROCESSOR_VERSION='2.9.9';
+const BLUEPANEL_PROCESSOR_VERSION='3.0.0';
 let processorSchemaPromise=null;
 function processorJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function processorInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
@@ -1685,7 +1854,7 @@ function processorRuntimeBinding(env,name){const value=env?.[name];return{name,e
 async function processorLocalHealth(env){let db=false,error='';try{await ensureProcessorDb(env);await env.PROCESSOR_DB.prepare('SELECT 1 AS ok').first();db=true}catch(e){error=String(e?.message||e)}const coreBinding=processorRuntimeBinding(env,'CORE_WORKER'),edgeBinding=processorRuntimeBinding(env,'EDGE_WORKER');const coreDetected=coreBinding.fetch_callable,edgeDetected=edgeBinding.fetch_callable;let pending=0;try{pending=Number((await env.PROCESSOR_DB.prepare("SELECT COUNT(*) AS c FROM processor_jobs WHERE status='pending'").first())?.c||0)}catch(_){}return{ok:db,cluster_ready:db&&coreDetected&&edgeDetected,role:'bluepanel-processor',version:APP_VERSION,database_query_ok:db,binding_detected:true,core_binding_detected:coreDetected,edge_binding_detected:edgeDetected,core_ok:coreDetected,edge_ok:edgeDetected,core_probe:{binding_detected:coreDetected,healthy:coreDetected,mode:'runtime_binding_presence',detail:coreDetected?'CORE_WORKER در Runtime شناسایی شد':'CORE_WORKER در Runtime وجود ندارد',error:coreDetected?'':'CORE_WORKER متصل نیست'},edge_probe:{binding_detected:edgeDetected,healthy:edgeDetected,mode:'runtime_binding_presence',detail:edgeDetected?'EDGE_WORKER در Runtime شناسایی شد':'EDGE_WORKER در Runtime وجود ندارد',error:edgeDetected?'':'EDGE_WORKER متصل نیست'},runtime_bindings:{CORE_WORKER:coreBinding,EDGE_WORKER:edgeBinding},pending_jobs:pending,split_runtime:true,bundle:'processor',verification_mode:'cycle_safe_local',error}}
 async function processorProbePeer(binding,url,expectedRole,name){const started=Date.now();if(!binding||typeof binding.fetch!=='function')return{binding_detected:false,healthy:false,reachable:false,latency_ms:0,error:name+' متصل نیست'};try{const timeout=new Promise((_,reject)=>setTimeout(()=>reject(new Error('مهلت پاسخ تمام شد')),2500));const response=await Promise.race([binding.fetch(new Request(url,{headers:{'x-bluepanel-service-hop':'processor-public-health','accept':'application/json'}})),timeout]);const raw=await response.text();let data={};try{data=raw?JSON.parse(raw):{}}catch(_){return{binding_detected:true,healthy:false,reachable:true,http_status:response.status,latency_ms:Date.now()-started,error:'پاسخ JSON نیست'}}const healthy=response.ok&&data.role===expectedRole&&data.database_query_ok!==false;return{binding_detected:true,healthy,reachable:true,http_status:response.status,latency_ms:Date.now()-started,response_role:data.role||'',response_version:data.version||'',error:healthy?'':(data.error||'پاسخ ناسالم')}}catch(e){return{binding_detected:true,healthy:false,reachable:false,latency_ms:Date.now()-started,error:String(e?.message||e)}}}
 async function processorHealth(env){const local=await processorLocalHealth(env);const [coreProbe,edgeProbe]=await Promise.all([processorProbePeer(env.CORE_WORKER,'https://bluepanel-core.internal/__bluepanel/service/core-local-health','bluepanel-core','CORE_WORKER'),processorProbePeer(env.EDGE_WORKER,'https://bluepanel-edge.internal/__bluepanel/service/edge-local-health','bluepanel-edge','EDGE_WORKER')]);const coreOk=coreProbe.healthy===true,edgeOk=edgeProbe.healthy===true;return{...local,ok:local.database_query_ok&&coreOk&&edgeOk,cluster_ready:local.database_query_ok&&coreOk&&edgeOk,core_ok:coreOk,edge_ok:edgeOk,core_probe:coreProbe,edge_probe:edgeProbe,verification_mode:'direct_outbound_no_cycle',error:local.error||coreProbe.error||edgeProbe.error||''}}
-async function runProcessorBusinessJobs(runtime){await syncDownlineUsage(runtime,null,100);await processSalesServiceNotifications(runtime,30);await processResellerSalesAutomation(runtime,120);await processSalesTicketAutoClose(runtime,100);await processScheduledSalesCampaigns(runtime,5);await processResellerDailyReports(runtime,50);await processResellerAutoBackups(runtime,50);await processResellerScheduledHealth(runtime,30);await processResellerLicenseNotifications(runtime,100);await pollPendingSalesBlupalPayments(runtime,60)}
+async function runProcessorBusinessJobs(runtime){await processReportOutbox(runtime,150);await syncDownlineUsage(runtime,null,100);await processSalesServiceNotifications(runtime,30);await processResellerSalesAutomation(runtime,120);await processSalesTicketAutoClose(runtime,100);await processScheduledSalesCampaigns(runtime,5);await processResellerDailyReports(runtime,50);await processCentralComprehensiveReport(runtime);await processResellerAutoBackups(runtime,50);await processResellerScheduledHealth(runtime,30);await processResellerLicenseNotifications(runtime,100);await pollPendingSalesBlupalPayments(runtime,60)}
 export default {
  async fetch(request,env,ctx){const path=new URL(request.url).pathname.replace(/\/+$/,'')||'/';try{if(path==='/__bluepanel/service/queue'&&processorInternal(request)&&request.method==='POST')return processorQueue(request,env);if(path==='/__bluepanel/service/process'&&processorInternal(request)&&request.method==='POST'){const runtime=bluePanelRuntimeEnv(env,'bluepanel-processor');const queue=await processorRunQueue(env,150);await runProcessorBusinessJobs(runtime);return processorJson({success:true,queue})}if((path==='/__bluepanel/service/processor-local-health'||path==='/__bluepanel/service/processor-health')&&processorInternal(request)){const h=await processorLocalHealth(env);return processorJson(h,h.ok?200:503,{'x-bluepanel-role':'bluepanel-processor','x-bluepanel-version':APP_VERSION})}if(path==='/health'){const h=await processorHealth(env);return processorJson(h,h.ok?200:503)}if(path==='/'&&request.method==='GET'){const h=await processorHealth(env);return new Response('<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{background:#07111f;color:#fff;font-family:Tahoma;padding:30px}.c{max-width:680px;margin:auto;background:#112944;padding:24px;border-radius:24px}.ok{color:#35d59a}.bad{color:#ff667b}</style><div class="c"><h1>BluePanel Processor</h1><p class="'+(h.ok?'ok':'bad')+'">'+(h.ok?'اتصال کامل برقرار است':'اتصال کامل نیست')+'</p><pre>'+JSON.stringify(h,null,2)+'</pre></div></html>',{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}})}return processorJson({success:false,error:'Not found'},404)}catch(error){console.error('processor fetch error',error);return processorJson({success:false,ok:false,role:'bluepanel-processor',version:APP_VERSION,error:String(error?.message||error),code:'PROCESSOR_RUNTIME_ERROR'},500)}},
  async scheduled(controller,env,ctx){ctx.waitUntil((async()=>{try{const runtime=bluePanelRuntimeEnv(env,'bluepanel-processor');await processorRunQueue(env,200);await runProcessorBusinessJobs(runtime);await env.PROCESSOR_DB.prepare("DELETE FROM processor_jobs WHERE status='delivered' AND updated_at<?").bind(new Date(Date.now()-86400000).toISOString()).run()}catch(error){console.error('processor scheduled error',error)}})())}
