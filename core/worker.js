@@ -1,16 +1,17 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 2.9.1
+ * Version: 2.9.2
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "2.9.1";
+const APP_VERSION = "2.9.2";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
   central: Object.freeze([
+    { emoji: "🧭", text: "رفع حلقه تشخیص سلامت Service Binding با Endpointهای محلی و بررسی بدون بازگشت چرخه‌ای بین سه Worker" },
     { emoji: "✂️", text: "تقسیم کد به سه Worker مستقل برای کاهش زمان Parse، Startup و مصرف CPU هر Worker" },
     { emoji: "⚡", text: "حذف بررسی آپدیت و Python Helper از مسیر هر درخواست؛ اجرای آن‌ها فقط با Cron یا فرمان مدیر" },
     { emoji: "📦", text: "آپدیت مستقل فایل‌های core/worker.js، edge/worker.js و processor/worker.js از یک نسخه انتشار" },
@@ -4911,8 +4912,7 @@ function clusterSuggestionForProbe(probe, sourceLabel, targetLabel) {
 
 async function inspectEdgeServiceBinding(env) {
   const probe = await probeServiceBinding(env, 'EDGE_WORKER', 'bluepanel-edge', [
-    '/__bluepanel/service/diagnostics',
-    '/__bluepanel/service/health',
+    '/__bluepanel/service/edge-local-health',
     '/__bluepanel/service/edge-health'
   ]);
   if (!probe.runtime?.fetch_callable) {
@@ -4921,8 +4921,8 @@ async function inspectEdgeServiceBinding(env) {
   const data = probe.data || {};
   const roleOk = String(data.role || probe.response_role || '') === 'bluepanel-edge';
   const dbOk = data.database_query_ok !== false && data.binding_detected !== false;
-  const coreOk = data.core_ok === true || (data.core_binding_detected === true && data.core_probe?.healthy !== false);
-  const processorOk = data.processor_ok === true || (data.processor_binding_detected === true && data.processor_probe?.healthy !== false);
+  const coreOk = data.core_binding_detected === true;
+  const processorOk = data.processor_binding_detected === true;
   const connected = Boolean(probe.reachable && roleOk && dbOk && coreOk && processorOk);
   const error = connected ? '' : cleanText(
     probe.error || data.error || data.last_core_error ||
@@ -4950,8 +4950,7 @@ async function inspectEdgeServiceBinding(env) {
 
 async function inspectProcessorServiceBinding(env) {
   const probe = await probeServiceBinding(env, 'PROCESSOR_WORKER', 'bluepanel-processor', [
-    '/__bluepanel/service/diagnostics',
-    '/__bluepanel/service/health',
+    '/__bluepanel/service/processor-local-health',
     '/__bluepanel/service/processor-health'
   ]);
   if (!probe.runtime?.fetch_callable) {
@@ -4960,8 +4959,8 @@ async function inspectProcessorServiceBinding(env) {
   const data = probe.data || {};
   const roleOk = String(data.role || probe.response_role || '') === 'bluepanel-processor';
   const dbOk = data.database_query_ok !== false && data.binding_detected !== false;
-  const coreOk = data.core_ok === true || (data.core_binding_detected === true && data.core_probe?.healthy !== false);
-  const edgeOk = data.edge_ok === true || (data.edge_binding_detected === true && data.edge_probe?.healthy !== false);
+  const coreOk = data.core_binding_detected === true;
+  const edgeOk = data.edge_binding_detected === true;
   const connected = Boolean(probe.reachable && roleOk && dbOk && coreOk && edgeOk);
   const error = connected ? '' : cleanText(
     probe.error || data.error || data.last_error ||
@@ -10023,7 +10022,7 @@ async function routeApiUnsafe(request, env, path) {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '2.9.1';
+const BLUEPANEL_CORE_VERSION = '2.9.2';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
@@ -10062,11 +10061,41 @@ async function bluePanelForwardToEdge(request, env) {
   const out=new Headers(response.headers); out.set('x-bluepanel-route','core-to-edge');
   return new Response(response.body,{status:response.status,statusText:response.statusText,headers:out});
 }
+async function bluePanelCoreLocalHealth(env) {
+  let databaseQueryOk = false, error = '';
+  try { await ensureDb(env); databaseQueryOk = true; }
+  catch (healthError) { error = String(healthError?.message || healthError); }
+  const edgeBinding = serviceBindingRuntimeInfo(env, 'EDGE_WORKER');
+  const processorBinding = serviceBindingRuntimeInfo(env, 'PROCESSOR_WORKER');
+  return {
+    ok: databaseQueryOk,
+    cluster_ready: databaseQueryOk && edgeBinding.fetch_callable && processorBinding.fetch_callable,
+    role: 'bluepanel-core', version: APP_VERSION, database_query_ok: databaseQueryOk,
+    split_runtime: true, bundle: 'core', verification_mode: 'cycle_safe_local',
+    edge_binding_detected: edgeBinding.fetch_callable,
+    processor_binding_detected: processorBinding.fetch_callable,
+    runtime_bindings: { EDGE_WORKER: edgeBinding, PROCESSOR_WORKER: processorBinding },
+    error
+  };
+}
 async function bluePanelCoreHealth(env) {
-  const edge=await inspectEdgeServiceBinding(env).catch(e=>({connected:false,error:String(e?.message||e)}));
-  const processor=await inspectProcessorServiceBinding(env).catch(e=>({connected:false,error:String(e?.message||e)}));
-  try { await ensureDb(env); const settings=await getSettings(env); return {ok:true,role:'bluepanel-core',version:APP_VERSION,database_query_ok:true,split_runtime:true,bundle:'core',edge_worker:edge,processor_worker:processor,installed:settings?.install_completed==='true'}; }
-  catch(error){ return {ok:false,role:'bluepanel-core',version:APP_VERSION,database_query_ok:false,split_runtime:true,bundle:'core',edge_worker:edge,processor_worker:processor,error:String(error?.message||error)}; }
+  const local = await bluePanelCoreLocalHealth(env);
+  const [edge, processor] = await Promise.all([
+    inspectEdgeServiceBinding(env).catch(e=>({connected:false,error:String(e?.message||e)})),
+    inspectProcessorServiceBinding(env).catch(e=>({connected:false,error:String(e?.message||e)}))
+  ]);
+  let installed = false;
+  if (local.database_query_ok) {
+    try { installed = (await getSettings(env))?.install_completed === 'true'; } catch (_) {}
+  }
+  return {
+    ...local,
+    ok: local.database_query_ok,
+    cluster_ready: local.database_query_ok && edge.connected === true && processor.connected === true,
+    edge_worker: edge,
+    processor_worker: processor,
+    installed
+  };
 }
 export default {
   async fetch(request,env,ctx){
@@ -10074,7 +10103,7 @@ export default {
     try {
       if(request.method==='OPTIONS') return new Response(null,{status:204,headers:{'access-control-allow-origin':'*','access-control-allow-methods':'GET,POST,OPTIONS','access-control-allow-headers':'content-type,x-telegram-init-data,x-web-session,authorization,x-bluepanel-public-origin'}});
       if(path==='/__bluepanel/internal/d1'&&request.method==='POST') return bluePanelCoreD1Rpc(request,env);
-      if(path==='/__bluepanel/service/core-health'&&bluePanelInternalHost(request)){const h=await bluePanelCoreHealth(env);return bluePanelCoreJson(h,h.ok?200:503,{'x-bluepanel-role':'bluepanel-core','x-bluepanel-version':APP_VERSION});}
+      if((path==='/__bluepanel/service/core-local-health'||path==='/__bluepanel/service/core-health')&&bluePanelInternalHost(request)){const h=await bluePanelCoreLocalHealth(env);return bluePanelCoreJson(h,h.ok?200:503,{'x-bluepanel-role':'bluepanel-core','x-bluepanel-version':APP_VERSION});}
       if(path==='/health'){const h=await bluePanelCoreHealth(env);return bluePanelCoreJson(h,h.ok?200:503);}
       if(bluePanelEdgePath(path,request.method)) return bluePanelForwardToEdge(request,env);
       if(['/payments/blupal/return','/return'].includes(path)&&request.method==='GET'){await ensureDb(env);const s=await getSettings(env);return new Response(centralBlupalReturnPage(s,url.origin,url),{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}});}
