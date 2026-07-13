@@ -1,11 +1,11 @@
 /* BLUEPANEL_PROCESSOR_WORKER
  * Fully split BluePanel runtime.
- * Version: 2.9.3
+ * Version: 2.9.5
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = "2.9.3";
+const APP_VERSION = "2.9.5";
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
@@ -1649,11 +1649,11 @@ async function bluePanelRemoteD1Call(binding, payload) {
   if (!binding || typeof binding.fetch !== 'function') throw new Error('Service Binding با نام CORE_WORKER متصل نیست');
   const response = await binding.fetch(new Request('https://bluepanel-core.internal/__bluepanel/internal/d1', {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-bluepanel-service-hop': 'split-runtime-d1' },
+    headers: { 'content-type': 'application/json', 'accept': 'application/json', 'x-bluepanel-service-hop': 'split-runtime-d1' },
     body: JSON.stringify(payload)
   }));
-  const raw = await response.text();
-  let data = null; try { data = raw ? JSON.parse(raw) : {}; } catch (_) {}
+  let data = null;
+  try { data = await response.json(); } catch (_) {}
   if (!response.ok || !data || data.success === false) throw new Error(data?.error || ('Remote D1 HTTP ' + response.status));
   return data.result;
 }
@@ -1663,12 +1663,12 @@ function bluePanelRuntimeEnv(env, role) {
   return out;
 }
 async function ensureDb(env) {
+  // Real reads/writes validate the binding; avoid doubling every background DB call.
   if (!env?.PASARGUARD_DB || typeof env.PASARGUARD_DB.prepare !== 'function') throw new Error('اتصال دیتابیس مرکزی در دسترس نیست');
-  await env.PASARGUARD_DB.prepare('SELECT 1 AS ok').first();
   return true;
 }
 
-const BLUEPANEL_PROCESSOR_VERSION='2.9.3';
+const BLUEPANEL_PROCESSOR_VERSION='2.9.5';
 let processorSchemaPromise=null;
 function processorJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function processorInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
