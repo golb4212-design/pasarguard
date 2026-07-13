@@ -1,16 +1,17 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 2.9.2
+ * Version: 2.9.3
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "2.9.2";
+const APP_VERSION = "2.9.3";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
   central: Object.freeze([
+    { emoji: "📣", text: "قفل قطعی انتشار اطلاعیه هر نسخه برای جلوگیری از ارسال چندباره به کانال، حتی با کلیک تکراری مدیر" },
     { emoji: "🧭", text: "رفع حلقه تشخیص سلامت Service Binding با Endpointهای محلی و بررسی بدون بازگشت چرخه‌ای بین سه Worker" },
     { emoji: "✂️", text: "تقسیم کد به سه Worker مستقل برای کاهش زمان Parse، Startup و مصرف CPU هر Worker" },
     { emoji: "⚡", text: "حذف بررسی آپدیت و Python Helper از مسیر هر درخواست؛ اجرای آن‌ها فقط با Cron یا فرمان مدیر" },
@@ -32,6 +33,7 @@ const RELEASE_NOTES = Object.freeze({
     { emoji: "📊", text: "اتصال قطعی سرویس و مصرف ربات‌های زیرمجموعه به پنل مستر بالادست" }
   ]),
   reseller: Object.freeze([
+    { emoji: "🤖", text: "بازگردانی پردازش مستقیم Webhook ربات‌های نماینده و حذف وابستگی پاسخ‌گویی آن‌ها به Cron صف Worker سوم" },
     { emoji: "🧯", text: "افزودن محافظ سراسری پاسخ برای جلوگیری از صفحه خطای HTML و نمایش خطای دقیق در داشبوردهای وب" },
     { emoji: "⚙️", text: "انتقال صف Webhook و کش سنگین به Worker سوم با بازگشت خودکار به Worker دوم در زمان قطعی" },
     { emoji: "🔌", text: "تشخیص خودکار نقش مرکزی یا Edge براساس Binding دیتابیس همان Worker" },
@@ -2406,14 +2408,17 @@ async function sendReleaseAnnouncement(env, options = {}) {
   const settings = await getSettings(env);
   const test = options.test === true;
   const force = options.force === true;
+  const allowRepeat = options.allowRepeat === true;
   const target = String(settings.release_channel_chat_id || "").trim();
   if (settings.install_completed !== "true" || !settings.bot_token) return { sent: false, reason: "not_installed" };
   if (!target) return { sent: false, reason: "channel_not_configured" };
   if (!test && !force && settings.release_channel_enabled !== "true") return { sent: false, reason: "disabled" };
-  if (!test && !force && settings.release_last_announced_version === APP_VERSION) return { sent: false, reason: "already_sent" };
+  // force فقط اجازه انتشار دستی در حالت غیرفعال را می‌دهد؛ تکرار همان نسخه
+  // تنها با allowRepeat صریح مجاز است تا کلیک یا درخواست تکراری کانال را اسپم نکند.
+  if (!test && !allowRepeat && settings.release_last_announced_version === APP_VERSION) return { sent: false, reason: "already_sent" };
 
   let claimed = false;
-  if (!test && !force) {
+  if (!test && !allowRepeat) {
     const claim = await env.PASARGUARD_DB.prepare(`
       UPDATE app_settings SET value=?,updated_at=?
       WHERE key='release_announcement_claim_version' AND value<>?
@@ -2438,7 +2443,7 @@ async function sendReleaseAnnouncement(env, options = {}) {
         release_last_announcement_at: nowIso(),
         release_last_announcement_error: ""
       });
-      try { await audit(env, null, "release_announcement_sent", { version: APP_VERSION, target, messageId, force }); } catch (_) {}
+      try { await audit(env, null, "release_announcement_sent", { version: APP_VERSION, target, messageId, force, allowRepeat }); } catch (_) {}
     }
     return { sent: true, test, version: APP_VERSION, target, messageId };
   } catch (error) {
@@ -8310,6 +8315,10 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
   if (data === "bot:admin:release:publish") {
     if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
     const result = await sendReleaseAnnouncement(env, { force: true });
+    if (!result.sent && ["already_sent", "already_claimed"].includes(result.reason)) {
+      await botPrompt(env, chatId, "ℹ️ اطلاعیه نسخه <code>" + botEscape(APP_VERSION) + "</code> قبلاً منتشر شده است و برای جلوگیری از ارسال تکراری دوباره فرستاده نشد.", [[{ text: "↩️ کانال آپدیت‌ها", callback_data: "bot:admin:release_channel" }]]);
+      return;
+    }
     if (!result.sent) throw new Error(result.reason === "channel_not_configured" ? "ابتدا کانال آپدیت‌ها را تعیین کنید" : "انتشار انجام نشد");
     await botPrompt(env, chatId, "🚀 اطلاعیه رسمی نسخه <code>" + botEscape(APP_VERSION) + "</code> در کانال منتشر شد.", [[{ text: "↩️ کانال آپدیت‌ها", callback_data: "bot:admin:release_channel" }]]);
     return;
@@ -9271,12 +9280,7 @@ async function botHandleSessionMessage(env, account, message, session, origin) {
         release_channel_enabled: "false",
         release_channel_chat_id: "",
         release_channel_title: "",
-        release_channel_url: "",
-        release_last_announced_version: "",
-        release_announcement_claim_version: "",
-        release_last_announcement_message_id: "",
-        release_last_announcement_at: "",
-        release_last_announcement_error: ""
+        release_channel_url: ""
       });
       await audit(env, account.user.id, "release_channel_removed", {});
     } else {
@@ -9289,10 +9293,6 @@ async function botHandleSessionMessage(env, account, message, session, origin) {
           release_channel_chat_id: channel.chat_id,
           release_channel_title: resolvedTitle,
           release_channel_url: resolvedUrl,
-          release_last_announced_version: "",
-          release_announcement_claim_version: "",
-          release_last_announcement_message_id: "",
-          release_last_announcement_at: "",
           release_last_announcement_error: ""
         });
         await audit(env, account.user.id, "release_channel_changed", { chatId: channel.chat_id, title: resolvedTitle });
@@ -9826,6 +9826,7 @@ async function centralAdminAction(request, env) {
     }
     if (action === "release_test" || action === "release_publish") {
       const result=await sendReleaseAnnouncement(env,{test:action==="release_test",force:true});
+      if(!result.sent&&["already_sent","already_claimed"].includes(result.reason)){await audit(env,auth.user.id,action+"_deduplicated",result);return json({success:true,message:"اطلاعیه این نسخه قبلاً منتشر شده و ارسال تکراری مسدود شد",result});}
       if(!result.sent)throw new Error(result.reason==="channel_not_configured"?"ابتدا کانال آپدیت‌ها را ثبت کنید":"ارسال اطلاعیه انجام نشد");
       await audit(env,auth.user.id,action,result);return json({success:true,message:action==="release_test"?"پیام آزمایشی ارسال شد":"اطلاعیه نسخه منتشر شد",result});
     }
@@ -10022,7 +10023,7 @@ async function routeApiUnsafe(request, env, path) {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '2.9.2';
+const BLUEPANEL_CORE_VERSION = '2.9.3';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
