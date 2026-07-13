@@ -1,21 +1,22 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 2.9.7
+ * Version: 2.9.9
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "2.9.7";
+const APP_VERSION = "2.9.9";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
   central: Object.freeze([
-    { emoji: "⚡", text: "حذف کامل انتظار Python Helper از مسیر /start و نمایش فوری منوی ربات" },
-    { emoji: "⏱", text: "اعمال سقف انتظار کوتاه برای تحلیل هوشمند تا هیچ درخواست پنل معطل Helper نماند" }
+    { emoji: "🔄", text: "افزودن امکان تغییر و ارتقای نوع ربات نمایندگی بدون حذف ربات" },
+    { emoji: "💳", text: "ارتقا از فروشگاهی به مستر فقط با پرداخت اختلاف هزینه دو نوع ربات" },
+    { emoji: "🛡", text: "حفظ کامل کاربران، سفارش‌ها، پلن‌ها و تنظیمات هنگام تغییر نوع ربات" }
   ]),
   reseller: Object.freeze([
-    { emoji: "🚀", text: "بهینه‌سازی مسیرهای پرتکرار برای واکنش سریع‌تر ربات‌ها و پنل‌ها" }
+    { emoji: "👑", text: "همگام‌سازی خودکار Role پنل PasarGuard و قابلیت زیرمجموعه‌سازی پس از ارتقا" }
   ])
 });
 
@@ -398,6 +399,7 @@ CREATE TABLE IF NOT EXISTS agencies (
   is_trial INTEGER NOT NULL DEFAULT 0,
   trial_expires_at TEXT,
   trial_data_limit_bytes INTEGER NOT NULL DEFAULT 0,
+  trial_expiry_notified_at TEXT,
   provisioning_source TEXT NOT NULL DEFAULT 'central',
   runtime_version TEXT NOT NULL DEFAULT '0.0.0',
   update_applied_at TEXT,
@@ -1182,6 +1184,7 @@ async function ensureDbInternal(env) {
       ["is_trial", "INTEGER NOT NULL DEFAULT 0"],
       ["trial_expires_at", "TEXT"],
       ["trial_data_limit_bytes", "INTEGER NOT NULL DEFAULT 0"],
+      ["trial_expiry_notified_at", "TEXT"],
       ["provisioning_source", "TEXT NOT NULL DEFAULT 'central'"],
       ["runtime_version", "TEXT NOT NULL DEFAULT '0.0.0'"],
       ["update_applied_at", "TEXT"],
@@ -1410,12 +1413,31 @@ async function ensureDbInternal(env) {
   await env.PASARGUARD_DB.prepare(`
     UPDATE agencies
     SET provisioning_source=CASE
+          WHEN COALESCE(is_trial,0)=1 THEN 'central'
           WHEN id LIKE 'agn_pg_%' THEN 'pasarguard_manual'
           WHEN COALESCE(provisioning_source,'')='' THEN 'central'
           ELSE provisioning_source END,
         runtime_version=?,
         update_applied_at=CASE WHEN COALESCE(runtime_version,'')<>? THEN ? ELSE update_applied_at END
   `).bind(APP_VERSION, APP_VERSION, ts).run();
+  await env.PASARGUARD_DB.prepare(`
+    UPDATE agencies
+    SET trial_expiry_notified_at=COALESCE(trial_expiry_notified_at,updated_at,?)
+    WHERE COALESCE(is_trial,0)=1 AND status='trial_expired' AND trial_expiry_notified_at IS NULL
+  `).bind(ts).run();
+  // اگر نسخه قبلی پیام پایان تست را فرستاده ولی همگام‌سازی وضعیت را دوباره
+  // active/disabled کرده باشد، سابقه audit مانع یک ارسال اضافه بعد از ارتقا می‌شود.
+  await env.PASARGUARD_DB.prepare(`
+    UPDATE agencies
+    SET trial_expiry_notified_at=COALESCE(trial_expiry_notified_at,updated_at,?)
+    WHERE COALESCE(is_trial,0)=1 AND trial_expiry_notified_at IS NULL
+      AND EXISTS(
+        SELECT 1 FROM audit_logs l
+        WHERE l.action='central_trial_expired'
+          AND l.actor_user_id=agencies.user_id
+          AND l.details LIKE '%' || agencies.id || '%'
+      )
+  `).bind(ts).run();
   // Existing bots receive a fresh full month when this licensed build is first installed.
   await env.PASARGUARD_DB.prepare(`
     UPDATE reseller_bots
@@ -1553,6 +1575,16 @@ function resellerBotRenewalFee(settings, type = "store") {
   const specific = kind === "master" ? settings?.reseller_master_bot_license_renewal_fee : settings?.reseller_store_bot_license_renewal_fee;
   const fallback = settings?.reseller_bot_license_renewal_fee;
   return clampInt(specific === undefined || specific === null || specific === "" ? fallback : specific, 0, 1000000000000);
+}
+
+function resellerBotTypeChangeFee(settings, currentType, targetType) {
+  const current = normalizeResellerLicenseType(currentType);
+  const target = normalizeResellerLicenseType(targetType);
+  if (current === target) return 0;
+  if (current === "store" && target === "master") {
+    return Math.max(0, resellerBotSetupFee(settings, "master") - resellerBotSetupFee(settings, "store"));
+  }
+  return 0;
 }
 
 function resellerHasIndependentPanel(bot) {
@@ -2748,6 +2780,29 @@ async function syncPasarguardManagersForUser(env, user) {
       const ownershipChanged = Number(existing.user_id) !== Number(user.id);
       if (ownershipChanged) transferred += 1;
 
+      // تست مرکزی یک رکورد سیستمی است و نباید در همگام‌سازی مدیران دستی
+      // به پنل pasarguard_manual تبدیل یا وضعیت پایان تست آن دوباره active شود.
+      if (Number(existing.is_trial || 0) === 1) {
+        const trialExpired = existing.status === "trial_expired" || centralTrialExpired(existing, usage);
+        if (trialExpired && status !== "disabled") {
+          try { await pasargadSetManagerStatus(env, existing.remote_manager_id, false); }
+          catch (error) {
+            await audit(env, existing.user_id, "central_trial_remote_disable_retry_failed", { agencyId: existing.id, message: error.message });
+          }
+        }
+        await env.PASARGUARD_DB.prepare(`
+          UPDATE agencies SET
+            user_id=?, title=?, panel_username=?, status=?, last_usage_bytes=?,
+            provisioning_source='central',runtime_version=?,update_applied_at=?,updated_at=?
+          WHERE id=?
+        `).bind(
+          user.id, title, username, trialExpired ? "trial_expired" : status, usage,
+          APP_VERSION, ts, ts, existing.id
+        ).run();
+        updated += 1;
+        continue;
+      }
+
       // پنل دستی در اولین اتصال از مصرف فعلی به عنوان نقطه شروع استفاده می‌کند؛
       // در همگام‌سازی‌های بعدی last_billed_bytes حفظ می‌شود تا مصرف جدید صورتحساب شود.
       const preserveBalanceSuspension = isImported && existing.status === "suspended_balance" && status === "disabled";
@@ -2878,16 +2933,31 @@ async function applyCurrentReleaseToAllAgencies(env) {
 }
 
 async function refreshImportedAgency(env, agency) {
-  const admin = await pasargadGetManager(env, agency.remote_manager_id);
+  const admin = await pasarguardGetManager(env, agency.remote_manager_id);
   const usage = extractUsageBytes(admin);
   const remoteStatus = normalizePasarguardAdminStatus(admin.status);
+  const username = cleanText(admin.username, 64) || agency.panel_username;
+  const title = cleanText(admin.profile_title, 80) || agency.title || ("پنل " + username);
+
+  // نسخه‌های قبلی ممکن بود تست مرکزی را اشتباهاً manual علامت بزنند.
+  // این مسیر رکورد را به central برمی‌گرداند و وضعیت پایان تست را حفظ می‌کند.
+  if (Number(agency.is_trial || 0) === 1) {
+    const status = agency.status === "trial_expired" || centralTrialExpired(agency, usage)
+      ? "trial_expired"
+      : remoteStatus;
+    await env.PASARGUARD_DB.prepare(`
+      UPDATE agencies SET title=?, panel_username=?, status=?, last_usage_bytes=?,
+        provisioning_source='central',runtime_version=?,update_applied_at=?,updated_at=?
+      WHERE id=?
+    `).bind(title, username, status, usage, APP_VERSION, nowIso(), nowIso(), agency.id).run();
+    return { usage, status };
+  }
+
   // اگر پنل به علت اتمام موجودی توسط سامانه تعلیق شده، پاسخ disabled پاسارگارد
   // نباید دلیل تعلیق محلی را از بین ببرد؛ تا پس از شارژ دوباره فعال شود.
   const status = ["suspended_balance", "paused_admin"].includes(agency.status) && remoteStatus === "disabled"
     ? agency.status
     : remoteStatus;
-  const username = cleanText(admin.username, 64) || agency.panel_username;
-  const title = cleanText(admin.profile_title, 80) || agency.title || ("پنل " + username);
   await env.PASARGUARD_DB.prepare(`
     UPDATE agencies SET title=?, panel_username=?, status=?, last_usage_bytes=?,
       provisioning_source='pasarguard_manual',runtime_version=?,update_applied_at=?,updated_at=?
@@ -2895,7 +2965,6 @@ async function refreshImportedAgency(env, agency) {
   `).bind(title, username, status, usage, APP_VERSION, nowIso(), nowIso(), agency.id).run();
   return { usage, status };
 }
-
 async function pasargadGetUsage(env, agency) {
   const admin = await pasargadGetManager(env, agency.remote_manager_id);
   return extractUsageBytes(admin);
@@ -2997,18 +3066,37 @@ async function enforceCentralTrialAgency(env, agency, currentUsageBytes = null) 
     return { charged: 0, trial: true, expired: false };
   }
 
-  if (agency.status !== "trial_expired") {
+  // وضعیت پایان تست محلی مرجع است. همگام‌سازی PasarGuard دیگر اجازه ندارد
+  // آن را به active/disabled برگرداند. به‌روزرسانی مستقل از اعلان انجام می‌شود.
+  const transitioned = await env.PASARGUARD_DB.prepare(
+    "UPDATE agencies SET status='trial_expired',provisioning_source='central',last_usage_bytes=?,last_billed_bytes=?,billing_remainder=0,total_charged=0,updated_at=? WHERE id=? AND status<>'trial_expired'"
+  ).bind(usage, usage, ts, agency.id).run();
+  if (Number(transitioned?.meta?.changes || 0) > 0) {
     try { await pasargadSetManagerStatus(env, agency.remote_manager_id, false); }
     catch (error) {
       await audit(env, agency.user_id, "central_trial_remote_disable_failed", { agencyId: agency.id, message: error.message });
     }
+  } else {
     await env.PASARGUARD_DB.prepare(
-      "UPDATE agencies SET status='trial_expired',last_usage_bytes=?,last_billed_bytes=?,billing_remainder=0,total_charged=0,updated_at=? WHERE id=?"
+      "UPDATE agencies SET provisioning_source='central',last_usage_bytes=?,last_billed_bytes=?,billing_remainder=0,total_charged=0,updated_at=? WHERE id=?"
     ).bind(usage, usage, ts, agency.id).run();
+  }
+
+  // این UPDATE نقش قفل اتمیک را دارد. حتی اگر چند Cron یا درخواست هم‌زمان
+  // به این تابع برسند، فقط یک اجرا اجازه ارسال پیام پایان تست را می‌گیرد.
+  const noticeClaim = await env.PASARGUARD_DB.prepare(
+    "UPDATE agencies SET trial_expiry_notified_at=? WHERE id=? AND trial_expiry_notified_at IS NULL"
+  ).bind(ts, agency.id).run();
+  const shouldNotify = Number(noticeClaim?.meta?.changes || 0) > 0;
+  if (shouldNotify) {
     const owner = await env.PASARGUARD_DB.prepare("SELECT telegram_id FROM users WHERE id=?").bind(agency.user_id).first();
     if (owner?.telegram_id) {
-      await notifyTelegramUser(env, owner.telegram_id,
-        "⏳ تست رایگان مرکزی شما به پایان رسید. برای ادامه استفاده، از بخش پنل‌های من یک پنل اصلی بسازید.");
+      try {
+        await notifyTelegramUser(env, owner.telegram_id,
+          "⏳ تست رایگان مرکزی شما به پایان رسید. برای ادامه استفاده، از بخش پنل‌های من یک پنل اصلی بسازید.");
+      } catch (error) {
+        await audit(env, agency.user_id, "central_trial_expiry_notice_failed", { agencyId: agency.id, message: error.message });
+      }
     }
     await audit(env, agency.user_id, "central_trial_expired", {
       agencyId: agency.id,
@@ -3016,13 +3104,9 @@ async function enforceCentralTrialAgency(env, agency, currentUsageBytes = null) 
       dataLimitBytes: Number(agency.trial_data_limit_bytes || 0),
       expiresAt: agency.trial_expires_at || ""
     });
-  } else {
-    await env.PASARGUARD_DB.prepare("UPDATE agencies SET last_usage_bytes=?,updated_at=? WHERE id=?")
-      .bind(usage, ts, agency.id).run();
   }
-  return { charged: 0, trial: true, expired: true };
+  return { charged: 0, trial: true, expired: true, notified: shouldNotify };
 }
-
 async function processCentralTrialExpirations(env, limit = 100) {
   await ensureDb(env);
   const rows = await env.PASARGUARD_DB.prepare(`
@@ -3188,7 +3272,7 @@ async function syncUsage(env, limit = 50) {
   if (settings.usage_sync_enabled !== "true") return { processed: 0, charged: 0 };
   const pricePerGb = clampInt(settings.price_per_gb, 0, 1000000000);
   const result = await env.PASARGUARD_DB.prepare(
-    "SELECT * FROM agencies WHERE provisioning_source='pasarguard_manual' OR status IN ('active','suspended_balance') ORDER BY updated_at ASC LIMIT ?"
+    "SELECT * FROM agencies WHERE (COALESCE(is_trial,0)=0 AND provisioning_source='pasarguard_manual') OR status IN ('active','suspended_balance') ORDER BY updated_at ASC LIMIT ?"
   ).bind(limit).all();
 
   let processed = 0;
@@ -3222,7 +3306,7 @@ async function syncUsageForUser(env, userId, limit = 30, minIntervalSeconds = LI
   const pricePerGb = clampInt(settings.price_per_gb, 0, 1000000000);
   const rows = await env.PASARGUARD_DB.prepare(`
     SELECT * FROM agencies
-    WHERE user_id=? AND (provisioning_source='pasarguard_manual' OR status IN ('active','suspended_balance'))
+    WHERE user_id=? AND ((COALESCE(is_trial,0)=0 AND provisioning_source='pasarguard_manual') OR status IN ('active','suspended_balance'))
     ORDER BY updated_at ASC LIMIT ?
   `).bind(userId, limit).all();
 
@@ -4742,26 +4826,43 @@ function normalizeGithubRepo(repo) {
 
 function githubRawUrl(repo, branch, file, cacheBust = false) {
   const base = "https://raw.githubusercontent.com/" + normalizeGithubRepo(repo) + "/" + encodeURIComponent(branch) + "/" + String(file || "").split("/").map(encodeURIComponent).join("/");
-  return cacheBust ? base + "?pasarguard_cb=" + Date.now() : base;
+  if (!cacheBust) return base;
+  const value = cacheBust === true ? Date.now() : String(cacheBust);
+  return base + "?pasarguard_cb=" + encodeURIComponent(value);
 }
 
 function githubContentsApiUrl(repo, branch, file) {
   return "https://api.github.com/repos/" + normalizeGithubRepo(repo) + "/contents/" + String(file || "").split("/").map(encodeURIComponent).join("/") + "?ref=" + encodeURIComponent(branch);
 }
 
+function githubRateLimitError(response, body = "") {
+  const remaining = response.headers.get("x-ratelimit-remaining");
+  const reset = Number(response.headers.get("x-ratelimit-reset") || 0);
+  const looksLimited = response.status === 429 || (response.status === 403 && (remaining === "0" || /rate limit/i.test(body)));
+  if (!looksLimited) return null;
+  const error = new Error("سهمیه موقت GitHub API تمام شده است؛ بررسی نسخه از مسیر بدون محدودیت انجام می‌شود. چند ثانیه دیگر دوباره تلاش کنید.");
+  error.code = "GITHUB_RATE_LIMIT";
+  error.retry_at = reset ? new Date(reset * 1000).toISOString() : "";
+  return error;
+}
+
 async function githubFetch(env, url, suppliedSettings = null, options = {}) {
   const settings = suppliedSettings || await getSettings(env);
   const headers = {
-    accept: options.api ? "application/vnd.github+json" : "text/plain, */*",
+    accept: options.api ? "application/vnd.github+json" : "text/plain, application/json, */*",
     "cache-control": "no-cache",
-    "user-agent": "Pasargard-MiniApp/" + APP_VERSION + " (Cloudflare Worker)",
-    "x-github-api-version": "2022-11-28"
+    "user-agent": "Pasargard-MiniApp/" + APP_VERSION + " (Cloudflare Worker)"
   };
+  if (options.api) headers["x-github-api-version"] = "2022-11-28";
   if (settings.github_token) headers.authorization = "Bearer " + settings.github_token;
   const response = await fetch(url, { headers, cache: "no-store" });
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    throw new Error("GitHub HTTP " + response.status + (body ? ": " + body.slice(0, 180) : ""));
+    const limited = githubRateLimitError(response, body);
+    if (limited) throw limited;
+    const error = new Error("GitHub HTTP " + response.status + (body ? ": " + body.slice(0, 180) : ""));
+    error.code = "GITHUB_HTTP_" + response.status;
+    throw error;
   }
   return response;
 }
@@ -4779,6 +4880,33 @@ async function githubFileMetadata(env, settings, file) {
 
 async function githubWorkerMetadata(env, settings) {
   return githubFileMetadata(env, settings, "core/worker.js");
+}
+
+async function githubReleaseManifest(env, settings) {
+  const repo = settings.github_repo;
+  const branch = settings.github_branch || "main";
+  const bucket = Math.floor(Date.now() / 5000);
+  try {
+    const response = await githubFetch(env, githubRawUrl(repo, branch, "release.json", bucket), settings);
+    const data = await response.json();
+    const latest = String(data?.version || "").trim();
+    if (!/^v?\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?$/.test(latest)) throw new Error("نسخه release.json معتبر نیست");
+    return {
+      latest,
+      release_id: cleanText(data?.release_id || data?.build_id || latest, 160) || latest,
+      files: data?.files && typeof data.files === "object" ? data.files : {},
+      hashes: data?.sha256 && typeof data.sha256 === "object" ? data.sha256 : {},
+      source: "release.json"
+    };
+  } catch (error) {
+    if (error?.code === "GITHUB_RATE_LIMIT") throw error;
+    const versionFile = settings.github_version_file || "version";
+    const latest = (await (await githubFetch(env, githubRawUrl(repo, branch, versionFile, bucket), settings)).text()).trim();
+    if (!/^v?\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?$/.test(latest)) {
+      throw new Error("محتوای فایل version معتبر نیست: " + latest.slice(0, 50));
+    }
+    return { latest, release_id: latest, files: {}, hashes: {}, source: "version" };
+  }
 }
 
 function isServiceBinding(binding) {
@@ -5151,12 +5279,14 @@ async function deployEdgeWorkerFromGithub(env, force = false, targetVersion = ""
   const scriptName = await resolveEdgeScriptNameFromCoreBinding(settings);
   if (!scriptName) return { skipped: true, reason: "edge_script_name_not_detected", hint: "Binding مرکزی باید دقیقاً EDGE_WORKER نام داشته باشد" };
   const file = "edge/worker.js";
-  const meta = await githubFileMetadata(env, settings, file);
-  if (!force && meta.sha && meta.sha === String(settings.edge_worker_last_sha || "")) return { skipped: true, reason: "up_to_date", sha: meta.sha, version: settings.edge_worker_last_version || "" };
   const code = await (await githubFetch(env, githubRawUrl(settings.github_repo, settings.github_branch || "main", file, true), settings)).text();
   if (!code.includes("export default") || !code.includes("BLUEPANEL_EDGE_WORKER")) throw new Error("فایل edge/worker.js معتبر نیست");
-  const detectedVersion = (code.match(/const\s+EDGE_VERSION\s*=\s*["']([^"']+)["']/) || [])[1] || "";
+  const codeSha = await sha256Hex(code);
+  const detectedVersion = (code.match(/const\s+(?:APP_VERSION|EDGE_VERSION|BLUEPANEL_EDGE_VERSION)\s*=\s*["']([^"']+)["']/) || [])[1] || "";
   const deployedVersion = cleanText(targetVersion || detectedVersion || APP_VERSION, 80);
+  if (!force && codeSha && codeSha === String(settings.edge_worker_last_sha || "") && (!deployedVersion || deployedVersion === String(settings.edge_worker_last_version || ""))) {
+    return { skipped: true, reason: "up_to_date", sha: codeSha, version: settings.edge_worker_last_version || deployedVersion };
+  }
   const apiBase = "https://api.cloudflare.com/client/v4/accounts/" + settings.cf_account_id + "/workers/scripts/" + encodeURIComponent(scriptName);
   let keepBindings = [];
   try {
@@ -5164,15 +5294,15 @@ async function deployEdgeWorkerFromGithub(env, force = false, targetVersion = ""
     const current = await r.json();
     keepBindings = Array.from(new Set((current?.result?.bindings || []).map(x => x.type).filter(Boolean)));
   } catch (_) {}
-  const metadata = { main_module: "worker.js", compatibility_date: "2026-06-01", keep_bindings: keepBindings, annotations: { "workers/message": "BluePanel split Edge auto-update " + APP_VERSION, "workers/tag": "bluepanel-edge-update" } };
+  const metadata = { main_module: "worker.js", compatibility_date: "2026-06-01", keep_bindings: keepBindings, annotations: { "workers/message": "BluePanel split Edge auto-update " + deployedVersion, "workers/tag": "bluepanel-edge-update" } };
   const form = new FormData();
   form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
   form.append("worker.js", new Blob([code], { type: "application/javascript+module" }), "worker.js");
   const response = await fetch(apiBase + "?bindings_inherit=strict", { method: "PUT", headers: { authorization: "Bearer " + settings.cf_api_token }, body: form });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.success === false) throw new Error(data?.errors?.[0]?.message || "Cloudflare Edge deploy failed");
-  await setSettings(env, { edge_worker_script_name: scriptName, edge_worker_last_sha: meta.sha || "", edge_worker_last_version: deployedVersion, edge_worker_last_deployed_at: nowIso(), edge_worker_last_error: "", github_edge_worker_file: "worker.js" });
-  return { deployed: true, sha: meta.sha, script_name: scriptName, version: deployedVersion };
+  await setSettings(env, { edge_worker_script_name: scriptName, edge_worker_last_sha: codeSha, edge_worker_last_version: deployedVersion, edge_worker_last_deployed_at: nowIso(), edge_worker_last_error: "", github_edge_worker_file: file });
+  return { deployed: true, sha: codeSha, script_name: scriptName, version: deployedVersion };
 }
 
 async function deployProcessorWorkerFromGithub(env, force = false, targetVersion = "") {
@@ -5182,12 +5312,14 @@ async function deployProcessorWorkerFromGithub(env, force = false, targetVersion
   const scriptName = await resolveProcessorScriptNameFromCoreBinding(settings);
   if (!scriptName) return { skipped: true, reason: "processor_script_name_not_detected", hint: "Binding مرکزی باید دقیقاً PROCESSOR_WORKER نام داشته باشد" };
   const file = "processor/worker.js";
-  const meta = await githubFileMetadata(env, settings, file);
-  if (!force && meta.sha && meta.sha === String(settings.processor_worker_last_sha || "")) return { skipped: true, reason: "up_to_date", sha: meta.sha, version: settings.processor_worker_last_version || "" };
   const workerCode = await (await githubFetch(env, githubRawUrl(settings.github_repo, settings.github_branch || "main", file, true), settings)).text();
   if (!workerCode.includes("export default") || !workerCode.includes("BLUEPANEL_PROCESSOR_WORKER")) throw new Error("فایل processor/worker.js معتبر نیست");
-  const detectedVersion = (workerCode.match(/const\s+PROCESSOR_VERSION\s*=\s*["']([^"']+)["']/) || [])[1] || "";
+  const codeSha = await sha256Hex(workerCode);
+  const detectedVersion = (workerCode.match(/const\s+(?:APP_VERSION|PROCESSOR_VERSION|BLUEPANEL_PROCESSOR_VERSION)\s*=\s*["']([^"']+)["']/) || [])[1] || "";
   const deployedVersion = cleanText(targetVersion || detectedVersion || APP_VERSION, 80);
+  if (!force && codeSha && codeSha === String(settings.processor_worker_last_sha || "") && (!deployedVersion || deployedVersion === String(settings.processor_worker_last_version || ""))) {
+    return { skipped: true, reason: "up_to_date", sha: codeSha, version: settings.processor_worker_last_version || deployedVersion };
+  }
   const apiBase = "https://api.cloudflare.com/client/v4/accounts/" + settings.cf_account_id + "/workers/scripts/" + encodeURIComponent(scriptName);
   let keepBindings = [];
   try {
@@ -5195,44 +5327,46 @@ async function deployProcessorWorkerFromGithub(env, force = false, targetVersion
     const current = await r.json();
     keepBindings = Array.from(new Set((current?.result?.bindings || []).map(x => x.type).filter(Boolean)));
   } catch (_) {}
-  const metadata = { main_module: "worker.js", compatibility_date: "2026-06-01", keep_bindings: keepBindings, annotations: { "workers/message": "BluePanel split Processor auto-update " + APP_VERSION, "workers/tag": "bluepanel-processor-update" } };
+  const metadata = { main_module: "worker.js", compatibility_date: "2026-06-01", keep_bindings: keepBindings, annotations: { "workers/message": "BluePanel split Processor auto-update " + deployedVersion, "workers/tag": "bluepanel-processor-update" } };
   const form = new FormData();
   form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
   form.append("worker.js", new Blob([workerCode], { type: "application/javascript+module" }), "worker.js");
   const response = await fetch(apiBase + "?bindings_inherit=strict", { method: "PUT", headers: { authorization: "Bearer " + settings.cf_api_token }, body: form });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.success === false) throw new Error(data?.errors?.[0]?.message || "Cloudflare Processor deploy failed");
-  await setSettings(env, { processor_worker_script_name: scriptName, processor_worker_last_sha: meta.sha || "", processor_worker_last_version: deployedVersion, processor_worker_last_deployed_at: nowIso(), processor_worker_last_error: "", github_processor_worker_file: "processor/worker.js" });
-  return { deployed: true, sha: meta.sha, script_name: scriptName, version: deployedVersion };
+  await setSettings(env, { processor_worker_script_name: scriptName, processor_worker_last_sha: codeSha, processor_worker_last_version: deployedVersion, processor_worker_last_deployed_at: nowIso(), processor_worker_last_error: "", github_processor_worker_file: file });
+  return { deployed: true, sha: codeSha, script_name: scriptName, version: deployedVersion };
 }
 
 async function checkUpdate(env) {
   const settings = await getSettings(env);
   const repo = settings.github_repo;
   if (!repo) throw new Error("github_repo تنظیم نشده است");
-  const branch = settings.github_branch || "main";
-  const versionFile = settings.github_version_file || "version";
-  const latest = (await (await githubFetch(env, githubRawUrl(repo, branch, versionFile, true), settings)).text()).trim();
-  if (!/^v?\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?$/.test(latest)) {
-    throw new Error("محتوای فایل version معتبر نیست: " + latest.slice(0, 50));
-  }
-  const remote = await githubWorkerMetadata(env, settings);
-  const knownSha = String(settings.auto_update_last_worker_sha || "");
+  const manifest = await githubReleaseManifest(env, settings);
+  const latest = manifest.latest;
   const versionOrder = semverCompare(APP_VERSION, latest);
   const versionAvailable = versionOrder < 0;
-  // GitHub may receive a corrected worker.js without a version bump. The blob
-  // SHA lets the updater detect that build as well. SHA-only deployment is
-  // allowed only when GitHub is on the same version, never when it is older.
-  const buildAvailable = Boolean(versionOrder === 0 && remote.sha && remote.sha !== knownSha);
+  const knownReleaseId = String(settings.auto_update_last_release_id || "");
+  const buildAvailable = Boolean(versionOrder === 0 && knownReleaseId && manifest.release_id && manifest.release_id !== knownReleaseId);
+  const canSyncRemote = versionOrder <= 0;
+  const edgeSyncRequired = Boolean(canSyncRemote && hasEdgeServiceBinding(env) && String(settings.edge_worker_last_version || "") !== latest);
+  const processorSyncRequired = Boolean(canSyncRemote && hasProcessorServiceBinding(env) && String(settings.processor_worker_last_version || "") !== latest);
+  const clusterSyncRequired = edgeSyncRequired || processorSyncRequired;
   const available = versionAvailable || buildAvailable;
   return {
     current: APP_VERSION,
     latest,
     available,
-    reason: versionAvailable ? "version" : (buildAvailable ? (knownSha ? "build" : "initial_build_sync") : (versionOrder > 0 ? "remote_older" : "none")),
-    worker_sha: remote.sha,
-    known_worker_sha: knownSha,
-    worker_size: remote.size
+    update_required: available || clusterSyncRequired,
+    reason: versionAvailable ? "version" : (buildAvailable ? "build" : (clusterSyncRequired ? "cluster_sync" : (versionOrder > 0 ? "remote_older" : "none"))),
+    release_id: manifest.release_id,
+    known_release_id: knownReleaseId,
+    manifest_source: manifest.source,
+    worker_sha: cleanText(manifest.hashes?.core || "", 128),
+    known_worker_sha: String(settings.auto_update_last_worker_sha || ""),
+    edge_sync_required: edgeSyncRequired,
+    processor_sync_required: processorSyncRequired,
+    cluster_sync_required: clusterSyncRequired
   };
 }
 
@@ -5248,6 +5382,7 @@ async function deploySelfFromGithub(env, force = false, prechecked = null) {
   const workerFile = "core/worker.js";
   const code = await (await githubFetch(env, githubRawUrl(repo, branch, workerFile, true), settings)).text();
   if (!code.includes("export default") || !code.includes("BLUEPANEL_CORE_WORKER")) throw new Error("فایل core/worker.js معتبر نیست");
+  const codeSha = await sha256Hex(code);
 
   const apiBase = "https://api.cloudflare.com/client/v4/accounts/" + settings.cf_account_id + "/workers/scripts/" + encodeURIComponent(settings.cf_worker_name);
   let keepBindings = [];
@@ -5281,12 +5416,38 @@ async function deploySelfFromGithub(env, force = false, prechecked = null) {
     throw new Error(data?.errors?.[0]?.message || "Cloudflare deploy failed");
   }
   await setSettings(env, {
-    auto_update_last_worker_sha: check.worker_sha || "",
+    auto_update_last_worker_sha: codeSha,
     auto_update_last_version: check.latest || APP_VERSION,
+    auto_update_last_release_id: check.release_id || check.latest || APP_VERSION,
     auto_update_last_status: "deployed",
     auto_update_last_error: ""
   });
-  return { ...check, deployed: true };
+  return { ...check, worker_sha: codeSha, deployed: true };
+}
+
+async function deployClusterFromGithub(env, force = false, prechecked = null) {
+  const check = prechecked || await checkUpdate(env);
+  let core = { ...check, deployed: false };
+  if (check.available || force) core = await deploySelfFromGithub(env, force, check);
+  const shouldSync = force || check.available || check.cluster_sync_required;
+  let edge_update = { skipped: true, reason: "no_cluster_update_required" };
+  let processor_update = { skipped: true, reason: "no_cluster_update_required" };
+  if (shouldSync) {
+    try {
+      edge_update = await deployEdgeWorkerFromGithub(env, force, check.latest || APP_VERSION);
+    } catch (error) {
+      await setSettings(env, { edge_worker_last_error: cleanText(error?.message || error, 800) });
+      edge_update = { deployed: false, error: error?.message || String(error) };
+    }
+    try {
+      processor_update = await deployProcessorWorkerFromGithub(env, force, check.latest || APP_VERSION);
+    } catch (error) {
+      await setSettings(env, { processor_worker_last_error: cleanText(error?.message || error, 800) });
+      processor_update = { deployed: false, error: error?.message || String(error) };
+    }
+  }
+  const deployed = Boolean(core.deployed || edge_update?.deployed || processor_update?.deployed);
+  return { ...check, ...core, deployed, core_deployed: Boolean(core.deployed), edge_update, processor_update };
 }
 
 function autoUpdateConfigurationReady(settings) {
@@ -5317,11 +5478,6 @@ async function automaticUpdateTick(env, options = {}) {
   await ensureDb(env);
   const source = options.source || "request";
   const settings = await getSettings(env);
-
-  // From v0.7.0 onward automatic updating is permanently enabled. The old
-  // database toggle is intentionally ignored so upgrades never wait for a click.
-  // The claim happens before configuration validation to avoid a D1 write on
-  // every request while setup or Cloudflare credentials are still incomplete.
   const intervalSeconds = Math.max(5, Math.min(86400, Number(options.intervalSeconds ?? settings.auto_update_interval_seconds ?? 5)));
   const claimed = await claimAutomaticUpdateCheck(env, intervalSeconds, options.forceCheck === true);
   if (!claimed) return { checked: false, deployed: false, reason: "throttled" };
@@ -5338,22 +5494,12 @@ async function automaticUpdateTick(env, options = {}) {
 
   try {
     const check = await checkUpdate(env);
-    let result = { ...check, checked: true, deployed: false };
-    if (check.available) {
-      result = { ...(await deploySelfFromGithub(env, false, check)), checked: true };
-    }
-    let edge_update = null;
-    try { edge_update = await deployEdgeWorkerFromGithub(env, false, check.latest || APP_VERSION); }
-    catch (edgeError) { await setSettings(env, { edge_worker_last_error: cleanText(edgeError?.message || edgeError, 800) }); edge_update = { deployed: false, error: edgeError?.message || String(edgeError) }; }
-    result.edge_update = edge_update;
-    let processor_update = null;
-    try { processor_update = await deployProcessorWorkerFromGithub(env, false, check.latest || APP_VERSION); }
-    catch (processorError) { await setSettings(env, { processor_worker_last_error: cleanText(processorError?.message || processorError, 800) }); processor_update = { deployed: false, error: processorError?.message || String(processorError) }; }
-    result.processor_update = processor_update;
+    const result = { ...(await deployClusterFromGithub(env, false, check)), checked: true };
     await setSettings(env, {
       auto_update: "true",
       auto_update_last_status: result.deployed ? "deployed" : "up_to_date",
       auto_update_last_version: result.latest || APP_VERSION,
+      auto_update_last_release_id: result.release_id || result.latest || APP_VERSION,
       auto_update_last_worker_sha: result.worker_sha || settings.auto_update_last_worker_sha || "",
       auto_update_last_error: "",
       auto_update_last_source: source
@@ -5361,8 +5507,7 @@ async function automaticUpdateTick(env, options = {}) {
     try { await audit(env, null, "automatic_update_" + (result.deployed ? "deployed" : "checked"), { source, ...result }); } catch (_) {}
     return result;
   } catch (error) {
-    // A failed request-triggered check is retried quickly instead of waiting for the next Cron.
-    const retryDelay = Math.max(15, Math.min(300, intervalSeconds));
+    const retryDelay = error?.code === "GITHUB_RATE_LIMIT" ? 300 : Math.max(15, Math.min(300, intervalSeconds));
     const retryEpoch = Math.floor(Date.now() / 1000) - intervalSeconds + retryDelay;
     await setSettings(env, {
       auto_update: "true",
@@ -5371,7 +5516,7 @@ async function automaticUpdateTick(env, options = {}) {
       auto_update_last_error: String(error?.message || error).slice(0, 1000),
       auto_update_last_source: source
     });
-    try { await audit(env, null, "automatic_update_failed", { source, message: error?.message || String(error) }); } catch (_) {}
+    try { await audit(env, null, "automatic_update_failed", { source, code: error?.code || "", message: error?.message || String(error) }); } catch (_) {}
     throw error;
   }
 }
@@ -5381,12 +5526,15 @@ async function updateAction(request, env, deploy) {
   if (auth.response) return auth.response;
   try {
     const body = await parseBody(request);
-    let result = deploy ? await deploySelfFromGithub(env, body.force === true) : await checkUpdate(env);
-    if (deploy) result = { ...result, edge_update: await deployEdgeWorkerFromGithub(env, body.force === true, result.latest || APP_VERSION), processor_update: await deployProcessorWorkerFromGithub(env, body.force === true, result.latest || APP_VERSION) };
+    const result = deploy ? await deployClusterFromGithub(env, body.force === true) : await checkUpdate(env);
     await audit(env, auth.user.id, deploy ? "github_update_deploy" : "github_update_check", result);
-    return json({ success: true, result });
+    const message = deploy
+      ? (result.deployed ? "نسخه جدید روی کلاستر نصب شد" : "تغییری برای نصب وجود نداشت")
+      : (result.update_required ? "نسخه یا همگام‌سازی جدید پیدا شد" : "آخرین نسخه نصب است");
+    return json({ success: true, message, result });
   } catch (error) {
-    return fail(error.message, 502, "UPDATE_FAILED");
+    const status = error?.code === "GITHUB_RATE_LIMIT" ? 429 : 502;
+    return fail(error.message, status, error?.code || "UPDATE_FAILED");
   }
 }
 
@@ -5548,6 +5696,87 @@ async function renewResellerBotLicense(env, account, bot) {
   }
   await audit(env, account.user.id, "reseller_bot_license_renewed", { botId: bot.id, fee, expiresAt, days: RESELLER_LICENSE_DAYS });
   return { fee, expiresAt, days: RESELLER_LICENSE_DAYS };
+}
+
+
+async function changeResellerBotLicenseType(env, account, bot, requestedType) {
+  if (!bot || Number(bot.user_id) !== Number(account.user.id)) throw new Error("ربات نماینده پیدا نشد");
+  if (!resellerHasIndependentPanel(bot)) throw new Error("نوع ربات زیرمجموعه فقط توسط مستر بالادست تعیین می‌شود");
+  const requestedRaw = String(requestedType || "").trim().toLowerCase();
+  if (!["store", "master"].includes(requestedRaw)) throw new Error("نوع ربات انتخاب‌شده معتبر نیست");
+  const currentType = normalizeResellerLicenseType(bot.license_type);
+  const targetType = requestedRaw;
+  if (currentType === targetType) return { changed: false, fee: 0, licenseType: currentType };
+
+  const settings = account.settings || await getSettings(env);
+  if (currentType === "master" && targetType === "store") {
+    const child = await env.PASARGUARD_DB.prepare("SELECT COUNT(*) AS count FROM reseller_bots WHERE parent_bot_id=?")
+      .bind(bot.id).first();
+    if (Number(child?.count || 0) > 0) {
+      throw new Error("تا وقتی ربات زیرمجموعه دارید، تغییر نوع مستر به فروشگاهی ممکن نیست؛ ابتدا زیرمجموعه‌ها را تعیین تکلیف کنید");
+    }
+  }
+
+  const agency = await env.PASARGUARD_DB.prepare("SELECT id,remote_manager_id FROM agencies WHERE id=? AND user_id=?")
+    .bind(bot.agency_id, account.user.id).first();
+  if (!agency?.remote_manager_id) throw new Error("شناسه مدیر پنل PasarGuard برای تغییر نوع ربات در دسترس نیست");
+
+  const fee = resellerBotTypeChangeFee(settings, currentType, targetType);
+  const changedAt = nowIso();
+  let roleChanged = false;
+  let charged = false;
+
+  try {
+    await applyBotLicenseRoleToAgency(env, agency, targetType, account.user.id);
+    roleChanged = true;
+
+    if (fee > 0) {
+      const debit = await env.PASARGUARD_DB.prepare("UPDATE users SET wallet_balance=wallet_balance-?,updated_at=? WHERE id=? AND wallet_balance>=?")
+        .bind(fee, changedAt, account.user.id, fee).run();
+      if (!Number(debit?.meta?.changes || 0)) {
+        throw new Error("موجودی برای ارتقا کافی نیست؛ هزینه ارتقا " + botMoney(fee) + " تومان است");
+      }
+      charged = true;
+    }
+
+    const updated = await env.PASARGUARD_DB.prepare(`
+      UPDATE reseller_bots
+      SET license_type=?,downline_sales_enabled=?,bot_version=?,updated_at=?
+      WHERE id=? AND user_id=? AND license_type=? AND parent_bot_id IS NULL AND COALESCE(purchase_source,'central')='central'
+    `).bind(targetType, targetType === "master" ? 1 : 0, APP_VERSION, changedAt, bot.id, account.user.id, currentType).run();
+    if (!Number(updated?.meta?.changes || 0)) throw new Error("نوع ربات تغییر نکرد؛ وضعیت ربات هم‌زمان تغییر کرده است");
+  } catch (error) {
+    if (charged) {
+      try {
+        await env.PASARGUARD_DB.prepare("UPDATE users SET wallet_balance=wallet_balance+?,updated_at=? WHERE id=?")
+          .bind(fee, nowIso(), account.user.id).run();
+      } catch (_) {}
+    }
+    if (roleChanged) {
+      try { await applyBotLicenseRoleToAgency(env, agency, currentType, account.user.id); } catch (_) {}
+    }
+    throw error;
+  }
+
+  if (fee > 0) {
+    const fresh = await env.PASARGUARD_DB.prepare("SELECT wallet_balance FROM users WHERE id=?").bind(account.user.id).first();
+    await env.PASARGUARD_DB.prepare(`
+      INSERT INTO wallet_ledger(id,user_id,type,amount,balance_after,ref_type,ref_id,description,created_at)
+      VALUES(?,?,?,?,?,'reseller_bot',?,?,?)
+    `).bind(
+      id("led"), account.user.id, "reseller_bot_type_upgrade", -fee, Number(fresh?.wallet_balance || 0), bot.id,
+      "ارتقای نوع ربات از " + resellerLicenseTypeLabel(currentType) + " به " + resellerLicenseTypeLabel(targetType), changedAt
+    ).run();
+  }
+
+  await audit(env, account.user.id, "reseller_bot_license_type_changed", {
+    botId: bot.id,
+    from: currentType,
+    to: targetType,
+    fee,
+    dataPreserved: true
+  });
+  return { changed: true, fee, licenseType: targetType };
 }
 
 function normalizeWorkerPublicUrl(value) {
@@ -7304,7 +7533,10 @@ async function botSalesBotView(env, account) {
   const renewalFee = resellerBotRenewalFee(settings, bot.license_type);
   const rows = [];
   if (bot.bot_username) rows.push([{ text: "🚀 ورود به ربات نماینده و مدیریت", url: "https://t.me/" + bot.bot_username.replace(/^@/, "") }]);
-  if (!bot.parent_bot_id && String(bot.purchase_source || "central") === "central") rows.push([{ text: "🪪 تمدید یک‌ماهه" + (renewalFee ? " · " + botMoney(renewalFee) + " تومان" : ""), callback_data: "bot:sales:renew" }]);
+  if (!bot.parent_bot_id && String(bot.purchase_source || "central") === "central") {
+    rows.push([{ text: "🔄 تغییر یا ارتقای نوع ربات", callback_data: "bot:sales:type" }]);
+    rows.push([{ text: "🪪 تمدید یک‌ماهه" + (renewalFee ? " · " + botMoney(renewalFee) + " تومان" : ""), callback_data: "bot:sales:renew" }]);
+  }
   rows.push([{ text: "🏠 منوی اصلی", callback_data: "bot:home" }]);
   return {
     text: "🤖 <b>ربات نمایندگی شما فعال است</b>\n━━━━━━━━━━━━━━\n" +
@@ -7319,6 +7551,40 @@ async function botSalesBotView(env, account) {
         ? "🔐 این ربات زیرمجموعه مستر است؛ پنل PasarGuard ندارد و تمدید، نرخ مصرف و اعتبار آن توسط مستر انجام می‌شود.\n"
         : "🔐 پنل PasarGuard و لایسنس این ربات مستقیماً از ربات مرکزی مدیریت می‌شود.\n") +
       "تمام تنظیمات فروش، کاربران، سفارش‌ها، پلن‌ها و آمار را در داشبورد مستقل ربات مدیریت کنید.",
+    reply_markup: { inline_keyboard: rows }
+  };
+}
+
+
+async function botSalesTypeView(env, account) {
+  const bot = await getResellerBotForUser(env, account.user.id);
+  if (!bot) throw new Error("ربات نماینده پیدا نشد");
+  if (!resellerHasIndependentPanel(bot)) throw new Error("نوع ربات زیرمجموعه فقط توسط مستر بالادست تعیین می‌شود");
+  const settings = account.settings || await getSettings(env);
+  const currentType = normalizeResellerLicenseType(bot.license_type);
+  const targetType = currentType === "master" ? "store" : "master";
+  const fee = resellerBotTypeChangeFee(settings, currentType, targetType);
+  const child = await env.PASARGUARD_DB.prepare("SELECT COUNT(*) AS count FROM reseller_bots WHERE parent_bot_id=?")
+    .bind(bot.id).first();
+  const childCount = Number(child?.count || 0);
+  const rows = [];
+
+  if (currentType === "store") {
+    rows.push([{ text: "👑 ارتقا به مستر" + (fee ? " · " + botMoney(fee) + " تومان" : " · رایگان"), callback_data: "bot:sales:type:confirm:master" }]);
+  } else if (childCount === 0) {
+    rows.push([{ text: "🤖 تغییر به فروشگاهی", callback_data: "bot:sales:type:confirm:store" }]);
+  }
+  rows.push([{ text: "↩️ بازگشت به ربات", callback_data: "bot:sales" }]);
+
+  return {
+    text: "🔄 <b>تغییر نوع ربات نمایندگی</b>\n━━━━━━━━━━━━━━\n" +
+      "نوع فعلی: <b>" + botEscape(resellerLicenseTypeLabel(currentType)) + "</b>\n" +
+      "نوع قابل انتخاب: <b>" + botEscape(resellerLicenseTypeLabel(targetType)) + "</b>\n" +
+      (currentType === "store"
+        ? "هزینه ارتقا: <b>" + botMoney(fee) + " تومان</b>\nتمدیدهای بعدی با تعرفه ربات مستر محاسبه می‌شوند.\n"
+        : "تعداد ربات‌های زیرمجموعه: <b>" + botMoney(childCount) + "</b>\n" + (childCount ? "⛔ تا زمان تعیین تکلیف زیرمجموعه‌ها امکان تغییر به فروشگاهی وجود ندارد.\n" : "تغییر به فروشگاهی بازگشت وجه ندارد.\n")) +
+      "\n✅ کاربران، سفارش‌ها، پلن‌ها، موجودی‌ها، متن‌ها و تنظیمات ربات بدون تغییر باقی می‌مانند.\n" +
+      "✅ Role پنل PasarGuard نیز خودکار با نوع جدید هماهنگ می‌شود.",
     reply_markup: { inline_keyboard: rows }
   };
 }
@@ -7921,6 +8187,7 @@ async function botRenderView(env, account, view) {
   if (view === "buy_agency") return botBuyAgencyView(env, account);
   if (view === "buy_bot") return botBuyResellerBotView(env, account);
   if (view === "sales_bot") return botSalesBotView(env, account);
+  if (view === "sales_type") return botSalesTypeView(env, account);
   if (view === "sales_plans") return botSalesPlansView(env, account);
   if (view === "sales_orders") return botSalesOrdersView(env, account);
   if (view === "sales_catalog") return botSalesCatalogView(env, account);
@@ -8357,6 +8624,56 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
     }
     if (!result.sent) throw new Error(result.reason === "channel_not_configured" ? "ابتدا کانال آپدیت‌ها را تعیین کنید" : "انتشار انجام نشد");
     await botPrompt(env, chatId, "🚀 اطلاعیه رسمی نسخه <code>" + botEscape(APP_VERSION) + "</code> در کانال منتشر شد.", [[{ text: "↩️ کانال آپدیت‌ها", callback_data: "bot:admin:release_channel" }]]);
+    return;
+  }
+  if (data === "bot:sales:type") {
+    await botClearSession(env, account.user.telegram_id);
+    await botSendOrEdit(env, { account, chatId, messageId }, "sales_type");
+    return;
+  }
+  if (data.startsWith("bot:sales:type:confirm:")) {
+    const bot = await getResellerBotForUser(env, account.user.id);
+    if (!bot) throw new Error("ربات نماینده پیدا نشد");
+    if (!resellerHasIndependentPanel(bot)) throw new Error("نوع ربات زیرمجموعه فقط توسط مستر بالادست تعیین می‌شود");
+    const targetRaw = String(data.split(":").pop() || "").trim().toLowerCase();
+    if (!["store", "master"].includes(targetRaw)) throw new Error("نوع ربات انتخاب‌شده معتبر نیست");
+    const targetType = targetRaw;
+    const currentType = normalizeResellerLicenseType(bot.license_type);
+    if (targetType === currentType) {
+      await botSendOrEdit(env, { account, chatId, messageId }, "sales_type");
+      return;
+    }
+    const settings = account.settings || await getSettings(env);
+    const fee = resellerBotTypeChangeFee(settings, currentType, targetType);
+    if (currentType === "master" && targetType === "store") {
+      const child = await env.PASARGUARD_DB.prepare("SELECT COUNT(*) AS count FROM reseller_bots WHERE parent_bot_id=?").bind(bot.id).first();
+      if (Number(child?.count || 0) > 0) throw new Error("این ربات هنوز زیرمجموعه دارد و قابل تغییر به فروشگاهی نیست");
+    }
+    await botPrompt(env, chatId,
+      "⚠️ <b>تأیید تغییر نوع ربات</b>\n━━━━━━━━━━━━━━\n" +
+      "از <b>" + botEscape(resellerLicenseTypeLabel(currentType)) + "</b> به <b>" + botEscape(resellerLicenseTypeLabel(targetType)) + "</b>\n" +
+      (fee > 0 ? "مبلغ قابل کسر: <b>" + botMoney(fee) + " تومان</b>\n" : "مبلغ قابل کسر: <b>۰ تومان</b>\n") +
+      (targetType === "store" ? "بازگشت وجهی انجام نمی‌شود.\n" : "قابلیت ساخت ربات زیرمجموعه فعال می‌شود.\n") +
+      "\nتمام داده‌های فعلی ربات حفظ می‌شوند.",
+      [[{ text: "✅ تأیید نهایی", callback_data: "bot:sales:type:apply:" + targetType }], [{ text: "↩️ انصراف", callback_data: "bot:sales:type" }]]
+    );
+    return;
+  }
+  if (data.startsWith("bot:sales:type:apply:")) {
+    const bot = await getResellerBotForUser(env, account.user.id);
+    if (!bot) throw new Error("ربات نماینده پیدا نشد");
+    const targetRaw = String(data.split(":").pop() || "").trim().toLowerCase();
+    if (!["store", "master"].includes(targetRaw)) throw new Error("نوع ربات انتخاب‌شده معتبر نیست");
+    const result = await changeResellerBotLicenseType(env, account, bot, targetRaw);
+    const refreshed = await ensureTelegramBotUser(env, callback.from);
+    await botPrompt(env, chatId,
+      (result.changed ? "✅ <b>نوع ربات با موفقیت تغییر کرد</b>" : "ℹ️ <b>نوع ربات از قبل همین بود</b>") +
+      "\n━━━━━━━━━━━━━━\nنوع جدید: <b>" + botEscape(resellerLicenseTypeLabel(result.licenseType)) + "</b>\n" +
+      "مبلغ کسرشده: <b>" + botMoney(result.fee || 0) + " تومان</b>\n" +
+      "موجودی کیف پول: <b>" + botMoney(refreshed.user.wallet_balance) + " تومان</b>\n\n" +
+      "کاربران، سفارش‌ها، پلن‌ها و تنظیمات قبلی حفظ شدند.",
+      [[{ text: "🤖 مشاهده ربات", callback_data: "bot:sales" }]]
+    );
     return;
   }
   if (data === "bot:sales:renew") {
@@ -10000,10 +10317,10 @@ async function centralAdminAction(request, env) {
       await setupTelegramBot(request, env); return json({ success: true, message: "Webhook و منوی ربات مرکزی ترمیم شد" });
     }
     if (action === "update_check") {
-      const result = await checkUpdate(env); await audit(env, auth.user.id, "central_dashboard_update_check", result); return json({ success: true, message: result.available ? "نسخه جدید پیدا شد" : "آخرین نسخه نصب است", result });
+      const result = await checkUpdate(env); await audit(env, auth.user.id, "central_dashboard_update_check", result); return json({ success: true, message: result.update_required ? "نسخه یا همگام‌سازی جدید پیدا شد" : "آخرین نسخه نصب است", result });
     }
     if (action === "update_deploy") {
-      const result = await deploySelfFromGithub(env, body.force === true); await audit(env, auth.user.id, "central_dashboard_update_deploy", result); return json({ success: true, message: result.deployed ? "نسخه جدید نصب شد" : "تغییری برای نصب وجود نداشت", result });
+      const result = await deployClusterFromGithub(env, body.force === true); await audit(env, auth.user.id, "central_dashboard_update_deploy", result); return json({ success: true, message: result.deployed ? "نسخه جدید روی هر سه Worker نصب شد" : "تغییری برای نصب وجود نداشت", result });
     }
     return fail("عملیات مدیریت مرکزی شناخته نشد", 404, "CENTRAL_ACTION_NOT_FOUND");
   } catch (error) {
@@ -10060,7 +10377,7 @@ async function routeApiUnsafe(request, env, path) {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '2.9.7';
+const BLUEPANEL_CORE_VERSION = '2.9.9';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
