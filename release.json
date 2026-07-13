@@ -1,5 +1,5 @@
 {
-  "version": "2.9.1",
+  "version": "2.9.2",
   "architecture": "fully-split-three-worker",
   "files": {
     "core": "core/worker.js",
@@ -29,5 +29,17 @@
     ]
   },
   "remote_d1": "service-binding-only",
-  "request_update_checks": false
+  "request_update_checks": false,
+  "health_check_mode": "cycle-safe-local-endpoints",
+  "health_endpoints": {
+    "core": "/__bluepanel/service/core-local-health",
+    "edge": "/__bluepanel/service/edge-local-health",
+    "processor": "/__bluepanel/service/processor-local-health"
+  },
+  "fixes": [
+    "remove recursive Service Binding health checks",
+    "prevent Core→Edge→Core and Core→Processor→Core deadlocks",
+    "separate local health from public deep health",
+    "report reverse binding presence without cyclic fetches"
+  ]
 }
