@@ -1,6 +1,6 @@
 {
-  "version": "2.9.9",
-  "release_id": "2.9.9-20260713-reseller-bot-type-upgrade",
+  "version": "3.0.0",
+  "release_id": "3.0.0-20260713-telegram-topic-reporting",
   "architecture": "fully-split-three-worker",
   "files": {
     "core": "core/worker.js",
@@ -8,47 +8,39 @@
     "processor": "processor/worker.js"
   },
   "sha256": {
-    "core": "3de02a7455e2c038f0cc60a7f2da0f4b69eb6f8182492dbdf96a8d46484c3654",
-    "edge": "b2c7aa06fa160cb281fbc43f44ff889a84771cf94ea3192e0e9703d3b6840dfc",
-    "processor": "a9155cbb44de583a5d1536babd720ba7ee4084795a249a3930d8ffb49d03475a"
+    "core": "48c6775f011315eea0ecdcb3cc5c5025546db981b1b6d48310d40bf2637dfe91",
+    "edge": "940fd262069914df834e999a5b7610ca989a83255f6db9e5eaa88f681bfcc401",
+    "processor": "c86a757c87f257ee32d5ce263d3fc4eb70b089b57a3a0e8955ba1e86d8dc6a7e"
   },
   "roles": {
-    "core": "central bot, finance, licenses, reseller type upgrades, central APIs and D1 authority",
-    "edge": "all web pages, reseller bots, customer miniapps and reseller management",
-    "processor": "scheduled reseller automation, retry queue and background jobs; Telegram webhooks are processed directly by Edge"
+    "core": "central bot, finance, licenses, central report-group setup, central APIs and D1 authority",
+    "edge": "web panels, reseller bots, reseller report-group setup, customer miniapps and real-time event collection",
+    "processor": "report delivery, comprehensive aggregation, scheduled reseller automation, retry queue and background jobs"
   },
   "bindings": {
-    "core": [
-      "PASARGUARD_DB",
-      "EDGE_WORKER",
-      "PROCESSOR_WORKER"
-    ],
-    "edge": [
-      "EDGE_DB",
-      "CORE_WORKER",
-      "PROCESSOR_WORKER"
-    ],
-    "processor": [
-      "PROCESSOR_DB",
-      "CORE_WORKER",
-      "EDGE_WORKER"
-    ]
+    "core": ["PASARGUARD_DB", "EDGE_WORKER", "PROCESSOR_WORKER"],
+    "edge": ["EDGE_DB", "CORE_WORKER", "PROCESSOR_WORKER"],
+    "processor": ["PROCESSOR_DB", "CORE_WORKER", "EDGE_WORKER"]
   },
   "remote_d1": "service-binding-only",
   "request_update_checks": true,
   "request_update_check_interval_seconds": 5,
   "health_check_mode": "cycle-safe-local-endpoints",
+  "reporting": {
+    "central_scope": "comprehensive events and daily aggregate from every reseller bot",
+    "reseller_scope": "events and daily summary only for the owning reseller bot",
+    "delivery": "asynchronous processor outbox with independent central and reseller retry states",
+    "group_requirements": ["Telegram supergroup", "Topics enabled", "bot administrator", "Manage Topics permission"],
+    "commands": ["/setup_reports", "/reports_status", "/reset_reports", "/disable_reports"]
+  },
   "fixes": [
-    "add owner-facing reseller bot type change and upgrade flow in the central Telegram bot",
-    "upgrade store bots to master by charging only the configured setup-fee difference",
-    "synchronize the connected PasarGuard manager role with the selected bot type",
-    "preserve customers, orders, plans, balances, texts and settings during type changes",
-    "prevent master-to-store downgrade while child reseller bots still exist",
-    "release channel announcement contains only version 2.9.9 changes"
-  ],
-  "financial_rules": {
-    "store_to_master": "charge max(0, master setup fee - store setup fee)",
-    "master_to_store": "no refund",
-    "failed_role_or_database_change": "automatic wallet and PasarGuard role rollback"
-  }
+    "add partitioned Telegram report groups for both the central bot and every reseller bot",
+    "make the central report group comprehensive across all reseller bots with bot identity on every event",
+    "create and persist report topics without duplicating them on repeated setup or reset",
+    "send orders, payments, customers, services, trials, tickets, bot lifecycle events and errors to their matching topics",
+    "add a daily central aggregate for all bots and a separate daily summary for each reseller group",
+    "prevent duplicate central messages when reseller delivery fails and must be retried",
+    "keep reseller reports isolated so one reseller never receives another reseller's data",
+    "release channel announcement contains only version 3.0.0 changes"
+  ]
 }
