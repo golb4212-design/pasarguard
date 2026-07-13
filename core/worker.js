@@ -1,22 +1,22 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 2.9.9
+ * Version: 3.0.0
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "2.9.9";
+const APP_VERSION = "3.0.0";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
   central: Object.freeze([
-    { emoji: "🔄", text: "افزودن امکان تغییر و ارتقای نوع ربات نمایندگی بدون حذف ربات" },
-    { emoji: "💳", text: "ارتقا از فروشگاهی به مستر فقط با پرداخت اختلاف هزینه دو نوع ربات" },
-    { emoji: "🛡", text: "حفظ کامل کاربران، سفارش‌ها، پلن‌ها و تنظیمات هنگام تغییر نوع ربات" }
+    { emoji: "🧵", text: "افزودن گروه گزارش موضوع‌بندی‌شده برای ربات مرکزی و تمام ربات‌های نماینده" },
+    { emoji: "📊", text: "گزارش مرکزی جامع و تجمیعی از فروش، سفارش، پرداخت، کاربران و خطاهای همه ربات‌ها" },
+    { emoji: "🗂", text: "ساخت خودکار Topicهای متناسب با بخش‌های ربات و جلوگیری از ایجاد موضوع تکراری" }
   ]),
   reseller: Object.freeze([
-    { emoji: "👑", text: "همگام‌سازی خودکار Role پنل PasarGuard و قابلیت زیرمجموعه‌سازی پس از ارتقا" }
+    { emoji: "🤖", text: "گروه گزارش اختصاصی هر ربات نماینده با تفکیک سفارش، پرداخت، سرویس، پشتیبانی و هشدارها" }
   ])
 });
 
@@ -33,6 +33,29 @@ const RESELLER_BACKUP_FIELDS = Object.freeze([
   "fraud_protection_enabled","order_cooldown_seconds","max_pending_orders","daily_order_limit",
   "daily_wallet_charge_limit_toman","duplicate_receipt_protection","auto_block_risk_score",
   "payment_card_enabled","payment_wallet_enabled","payment_method_order","payment_default_method"
+]);
+
+
+
+const CENTRAL_REPORT_TOPICS = Object.freeze([
+  { key: "overview", title: "📊 گزارش جامع همه ربات‌ها", color: 7322096 },
+  { key: "bots", title: "🤖 ربات‌های نماینده", color: 13338331 },
+  { key: "orders", title: "🛒 سفارش‌های همه ربات‌ها", color: 16766590 },
+  { key: "payments", title: "💳 پرداخت‌ها و کیف پول", color: 9367192 },
+  { key: "services", title: "📦 سرویس‌ها و تست‌ها", color: 16478047 },
+  { key: "support", title: "🎫 پشتیبانی و تیکت‌ها", color: 13338331 },
+  { key: "security", title: "⚠️ خطاها و امنیت", color: 16749490 },
+  { key: "system", title: "⚙️ سامانه و بروزرسانی", color: 7322096 }
+]);
+
+const RESELLER_REPORT_TOPICS = Object.freeze([
+  { key: "overview", title: "📊 خلاصه عملکرد", color: 7322096 },
+  { key: "orders", title: "🛒 سفارش‌ها", color: 16766590 },
+  { key: "payments", title: "💳 پرداخت‌ها و کیف پول", color: 9367192 },
+  { key: "customers", title: "👥 کاربران", color: 13338331 },
+  { key: "services", title: "📦 سرویس‌ها و تست‌ها", color: 16478047 },
+  { key: "support", title: "🎫 پشتیبانی", color: 13338331 },
+  { key: "security", title: "⚠️ خطاها و هشدارها", color: 16749490 }
 ]);
 
 const GIB = 1024 * 1024 * 1024;
@@ -219,6 +242,8 @@ const DEFAULT_SETTINGS = {
   release_last_announcement_message_id: "",
   release_last_announcement_at: "",
   release_last_announcement_error: "",
+  central_report_hour_utc: "18",
+  central_report_last_daily_date: "",
   min_recharge: "100000",
   support_username: "",
   blupal_base_url: "https://blupal.net/api",
@@ -1047,6 +1072,52 @@ CREATE TABLE IF NOT EXISTS sales_bot_events (
   FOREIGN KEY(customer_id) REFERENCES sales_customers(id)
 );
 CREATE INDEX IF NOT EXISTS idx_sales_bot_events_bot ON sales_bot_events(bot_id,event_type,created_at DESC);
+
+CREATE TABLE IF NOT EXISTS report_forums (
+  scope_key TEXT PRIMARY KEY,
+  scope_type TEXT NOT NULL,
+  bot_id TEXT,
+  chat_id TEXT NOT NULL,
+  chat_title TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  setup_by_telegram_id TEXT,
+  last_delivery_at TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(bot_id) REFERENCES reseller_bots(id)
+);
+CREATE INDEX IF NOT EXISTS idx_report_forums_bot ON report_forums(bot_id,status);
+
+CREATE TABLE IF NOT EXISTS report_forum_topics (
+  scope_key TEXT NOT NULL,
+  topic_key TEXT NOT NULL,
+  thread_id INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(scope_key,topic_key),
+  FOREIGN KEY(scope_key) REFERENCES report_forums(scope_key)
+);
+
+CREATE TABLE IF NOT EXISTS report_outbox (
+  id TEXT PRIMARY KEY,
+  bot_id TEXT,
+  topic_key TEXT NOT NULL,
+  title TEXT NOT NULL,
+  message_html TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL UNIQUE,
+  central_status TEXT NOT NULL DEFAULT 'pending',
+  reseller_status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT NOT NULL,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(bot_id) REFERENCES reseller_bots(id)
+);
+CREATE INDEX IF NOT EXISTS idx_report_outbox_due ON report_outbox(next_attempt_at,central_status,reseller_status,created_at);
+
 `;
 
 function nowIso() {
@@ -5239,7 +5310,16 @@ async function configureResellerRoutingOnly(env, bot, fallbackOrigin = "") {
   const miniAppUrl = publicOrigin + "/sales-app/" + encodeURIComponent(bot.id);
   await Promise.all([
     telegramApiWithToken(token, "setWebhook", { url: webhookUrl, secret_token: bot.webhook_secret, allowed_updates: ["message", "callback_query"], drop_pending_updates: false }),
-    telegramApiWithToken(token, "setChatMenuButton", { menu_button: { type: "web_app", text: "📱 مینی‌اپ", web_app: { url: miniAppUrl } } }).catch(() => null)
+    telegramApiWithToken(token, "setChatMenuButton", { menu_button: { type: "web_app", text: "📱 مینی‌اپ", web_app: { url: miniAppUrl } } }).catch(() => null),
+    telegramApiWithToken(token, "setMyCommands", {
+      scope: { type: "all_group_chats" },
+      commands: [
+        { command: "setup_reports", description: "ساخت موضوع‌های گروه گزارش این ربات" },
+        { command: "reports_status", description: "نمایش وضعیت گروه گزارش" },
+        { command: "reset_reports", description: "بازسازی موضوع‌های گزارش" },
+        { command: "disable_reports", description: "توقف ارسال گزارش به گروه" }
+      ]
+    }).catch(() => null)
   ]);
   return { webhook_url: webhookUrl, miniapp_url: miniAppUrl };
 }
@@ -5608,6 +5688,160 @@ async function telegramApiWithToken(token, method, body) {
   return data;
 }
 
+
+
+function reportScopeKey(botId = "") {
+  return botId ? "reseller:" + String(botId) : "central";
+}
+
+function reportTopicDefinition(scopeType, topicKey) {
+  const list = scopeType === "central" ? CENTRAL_REPORT_TOPICS : RESELLER_REPORT_TOPICS;
+  return list.find(item => item.key === topicKey) || list[0];
+}
+
+function reportCommandMatch(text, command) {
+  return new RegExp("^/" + command + "(?:@\\w+)?(?:\\s+.*)?$", "i").test(String(text || "").trim());
+}
+
+function telegramMemberIsAdmin(member) {
+  const status = String(member?.result?.status || member?.status || "");
+  return status === "creator" || status === "administrator";
+}
+
+async function validateTelegramForum(apiCall, chatId, actorTelegramId) {
+  const [chatData, meData, actorData] = await Promise.all([
+    apiCall("getChat", { chat_id: chatId }),
+    apiCall("getMe", {}),
+    apiCall("getChatMember", { chat_id: chatId, user_id: String(actorTelegramId) })
+  ]);
+  const chat = chatData?.result || chatData || {};
+  if (String(chat.type || "") !== "supergroup" || chat.is_forum !== true) {
+    throw new Error("این گروه باید Supergroup باشد و Topics آن از تنظیمات تلگرام فعال شده باشد");
+  }
+  if (!telegramMemberIsAdmin(actorData)) throw new Error("فقط مدیر همین گروه می‌تواند بخش گزارش‌ها را راه‌اندازی کند");
+  const botId = meData?.result?.id || meData?.id;
+  const botMember = await apiCall("getChatMember", { chat_id: chatId, user_id: String(botId) });
+  if (!telegramMemberIsAdmin(botMember)) throw new Error("ابتدا ربات را در گروه ادمین کنید");
+  const member = botMember?.result || botMember || {};
+  if (String(member.status || "") === "administrator" && member.can_manage_topics === false) {
+    throw new Error("دسترسی Manage Topics را برای ربات فعال کنید");
+  }
+  return chat;
+}
+
+async function configureReportForum(env, options) {
+  const scopeType = options.scopeType === "central" ? "central" : "reseller";
+  const scopeKey = scopeType === "central" ? "central" : reportScopeKey(options.botId);
+  const definitions = scopeType === "central" ? CENTRAL_REPORT_TOPICS : RESELLER_REPORT_TOPICS;
+  const chat = await validateTelegramForum(options.apiCall, options.chatId, options.actorTelegramId);
+  const ts = nowIso();
+  await env.PASARGUARD_DB.prepare(`
+    INSERT INTO report_forums(scope_key,scope_type,bot_id,chat_id,chat_title,status,setup_by_telegram_id,created_at,updated_at,last_error)
+    VALUES(?,?,?,?,?,'active',?,?,?,NULL)
+    ON CONFLICT(scope_key) DO UPDATE SET chat_id=excluded.chat_id,chat_title=excluded.chat_title,status='active',
+      setup_by_telegram_id=excluded.setup_by_telegram_id,updated_at=excluded.updated_at,last_error=NULL
+  `).bind(scopeKey, scopeType, options.botId || null, String(options.chatId), cleanText(chat.title, 180), String(options.actorTelegramId), ts, ts).run();
+  const existing = await env.PASARGUARD_DB.prepare("SELECT topic_key,thread_id FROM report_forum_topics WHERE scope_key=?").bind(scopeKey).all();
+  const known = new Map((existing.results || []).map(row => [String(row.topic_key), Number(row.thread_id)]));
+  const created = [];
+  for (const definition of definitions) {
+    let threadId = known.get(definition.key) || 0;
+    if (threadId && options.reset === true) {
+      let valid = true;
+      try {
+        await options.apiCall("editForumTopic", { chat_id: String(options.chatId), message_thread_id: threadId, name: definition.title });
+      } catch (error) {
+        if (!/not modified/i.test(String(error?.message || error))) valid = false;
+      }
+      if (valid) {
+        try { await options.apiCall("reopenForumTopic", { chat_id: String(options.chatId), message_thread_id: threadId }); }
+        catch (error) { if (!/not modified|not closed/i.test(String(error?.message || error))) valid = false; }
+      }
+      if (!valid) {
+        await env.PASARGUARD_DB.prepare("DELETE FROM report_forum_topics WHERE scope_key=? AND topic_key=?").bind(scopeKey, definition.key).run();
+        threadId = 0;
+      }
+    }
+    if (!threadId) {
+      const result = await options.apiCall("createForumTopic", {
+        chat_id: String(options.chatId), name: definition.title, icon_color: definition.color
+      });
+      threadId = Number(result?.result?.message_thread_id || 0);
+      if (!threadId) throw new Error("ساخت موضوع «" + definition.title + "» ناموفق بود");
+      created.push(definition.key);
+    }
+    await env.PASARGUARD_DB.prepare(`
+      INSERT INTO report_forum_topics(scope_key,topic_key,thread_id,title,created_at,updated_at)
+      VALUES(?,?,?,?,?,?) ON CONFLICT(scope_key,topic_key) DO UPDATE SET thread_id=excluded.thread_id,title=excluded.title,updated_at=excluded.updated_at
+    `).bind(scopeKey, definition.key, threadId, definition.title, ts, ts).run();
+  }
+  const overview = await env.PASARGUARD_DB.prepare("SELECT thread_id FROM report_forum_topics WHERE scope_key=? AND topic_key='overview'").bind(scopeKey).first();
+  if (overview?.thread_id) {
+    await options.apiCall("sendMessage", {
+      chat_id: String(options.chatId), message_thread_id: Number(overview.thread_id), parse_mode: "HTML",
+      text: scopeType === "central"
+        ? "✅ <b>مرکز گزارش جامع فعال شد</b>\nاز این لحظه گزارش‌های ربات مرکزی و همه ربات‌های نماینده به‌صورت تفکیک‌شده در این گروه ثبت می‌شوند."
+        : "✅ <b>مرکز گزارش ربات نماینده فعال شد</b>\nاز این لحظه گزارش‌های همین ربات در موضوع‌های جداگانه ثبت می‌شوند."
+    });
+  }
+  return { scopeKey, chat, created, topics: definitions.length };
+}
+
+async function reportForumStatus(env, scopeKey) {
+  const forum = await env.PASARGUARD_DB.prepare("SELECT * FROM report_forums WHERE scope_key=?").bind(scopeKey).first();
+  if (!forum) return null;
+  const topics = await env.PASARGUARD_DB.prepare("SELECT topic_key,thread_id,title FROM report_forum_topics WHERE scope_key=? ORDER BY topic_key").bind(scopeKey).all();
+  return { forum, topics: topics.results || [] };
+}
+
+async function disableReportForum(env, scopeKey) {
+  const result = await env.PASARGUARD_DB.prepare("UPDATE report_forums SET status='disabled',updated_at=? WHERE scope_key=?").bind(nowIso(), scopeKey).run();
+  return Number(result?.meta?.changes || 0) > 0;
+}
+
+async function queueReportEvent(env, botId, topicKey, title, messageHtml, dedupeKey) {
+  const ts = nowIso();
+  try {
+    await env.PASARGUARD_DB.prepare(`
+      INSERT OR IGNORE INTO report_outbox(
+        id,bot_id,topic_key,title,message_html,dedupe_key,central_status,reseller_status,attempts,next_attempt_at,created_at,updated_at
+      ) VALUES(?,?,?,?,?,?,'pending','pending',0,?,?,?)
+    `).bind(id("rpt"), botId || null, topicKey, cleanText(title,160), cleanText(messageHtml,3500), cleanText(dedupeKey,220), ts, ts, ts).run();
+  } catch (_) {}
+}
+
+async function handleCentralReportGroupCommand(env, message, settings) {
+  const text = String(message.text || "").trim();
+  const isSetup = reportCommandMatch(text, "setup_reports") || reportCommandMatch(text, "reports_setup") || reportCommandMatch(text, "report_setup");
+  const isReset = reportCommandMatch(text, "reset_reports");
+  const isStatus = reportCommandMatch(text, "reports_status");
+  const isDisable = reportCommandMatch(text, "disable_reports");
+  if (!isSetup && !isReset && !isStatus && !isDisable) return false;
+  if (!isAdminTelegramId(settings, message.from?.id)) throw new Error("این دستور فقط برای مدیران ربات مرکزی است");
+  if (isDisable) {
+    await disableReportForum(env, "central");
+    await telegramApi(env, "sendMessage", { chat_id: message.chat.id, text: "⏸ ارسال گزارش‌های مرکزی به این گروه غیرفعال شد." });
+    return true;
+  }
+  if (isStatus) {
+    const status = await reportForumStatus(env, "central");
+    const textStatus = status
+      ? "📊 <b>وضعیت مرکز گزارش</b>\nگروه: <b>" + botEscape(status.forum.chat_title || status.forum.chat_id) + "</b>\nوضعیت: <b>" + (status.forum.status === "active" ? "فعال" : "غیرفعال") + "</b>\nموضوع‌ها: <b>" + botMoney(status.topics.length) + "</b>"
+      : "مرکز گزارش هنوز تنظیم نشده است. در یک گروه Topics دستور /setup_reports را ارسال کنید.";
+    await telegramApi(env, "sendMessage", { chat_id: message.chat.id, text: textStatus, parse_mode: "HTML" });
+    return true;
+  }
+  const result = await configureReportForum(env, {
+    scopeType: "central", chatId: message.chat.id, actorTelegramId: message.from.id,
+    apiCall: (method, body) => telegramApi(env, method, body), reset: isReset
+  });
+  await telegramApi(env, "sendMessage", {
+    chat_id: message.chat.id, parse_mode: "HTML",
+    text: "🧵 <b>گروه گزارش مرکزی آماده شد</b>\nموضوع‌های فعال: <b>" + botMoney(result.topics) + "</b>\nگزارش این گروه شامل اطلاعات تجمیعی همه ربات‌های نماینده است."
+  });
+  return true;
+}
+
 const agencyPasarguardTokenCache = new Map();
 
 function normalizeCardNumber(value) {
@@ -5695,6 +5929,12 @@ async function renewResellerBotLicense(env, account, bot) {
     `).bind(id("led"), account.user.id, "reseller_bot_license_renewal", -fee, Number(fresh?.wallet_balance || 0), bot.id, renewedAt).run();
   }
   await audit(env, account.user.id, "reseller_bot_license_renewed", { botId: bot.id, fee, expiresAt, days: RESELLER_LICENSE_DAYS });
+  await queueReportEvent(env, bot.id, "bots", "لایسنس ربات نماینده تمدید شد",
+    "ربات: <b>@" + botEscape(bot.bot_username || "-") + "</b>\n" +
+    "مالک: <code>" + botEscape(account.user.telegram_id) + "</code>\n" +
+    "هزینه: <b>" + botMoney(fee) + " تومان</b>\n" +
+    "پایان اعتبار: <b>" + botEscape(botDate(expiresAt)) + "</b>",
+    "bot-license-renewed:" + bot.id + ":" + expiresAt);
   return { fee, expiresAt, days: RESELLER_LICENSE_DAYS };
 }
 
@@ -5776,6 +6016,12 @@ async function changeResellerBotLicenseType(env, account, bot, requestedType) {
     fee,
     dataPreserved: true
   });
+  await queueReportEvent(env, bot.id, "bots", "نوع ربات نماینده تغییر کرد",
+    "ربات: <b>@" + botEscape(bot.bot_username || "-") + "</b>\n" +
+    "از: <b>" + botEscape(resellerLicenseTypeLabel(currentType)) + "</b>\n" +
+    "به: <b>" + botEscape(resellerLicenseTypeLabel(targetType)) + "</b>\n" +
+    "هزینه: <b>" + botMoney(fee) + " تومان</b>",
+    "bot-type-changed:" + bot.id + ":" + targetType + ":" + changedAt);
   return { changed: true, fee, licenseType: targetType };
 }
 
@@ -9403,6 +9649,13 @@ async function botHandleSessionMessage(env, account, message, session, origin) {
     }
     await botClearSession(env, account.user.telegram_id);
     await audit(env, account.user.id, "sales_bot_created", { botId: bot.id, botUsername: bot.bot_username, agencyId: agency.id, licenseType, assignedRoleId, setupError });
+    await queueReportEvent(env, bot.id, setupError ? "security" : "bots", setupError ? "ثبت ربات با خطای اتصال اولیه" : "ربات نماینده جدید ساخته شد",
+      "ربات: <b>@" + botEscape(bot.bot_username || "-") + "</b>\n" +
+      "برند: <b>" + botEscape(bot.brand_name || data.brandName) + "</b>\n" +
+      "نوع: <b>" + botEscape(resellerLicenseTypeLabel(licenseType)) + "</b>\n" +
+      "مالک: <code>" + botEscape(account.user.telegram_id) + "</code>" +
+      (setupError ? "\nخطا: <code>" + botEscape(setupError) + "</code>" : ""),
+      "bot-created:" + bot.id);
     const managementUrl = resellerManagementUrl(bot, account.settings);
     await telegramApi(env, "sendMessage", {
       chat_id: chatId,
@@ -9748,6 +10001,17 @@ async function configureTelegramBotWithToken(env, origin, token, suppliedSetting
   await telegramApiWithToken(token, "setChatMenuButton", { menu_button: { type: "web_app", text: "📱 مینی‌اپ", web_app: { url: appUrl } } });
   try { await telegramApiWithToken(token, "deleteMyCommands", { scope: { type: "default" } }); } catch (_) {}
   try {
+    await telegramApiWithToken(token, "setMyCommands", {
+      scope: { type: "all_group_chats" },
+      commands: [
+        { command: "setup_reports", description: "ساخت موضوع‌های گروه گزارش مرکزی" },
+        { command: "reports_status", description: "نمایش وضعیت گروه گزارش" },
+        { command: "reset_reports", description: "بازسازی موضوع‌های گزارش" },
+        { command: "disable_reports", description: "توقف ارسال گزارش به گروه" }
+      ]
+    });
+  } catch (_) {}
+  try {
     await telegramApiWithToken(token, "setMyDescription", { description: "مدیریت کیف پول، پنل‌ها و ربات نمایندگی از داخل مینی‌اپ" });
     await telegramApiWithToken(token, "setMyShortDescription", { short_description: "مدیریت نمایندگی و مینی‌اپ" });
   } catch (_) {}
@@ -9796,7 +10060,8 @@ async function telegramWebhook(request, env) {
   const message = update.message;
   if (!message?.chat?.id || !message.from) return json({ ok: true });
   if (message.chat.type && message.chat.type !== "private") {
-    await telegramApi(env, "sendMessage", { chat_id: message.chat.id, text: "برای حفظ امنیت اطلاعات مالی و رمز پنل، ربات را در گفت‌وگوی خصوصی باز کنید." });
+    try { if (await handleCentralReportGroupCommand(env, message, settings)) return json({ ok: true }); }
+    catch (error) { await telegramApi(env, "sendMessage", { chat_id: message.chat.id, text: "⚠️ " + botEscape(error.message || "خطا در تنظیم گروه گزارش"), parse_mode: "HTML" }); }
     return json({ ok: true });
   }
   const text = String(message.text || "").trim();
@@ -10377,7 +10642,7 @@ async function routeApiUnsafe(request, env, path) {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '2.9.9';
+const BLUEPANEL_CORE_VERSION = '3.0.0';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
