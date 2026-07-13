@@ -1,5 +1,5 @@
 {
-  "version": "2.9.2",
+  "version": "2.9.3",
   "architecture": "fully-split-three-worker",
   "files": {
     "core": "core/worker.js",
@@ -9,7 +9,7 @@
   "roles": {
     "core": "central bot, finance, licenses, central APIs and D1 authority",
     "edge": "all web pages, reseller bots, customer miniapps and reseller management",
-    "processor": "queues, scheduled reseller automation and background jobs"
+    "processor": "scheduled reseller automation, retry queue and background jobs; Telegram webhooks are processed directly by Edge"
   },
   "bindings": {
     "core": [
@@ -37,9 +37,10 @@
     "processor": "/__bluepanel/service/processor-local-health"
   },
   "fixes": [
-    "remove recursive Service Binding health checks",
-    "prevent Core→Edge→Core and Core→Processor→Core deadlocks",
-    "separate local health from public deep health",
-    "report reverse binding presence without cyclic fetches"
+    "process reseller Telegram webhooks directly on Edge so bots no longer depend on Processor cron",
+    "keep Processor for scheduled automation and background work only",
+    "prevent duplicate release announcements for the same version even on repeated manual publish requests",
+    "preserve release deduplication state when the update channel settings are edited",
+    "refresh browser client cache markers to version 2.9.3"
   ]
 }
