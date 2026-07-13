@@ -1,11 +1,11 @@
 /* BLUEPANEL_PROCESSOR_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.0.1
+ * Version: 3.0.2
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = "3.0.1";
+const APP_VERSION = "3.0.2";
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
@@ -25,24 +25,34 @@ const RESELLER_BACKUP_FIELDS = Object.freeze([
 
 
 const CENTRAL_REPORT_TOPICS = Object.freeze([
-  { key: "overview", title: "📊 گزارش جامع همه ربات‌ها", color: 7322096 },
-  { key: "bots", title: "🤖 ربات‌های نماینده", color: 13338331 },
-  { key: "orders", title: "🛒 سفارش‌های همه ربات‌ها", color: 16766590 },
-  { key: "payments", title: "💳 پرداخت‌ها و کیف پول", color: 9367192 },
-  { key: "services", title: "📦 سرویس‌ها و تست‌ها", color: 16478047 },
-  { key: "support", title: "🎫 پشتیبانی و تیکت‌ها", color: 13338331 },
-  { key: "security", title: "⚠️ خطاها و امنیت", color: 16749490 },
-  { key: "system", title: "⚙️ سامانه و بروزرسانی", color: 7322096 }
+  { key: "overview", title: "⚙️ سایر گزارشات", color: 7322096 },
+  { key: "bots", title: "🤖 گزارش ربات‌های نماینده", color: 13338331 },
+  { key: "backup", title: "🤖 بکاپ ربات", color: 7322096 },
+  { key: "nightly", title: "🌙 گزارش شبانه", color: 9367192 },
+  { key: "system", title: "📝 گزارش اطلاع‌رسانی‌ها", color: 13338331 },
+  { key: "trial_accounts", title: "🔑 گزارش اکانت تست", color: 16478047 },
+  { key: "payments", title: "💰 گزارش مالی", color: 9367192 },
+  { key: "orders", title: "🛍 گزارش‌های خرید", color: 16766590 },
+  { key: "security", title: "❌ گزارش خطاها", color: 16749490 },
+  { key: "commissions", title: "🎁 گزارش پورسانت‌ها", color: 16766590 },
+  { key: "services", title: "📌 گزارش خرید خدمات", color: 16478047 },
+  { key: "customers", title: "👥 گزارش کاربران", color: 13338331 },
+  { key: "support", title: "🎫 گزارش پشتیبانی", color: 13338331 }
 ]);
 
 const RESELLER_REPORT_TOPICS = Object.freeze([
-  { key: "overview", title: "📊 خلاصه عملکرد", color: 7322096 },
-  { key: "orders", title: "🛒 سفارش‌ها", color: 16766590 },
-  { key: "payments", title: "💳 پرداخت‌ها و کیف پول", color: 9367192 },
-  { key: "customers", title: "👥 کاربران", color: 13338331 },
-  { key: "services", title: "📦 سرویس‌ها و تست‌ها", color: 16478047 },
-  { key: "support", title: "🎫 پشتیبانی", color: 13338331 },
-  { key: "security", title: "⚠️ خطاها و هشدارها", color: 16749490 }
+  { key: "overview", title: "⚙️ سایر گزارشات", color: 7322096 },
+  { key: "backup", title: "🤖 بکاپ ربات", color: 7322096 },
+  { key: "nightly", title: "🌙 گزارش شبانه", color: 9367192 },
+  { key: "system", title: "📝 گزارش اطلاع‌رسانی‌ها", color: 13338331 },
+  { key: "trial_accounts", title: "🔑 گزارش اکانت تست", color: 16478047 },
+  { key: "payments", title: "💰 گزارش مالی", color: 9367192 },
+  { key: "orders", title: "🛍 گزارش‌های خرید", color: 16766590 },
+  { key: "security", title: "❌ گزارش خطاها", color: 16749490 },
+  { key: "commissions", title: "🎁 گزارش پورسانت‌ها", color: 16766590 },
+  { key: "services", title: "📌 گزارش خرید خدمات", color: 16478047 },
+  { key: "customers", title: "👥 گزارش کاربران", color: 13338331 },
+  { key: "support", title: "🎫 گزارش پشتیبانی", color: 13338331 }
 ]);
 
 const GIB = 1024 * 1024 * 1024;
@@ -960,6 +970,12 @@ async function rewardSalesReferral(env, bot, order, customer) {
     const balance = await adjustSalesCustomerBalance(env, bot.id, customer.referrer_customer_id, reward, "referral_reward", "sales_order", order.id, "پورسانت خرید موفق زیرمجموعه");
     const referrer = await env.PASARGUARD_DB.prepare("SELECT telegram_id FROM sales_customers WHERE id=?").bind(customer.referrer_customer_id).first();
     if (order.origin !== "miniapp" && referrer?.telegram_id) await resellerTelegramApi(env, bot, "sendMessage", { chat_id: referrer.telegram_id, text: "🎉 <b>پورسانت زیرمجموعه دریافت کردید</b>\nمبلغ: <b>" + botMoney(reward) + " تومان</b>\nموجودی جدید: <b>" + botMoney(balance) + " تومان</b>", parse_mode: "HTML" });
+    await queueReportEvent(env, bot.id, "commissions", "پورسانت خرید پرداخت شد",
+      "🎁 مبلغ پورسانت: <b>" + botMoney(reward) + " تومان</b>\n" +
+      "🧾 شناسه سفارش: <code>" + botEscape(order.id) + "</code>\n" +
+      "👤 دریافت‌کننده: <code>" + botEscape(referrer?.telegram_id || customer.referrer_customer_id) + "</code>\n" +
+      "💳 موجودی جدید: <b>" + botMoney(balance) + " تومان</b>",
+      "commission:" + order.id);
   } catch (error) { await env.PASARGUARD_DB.prepare("UPDATE sales_orders SET referral_rewarded=0 WHERE id=?").bind(order.id).run(); throw error; }
 }
 
@@ -1486,7 +1502,7 @@ async function processResellerDailyReports(env, limit = 50) {
         } catch (_) {}
       }
       try {
-        const result = await sendReportMessage(env, reportScopeKey(bot.id), "reseller", "overview", text, (method, body) => resellerTelegramApi(env, bot, method, body));
+        const result = await sendReportMessage(env, reportScopeKey(bot.id), "reseller", "nightly", text, (method, body) => resellerTelegramApi(env, bot, method, body));
         if (!result?.skipped) deliveredSomewhere = true;
       } catch (_) {}
       if (deliveredSomewhere) {
@@ -1546,10 +1562,23 @@ async function createResellerSnapshot(env, bot, actorTelegramId = "system", snap
     await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET last_backup_at=?,last_backup_status='success',last_backup_error=NULL,updated_at=? WHERE id=?")
       .bind(createdAt, createdAt, fresh.id).run();
     await pruneResellerSnapshots(env, fresh.id, fresh.backup_retention_days || 14);
-    return { id: snapshotId, created_at: createdAt, size_bytes: new TextEncoder().encode(raw).length, type: snapshotType };
+    const snapshotSize = new TextEncoder().encode(raw).length;
+    await queueReportEvent(env, fresh.id, "backup", snapshotType === "auto" ? "بکاپ خودکار ربات ساخته شد" : "بکاپ دستی ربات ساخته شد",
+      "🤖 ربات: <b>" + botEscape(fresh.brand_name || fresh.bot_username) + "</b>\n" +
+      "💾 حجم بکاپ: <b>" + botMoney(snapshotSize) + " بایت</b>\n" +
+      "🕒 زمان: <code>" + botEscape(createdAt) + "</code>",
+      "backup:" + fresh.id + ":" + snapshotId);
+    return { id: snapshotId, created_at: createdAt, size_bytes: snapshotSize, type: snapshotType };
   } catch (error) {
+    const failedAt = nowIso();
     await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET last_backup_status='failed',last_backup_error=?,updated_at=? WHERE id=?")
-      .bind(cleanText(error.message, 500), nowIso(), fresh.id).run();
+      .bind(cleanText(error.message, 500), failedAt, fresh.id).run();
+    try {
+      await queueReportEvent(env, fresh.id, "backup", "بکاپ ربات ناموفق بود",
+        "🤖 ربات: <b>" + botEscape(fresh.brand_name || fresh.bot_username) + "</b>\n" +
+        "❌ خطا: <code>" + botEscape(cleanText(error.message, 500)) + "</code>",
+        "backup-failed:" + fresh.id + ":" + snapshotType + ":" + failedAt.slice(0,16));
+    } catch (_) {}
     throw error;
   }
 }
@@ -1837,7 +1866,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_PROCESSOR_VERSION='3.0.1';
+const BLUEPANEL_PROCESSOR_VERSION='3.0.2';
 let processorSchemaPromise=null;
 function processorJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function processorInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
