@@ -1,6 +1,6 @@
 {
-  "version": "3.0.1",
-  "release_id": "3.0.1-20260713-remove-one-time-admin-login",
+  "version": "3.0.2",
+  "release_id": "3.0.2-20260714-complete-report-topics",
   "architecture": "fully-split-three-worker",
   "files": {
     "core": "core/worker.js",
@@ -8,14 +8,14 @@
     "processor": "processor/worker.js"
   },
   "sha256": {
-    "core": "e2af1d9d460d9290d3ba8f3b8918bec8653b251558b8b9e1a97ac5769fb13850",
-    "edge": "00f1eb4257747e0faaf19b6ce5d6b9ac4e607e12d87b831db223c28f79f4a461",
-    "processor": "01628ea0c623da3b4b73e75639bcb8302fd57c1bf54d18f6f64a291d228b41be"
+    "core": "d106d9ee27b26d24481891feab8099d15c86e8502c6c1ffc479a473a5a232667",
+    "edge": "7a2baebba655302391b19775e297019fb721c9c6e9b9313c10765dc68b3269c2",
+    "processor": "ce2c4ff1009e983c5dba4b8986b5b0c5f21990072037d4d20eef111cabed5f8e"
   },
   "roles": {
-    "core": "central bot, finance, licenses, permanent central admin authentication, central APIs and D1 authority",
-    "edge": "web panels, fixed central and reseller management pages, reseller bots and customer miniapps",
-    "processor": "report delivery, comprehensive aggregation, scheduled reseller automation, retry queue and background jobs"
+    "core": "central bot, finance, licenses, permanent central admin authentication, central report setup and D1 authority",
+    "edge": "web panels, reseller bots, customer miniapps and immediate reseller report events",
+    "processor": "topic delivery, comprehensive aggregation, scheduled reports, backups, retry queue and background jobs"
   },
   "bindings": {
     "core": [
@@ -39,13 +39,14 @@
   "request_update_check_interval_seconds": 5,
   "health_check_mode": "cycle-safe-local-endpoints",
   "fixes": [
-    "remove central one-time management login links completely",
-    "use one permanent management address ending in /control",
-    "restore username and password login for central administrators",
-    "require the configured PasarGuard owner account for central management access",
-    "redirect old magic-link addresses to the permanent login page without consuming any ticket",
-    "delete previously issued central magic-login tickets during migration",
-    "update both the main control dashboard and advanced control page to use the permanent login form",
-    "release channel announcement contains only version 3.0.1 changes"
+    "add every missing report topic shown in the Telegram forum group to both central and reseller catalogs",
+    "rename existing broad topics to the requested Persian report names without creating duplicate keys",
+    "route free-trial delivery reports to the dedicated test-account topic",
+    "route daily summaries to the nightly-report topic",
+    "send reseller backup success and failure events to the backup topic",
+    "send referral reward events to the commissions topic",
+    "send release publication events to the notifications topic",
+    "rerunning /setup_reports creates only missing topics and repairs stored topic names",
+    "release channel announcement contains only version 3.0.2 changes"
   ]
 }
