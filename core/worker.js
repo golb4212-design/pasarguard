@@ -1,11 +1,11 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.0.0
+ * Version: 3.0.1
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.0.0";
+const APP_VERSION = "3.0.1";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -1559,6 +1559,19 @@ async function ensureDbInternal(env) {
     if (deliveryStatements.length) await env.PASARGUARD_DB.batch(deliveryStatements);
   }
 
+  const centralMagicRemovalMigration = await env.PASARGUARD_DB.prepare(
+    "SELECT value FROM app_settings WHERE key='central_magic_login_removed_v301'"
+  ).first();
+  if (!centralMagicRemovalMigration) {
+    const migrationAt = nowIso();
+    await env.PASARGUARD_DB.batch([
+      env.PASARGUARD_DB.prepare("DELETE FROM web_login_codes WHERE scope='central_admin_magic'"),
+      env.PASARGUARD_DB.prepare(
+        "INSERT OR REPLACE INTO app_settings(key,value,updated_at) VALUES('central_magic_login_removed_v301','true',?)"
+      ).bind(migrationAt)
+    ]);
+  }
+
   try {
     await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET miniapp_enabled=1 WHERE COALESCE(miniapp_enabled,1)<>1").run();
   } catch (_) {}
@@ -2168,10 +2181,14 @@ async function centralControlAuthStatus(env) {
     panel_host: panelHost,
     owner_username_configured: Boolean(settings.pasarguard_admin_username),
     owner_password_configured: Boolean(settings.pasarguard_admin_password),
-    passwordless_control_login: true,
-    magic_link_hours: CENTRAL_MAGIC_LINK_HOURS,
+    passwordless_control_login: false,
+    password_control_login: true,
     central_bot_username: settings.central_bot_username || "",
-    local_owner_login_ready: Boolean(parseAdminTelegramIds(settings.admin_ids || "").length && settings.bot_token),
+    local_owner_login_ready: Boolean(
+      parseAdminTelegramIds(settings.admin_ids || "").length &&
+      settings.pasarguard_admin_username &&
+      settings.pasarguard_admin_password
+    ),
     checked_at: nowIso()
   }, databaseQueryOk ? 200 : 500, { "x-bluepanel-role": "bluepanel-core", "x-bluepanel-version": APP_VERSION });
 }
@@ -6059,92 +6076,8 @@ function resellerBotOrigin(settings, fallbackOrigin = "") {
   return corePublicOrigin(settings, fallbackOrigin);
 }
 
-const CENTRAL_MAGIC_SCOPE = "central_admin_magic";
-
-const CENTRAL_MAGIC_LINK_HOURS = 168;
-
-async function issueCentralManagementMagicUrl(env, settings, adminTelegramId, fallbackOrigin = "") {
-  await ensureDb(env);
-  const telegramId = cleanText(adminTelegramId, 80);
-  if (!telegramId || !isAdminTelegramId(settings, telegramId)) throw new Error("شناسه مدیر مرکزی معتبر نیست");
-  const magicId = id("ctrlmagic");
-  const token = randomHex(32);
-  const tokenHash = await sha256Hex(token);
-  const ts = nowIso();
-  const expiresAt = new Date(Date.now() + CENTRAL_MAGIC_LINK_HOURS * 3600000).toISOString();
-  await env.PASARGUARD_DB.prepare(`
-    INSERT INTO web_login_codes(id,scope,bot_id,customer_id,code_hash,code_salt,attempts,expires_at,created_at,consumed_at)
-    VALUES(?,?,NULL,NULL,?,?,0,?,?,NULL)
-  `).bind(magicId, CENTRAL_MAGIC_SCOPE, tokenHash, telegramId, expiresAt, ts).run();
-  await env.PASARGUARD_DB.prepare("DELETE FROM web_login_codes WHERE scope=? AND (expires_at<=? OR (consumed_at IS NOT NULL AND consumed_at<=?))")
-    .bind(CENTRAL_MAGIC_SCOPE, ts, new Date(Date.now() - 86400000).toISOString()).run();
-  const origin = corePublicOrigin(settings, fallbackOrigin);
-  return origin + "/auth/control/magic?ticket=" + encodeURIComponent(magicId + "." + token);
-}
-
-async function centralMagicLogin(request, env) {
-  await ensureDb(env);
-  const settings = await getSettings(env);
-  const url = new URL(request.url);
-  const ticket = cleanText(url.searchParams.get("ticket"), 300);
-  const dot = ticket.indexOf(".");
-  if (dot < 1) return fail("لینک ورود مدیریت ناقص است؛ از ربات مرکزی لینک تازه بگیرید", 400, "MAGIC_LINK_INVALID");
-  const magicId = cleanText(ticket.slice(0, dot), 100);
-  const token = cleanText(ticket.slice(dot + 1), 220);
-  const row = await env.PASARGUARD_DB.prepare("SELECT id,code_hash,code_salt,expires_at,consumed_at FROM web_login_codes WHERE id=? AND scope=? LIMIT 1")
-    .bind(magicId, CENTRAL_MAGIC_SCOPE).first();
-  if (!row) return fail("این لینک ورود معتبر نیست یا قبلاً پاک شده است", 404, "MAGIC_LINK_NOT_FOUND");
-  if (row.consumed_at) return fail("این لینک قبلاً استفاده شده است؛ در ربات مرکزی دستور /panel را بفرستید", 410, "MAGIC_LINK_USED");
-  if (!row.expires_at || new Date(row.expires_at).getTime() <= Date.now()) {
-    await env.PASARGUARD_DB.prepare("DELETE FROM web_login_codes WHERE id=?").bind(row.id).run();
-    return fail("مهلت این لینک تمام شده است؛ در ربات مرکزی دستور /panel را بفرستید", 410, "MAGIC_LINK_EXPIRED");
-  }
-  const suppliedHash = await sha256Hex(token);
-  if (!timingSafeEqualHex(suppliedHash, String(row.code_hash || ""))) {
-    await env.PASARGUARD_DB.prepare("UPDATE web_login_codes SET attempts=attempts+1 WHERE id=?").bind(row.id).run();
-    return fail("لینک ورود معتبر نیست", 403, "MAGIC_LINK_MISMATCH");
-  }
-  const telegramId = cleanText(row.code_salt, 80);
-  if (!isAdminTelegramId(settings, telegramId)) return fail("دسترسی این مدیر از تنظیمات مرکزی حذف شده است", 403, "ADMIN_ACCESS_REVOKED");
-  const ts = nowIso();
-  await env.PASARGUARD_DB.prepare(`
-    INSERT INTO users(telegram_id,username,first_name,last_name,role,status,wallet_balance,created_at,updated_at)
-    VALUES(?,?,?,'','admin','active',0,?,?)
-    ON CONFLICT(telegram_id) DO UPDATE SET role='admin',status='active',updated_at=excluded.updated_at
-  `).bind(telegramId, "", "مدیر مرکزی", ts, ts).run();
-  const user = await env.PASARGUARD_DB.prepare("SELECT * FROM users WHERE telegram_id=? LIMIT 1").bind(telegramId).first();
-  if (!user) return fail("حساب مدیر مرکزی ساخته نشد", 500, "ADMIN_USER_CREATE_FAILED");
-  const session = await issueWebSession(request, env, "central", { user_id: user.id });
-  let controlResponse;
-  try {
-    controlResponse = await bluePanelForwardToEdge(new Request(url.origin + "/control", {
-      method: "GET",
-      headers: request.headers,
-      redirect: "manual"
-    }), env);
-  } catch (error) {
-    controlResponse = null;
-  }
-  if (!controlResponse || !controlResponse.ok) {
-    const status = Number(controlResponse?.status || 503);
-    const retryUrl = url.toString();
-    return new Response(`<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;background:#07111f;color:#fff;font-family:Tahoma,sans-serif;display:grid;min-height:100vh;place-items:center;padding:20px}.c{max-width:560px;background:#112944;border-radius:24px;padding:26px;box-shadow:0 20px 60px #0006}.b{display:block;text-align:center;margin-top:18px;padding:13px 16px;border-radius:14px;background:#1976f3;color:#fff;text-decoration:none}.m{color:#bfd0e5;line-height:2}</style><div class="c"><h2>پنل مدیریت هنوز آماده پاسخ نیست</h2><div class="m">اتصال Worker رابط بررسی می‌شود. لینک شما مصرف نشده و می‌توانید دوباره تلاش کنید.</div><a class="b" href="${botEscape(retryUrl)}">تلاش مجدد برای ورود</a></div></html>`, {
-      status: status >= 500 ? 503 : status,
-      headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer" }
-    });
-  }
-  await env.PASARGUARD_DB.prepare("UPDATE web_login_codes SET consumed_at=? WHERE id=? AND consumed_at IS NULL").bind(ts, row.id).run();
-  await audit(env, user.id, "central_magic_login", { telegram_id: telegramId, magic_id: magicId });
-  const headers = new Headers(controlResponse.headers);
-  headers.set("set-cookie", webCookie(request, CENTRAL_WEB_COOKIE, session.token, session.seconds));
-  headers.set("cache-control", "no-store");
-  headers.set("referrer-policy", "no-referrer");
-  headers.set("x-bluepanel-auth-source", "telegram_magic_link");
-  return new Response(controlResponse.body, {
-    status: controlResponse.status,
-    statusText: controlResponse.statusText,
-    headers
-  });
+function centralManagementUrl(settings, fallbackOrigin = "") {
+  return corePublicOrigin(settings, fallbackOrigin) + "/control";
 }
 
 function resellerManagementUrl(bot, settings, fallbackOrigin = "") {
@@ -7515,15 +7448,18 @@ async function sendCentralManagementAccess(env, account, chatId, fallbackOrigin 
   if (!account?.isAdmin) return false;
   const force = options?.force === true;
   if (!force && await managementNoticeWasDelivered(env, "central", chatId)) return false;
-  const managementUrl = await issueCentralManagementMagicUrl(env, account.settings, chatId, fallbackOrigin);
+  const managementUrl = centralManagementUrl(account.settings, fallbackOrigin);
+  const ownerUsername = cleanText(account.settings?.pasarguard_admin_username || "", 100);
   await telegramApi(env, "sendMessage", {
     chat_id: chatId,
-    text: "🖥 <b>ورود به پنل مدیریت مرکزی</b>\n━━━━━━━━━━━━━━\nمدیریت کاربران، نمایندگان، پرداخت‌ها، تنظیمات و ربات‌ها از داشبورد مستقل وب انجام می‌شود.\n\nآدرس ورود:\n<code>" + botEscape(managementUrl) + "</code>\n\nاین لینک بدون رمز عبور وارد می‌کند و فقط یک‌بار قابل استفاده است.\n⏳ اعتبار لینک: ۷ روز · نشست مرورگر: ۳۰ روز\n🔒 مینی‌اپ مرکزی فقط برای خدمات کاربران باقی می‌ماند.",
+    text: "🖥 <b>ورود به پنل مدیریت مرکزی</b>\n━━━━━━━━━━━━━━\nمدیریت کاربران، نمایندگان، پرداخت‌ها، تنظیمات و ربات‌ها از داشبورد مستقل وب انجام می‌شود.\n\nآدرس ثابت مدیریت:\n<code>" + botEscape(managementUrl) + "</code>\n\n" +
+      (ownerUsername ? "نام کاربری مدیر: <code>" + botEscape(ownerUsername) + "</code>\n" : "") +
+      "رمز ورود همان رمز مدیر پنل PasarGuard است.\n🔒 این آدرس دائمی است و دیگر لینک یک‌بارمصرف ساخته نمی‌شود.",
     parse_mode: "HTML",
     disable_web_page_preview: true,
     reply_markup: { inline_keyboard: [
       [{ text: "🖥 ورود به پنل مدیریت مرکزی", url: managementUrl }],
-      [{ text: "📋 کپی آدرس ورود", copy_text: { text: managementUrl } }]
+      [{ text: "📋 کپی آدرس ثابت", copy_text: { text: managementUrl } }]
     ] }
   });
   await markManagementNoticeDelivered(env, "central", chatId);
@@ -8024,7 +7960,7 @@ async function botInvoicesView(env, account) {
 
 async function botAdminView(env, account) {
   if (!account.isAdmin) throw new Error("این بخش فقط برای مدیر سامانه است");
-  const managementUrl = await issueCentralManagementMagicUrl(env, account.settings, account.user.telegram_id, account.public_origin || "");
+  const managementUrl = centralManagementUrl(account.settings, account.public_origin || "");
   const stats = await env.PASARGUARD_DB.prepare(`
     SELECT
       (SELECT COUNT(*) FROM users) AS users_count,
@@ -10608,7 +10544,7 @@ async function routeApi(request, env, path) {
 async function routeApiUnsafe(request, env, path) {
   if (path === "/api/auth/control/status" && request.method === "GET") return centralControlAuthStatus(env);
   if (path === "/api/auth/web/login" && request.method === "POST") return centralWebLogin(request, env, false);
-  if (path === "/api/auth/control/login" && request.method === "POST") return fail("ورود رمزی مدیریت حذف شده است؛ لینک امن را از ربات مرکزی دریافت کنید", 410, "PASSWORD_LOGIN_REMOVED");
+  if (path === "/api/auth/control/login" && request.method === "POST") return centralWebLogin(request, env, true);
   if (path === "/api/auth/web/logout" && request.method === "POST") return centralWebLogout(request, env);
   if (path === "/api/setup/status" && request.method === "GET") return setupStatus(env);
   if (path === "/api/setup/install" && request.method === "POST") return installApp(request, env);
@@ -10642,7 +10578,7 @@ async function routeApiUnsafe(request, env, path) {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.0.0';
+const BLUEPANEL_CORE_VERSION = '3.0.1';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
@@ -10743,7 +10679,7 @@ export default {
       if(path==='/health'){const h=await bluePanelCoreHealth(env);return bluePanelCoreJson(h,h.ok?200:503);}
       if(bluePanelEdgePath(path,request.method)) return bluePanelForwardToEdge(request,env);
       if(['/payments/blupal/return','/return'].includes(path)&&request.method==='GET'){await ensureDb(env);const s=await getSettings(env);return new Response(centralBlupalReturnPage(s,url.origin,url),{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}});}
-      if(path==='/auth/control/magic'&&request.method==='GET') return centralMagicLogin(request,env);
+      if(path==='/auth/control/magic'&&request.method==='GET') return Response.redirect(url.origin+'/control',302);
       if(path==='/telegram/webhook'&&request.method==='POST') return telegramWebhook(request,env);
       if(path==='/payments/blupal/webhook'&&request.method==='POST') return blupalWebhook(request,env,ctx);
       if(path.startsWith('/api/')) return routeApi(request,env,path);
