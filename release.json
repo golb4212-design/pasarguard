@@ -1,5 +1,5 @@
 {
-  "version": "2.9.3",
+  "version": "2.9.5",
   "architecture": "fully-split-three-worker",
   "files": {
     "core": "core/worker.js",
@@ -37,10 +37,16 @@
     "processor": "/__bluepanel/service/processor-local-health"
   },
   "fixes": [
-    "process reseller Telegram webhooks directly on Edge so bots no longer depend on Processor cron",
-    "keep Processor for scheduled automation and background work only",
-    "prevent duplicate release announcements for the same version even on repeated manual publish requests",
-    "preserve release deduplication state when the update channel settings are edited",
-    "refresh browser client cache markers to version 2.9.3"
-  ]
+    "detect expired or changed representative panel credentials without exposing raw English PasarGuard errors",
+    "clear only the invalid stored panel password and request a replacement from the representative owner",
+    "resume the exact failed order automatically after the replacement password is verified",
+    "allow verified panel passwords to replace previously stored credentials",
+    "release channel announcement contains only version 2.9.5 changes"
+  ],
+  "credential_recovery": {
+    "error_code": "AGENCY_CREDENTIALS_INVALID",
+    "invalid_password_is_cleared": true,
+    "telegram_password_message_deleted": true,
+    "failed_order_resumed_automatically": true
+  }
 }
