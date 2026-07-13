@@ -1,0 +1,28 @@
+{
+  "version": "2.9.0",
+  "architecture": "split-three-worker",
+  "files": {
+    "core": "core/worker.js",
+    "edge": "edge/worker.js",
+    "processor": "processor/worker.js"
+  },
+  "bindings": {
+    "core": [
+      "PASARGUARD_DB",
+      "EDGE_WORKER",
+      "PROCESSOR_WORKER"
+    ],
+    "edge": [
+      "EDGE_DB",
+      "CORE_WORKER",
+      "PROCESSOR_WORKER"
+    ],
+    "processor": [
+      "PROCESSOR_DB",
+      "CORE_WORKER",
+      "EDGE_WORKER"
+    ]
+  },
+  "request_update_checks": false,
+  "auto_update_mode": "role-specific-files"
+}
