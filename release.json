@@ -1,13 +1,19 @@
 {
-  "version": "2.9.7",
+  "version": "2.9.9",
+  "release_id": "2.9.9-20260713-reseller-bot-type-upgrade",
   "architecture": "fully-split-three-worker",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
     "processor": "processor/worker.js"
   },
+  "sha256": {
+    "core": "3de02a7455e2c038f0cc60a7f2da0f4b69eb6f8182492dbdf96a8d46484c3654",
+    "edge": "b2c7aa06fa160cb281fbc43f44ff889a84771cf94ea3192e0e9703d3b6840dfc",
+    "processor": "a9155cbb44de583a5d1536babd720ba7ee4084795a249a3930d8ffb49d03475a"
+  },
   "roles": {
-    "core": "central bot, finance, licenses, central APIs, D1 authority and instant GitHub update checks",
+    "core": "central bot, finance, licenses, reseller type upgrades, central APIs and D1 authority",
     "edge": "all web pages, reseller bots, customer miniapps and reseller management",
     "processor": "scheduled reseller automation, retry queue and background jobs; Telegram webhooks are processed directly by Edge"
   },
@@ -33,16 +39,16 @@
   "request_update_check_interval_seconds": 5,
   "health_check_mode": "cycle-safe-local-endpoints",
   "fixes": [
-    "remove Python Helper from the synchronous Telegram /start path",
-    "use deterministic local dashboard insight for immediate bot home rendering",
-    "cap optional Python Helper insight requests at 350 milliseconds and abort on timeout",
-    "run required-channel membership probes in parallel with a per-probe timeout",
-    "release channel announcement contains only version 2.9.7 changes"
+    "add owner-facing reseller bot type change and upgrade flow in the central Telegram bot",
+    "upgrade store bots to master by charging only the configured setup-fee difference",
+    "synchronize the connected PasarGuard manager role with the selected bot type",
+    "preserve customers, orders, plans, balances, texts and settings during type changes",
+    "prevent master-to-store downgrade while child reseller bots still exist",
+    "release channel announcement contains only version 2.9.9 changes"
   ],
-  "performance": {
-    "telegram_start_helper_wait": false,
-    "python_helper_timeout_ms": 350,
-    "join_checks_parallel": true,
-    "join_check_timeout_ms": 1800
+  "financial_rules": {
+    "store_to_master": "charge max(0, master setup fee - store setup fee)",
+    "master_to_store": "no refund",
+    "failed_role_or_database_change": "automatic wallet and PasarGuard role rollback"
   }
 }
