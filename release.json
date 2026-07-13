@@ -1,5 +1,5 @@
 {
-  "version": "2.9.5",
+  "version": "2.9.6",
   "architecture": "fully-split-three-worker",
   "files": {
     "core": "core/worker.js",
@@ -7,29 +7,18 @@
     "processor": "processor/worker.js"
   },
   "roles": {
-    "core": "central bot, finance, licenses, central APIs and D1 authority",
+    "core": "central bot, finance, licenses, central APIs, D1 authority and instant GitHub update checks",
     "edge": "all web pages, reseller bots, customer miniapps and reseller management",
     "processor": "scheduled reseller automation, retry queue and background jobs; Telegram webhooks are processed directly by Edge"
   },
   "bindings": {
-    "core": [
-      "PASARGUARD_DB",
-      "EDGE_WORKER",
-      "PROCESSOR_WORKER"
-    ],
-    "edge": [
-      "EDGE_DB",
-      "CORE_WORKER",
-      "PROCESSOR_WORKER"
-    ],
-    "processor": [
-      "PROCESSOR_DB",
-      "CORE_WORKER",
-      "EDGE_WORKER"
-    ]
+    "core": ["PASARGUARD_DB", "EDGE_WORKER", "PROCESSOR_WORKER"],
+    "edge": ["EDGE_DB", "CORE_WORKER", "PROCESSOR_WORKER"],
+    "processor": ["PROCESSOR_DB", "CORE_WORKER", "EDGE_WORKER"]
   },
   "remote_d1": "service-binding-only",
-  "request_update_checks": false,
+  "request_update_checks": true,
+  "request_update_check_interval_seconds": 5,
   "health_check_mode": "cycle-safe-local-endpoints",
   "health_endpoints": {
     "core": "/__bluepanel/service/core-local-health",
@@ -37,16 +26,23 @@
     "processor": "/__bluepanel/service/processor-local-health"
   },
   "fixes": [
-    "detect expired or changed representative panel credentials without exposing raw English PasarGuard errors",
-    "clear only the invalid stored panel password and request a replacement from the representative owner",
-    "resume the exact failed order automatically after the replacement password is verified",
-    "allow verified panel passwords to replace previously stored credentials",
-    "release channel announcement contains only version 2.9.5 changes"
+    "use the real public Core origin instead of bluepanel-edge.internal for representative management links",
+    "validate representative panel login Origin against the forwarded public origin in Service Binding mode",
+    "open central management magic links directly without a fragile redirect and consume the ticket only after the panel loads",
+    "prefer the live Telegram webhook origin over a stale app_url when generating central management links",
+    "check GitHub in the background on live requests with a five-second distributed throttle instead of waiting for a long Cron interval",
+    "release channel announcement contains only version 2.9.6 changes"
   ],
-  "credential_recovery": {
-    "error_code": "AGENCY_CREDENTIALS_INVALID",
-    "invalid_password_is_cleared": true,
-    "telegram_password_message_deleted": true,
-    "failed_order_resumed_automatically": true
+  "management_link_recovery": {
+    "internal_origin_blocked": true,
+    "service_binding_origin_supported": true,
+    "magic_ticket_consumed_after_edge_success": true,
+    "retry_page_keeps_ticket_valid": true
+  },
+  "instant_update": {
+    "request_triggered": true,
+    "distributed_claim_seconds": 5,
+    "cron_fallback": true,
+    "github_cache_bypass": true
   }
 }
