@@ -1,10 +1,15 @@
 {
-  "version": "2.9.0",
-  "architecture": "split-three-worker",
+  "version": "2.9.1",
+  "architecture": "fully-split-three-worker",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
     "processor": "processor/worker.js"
+  },
+  "roles": {
+    "core": "central bot, finance, licenses, central APIs and D1 authority",
+    "edge": "all web pages, reseller bots, customer miniapps and reseller management",
+    "processor": "queues, scheduled reseller automation and background jobs"
   },
   "bindings": {
     "core": [
@@ -23,6 +28,6 @@
       "EDGE_WORKER"
     ]
   },
-  "request_update_checks": false,
-  "auto_update_mode": "role-specific-files"
+  "remote_d1": "service-binding-only",
+  "request_update_checks": false
 }
