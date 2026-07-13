@@ -1,47 +1,21 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 2.9.3
+ * Version: 2.9.5
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "2.9.3";
+const APP_VERSION = "2.9.5";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
   central: Object.freeze([
-    { emoji: "📣", text: "قفل قطعی انتشار اطلاعیه هر نسخه برای جلوگیری از ارسال چندباره به کانال، حتی با کلیک تکراری مدیر" },
-    { emoji: "🧭", text: "رفع حلقه تشخیص سلامت Service Binding با Endpointهای محلی و بررسی بدون بازگشت چرخه‌ای بین سه Worker" },
-    { emoji: "✂️", text: "تقسیم کد به سه Worker مستقل برای کاهش زمان Parse، Startup و مصرف CPU هر Worker" },
-    { emoji: "⚡", text: "حذف بررسی آپدیت و Python Helper از مسیر هر درخواست؛ اجرای آن‌ها فقط با Cron یا فرمان مدیر" },
-    { emoji: "📦", text: "آپدیت مستقل فایل‌های core/worker.js، edge/worker.js و processor/worker.js از یک نسخه انتشار" },
-    { emoji: "🛠", text: "رفع قطعی ورود مدیریت مرکزی با احراز محلی امن مالک، مسیر تشخیص ورود و هدایت خودکار درخواست مدیریت از Worker دوم و سوم به Core" },
-    { emoji: "🔐", text: "تمام خطاهای ورود و خطاهای Service Binding همیشه به‌صورت JSON معتبر بازگردانده می‌شوند" },
-    { emoji: "🧠", text: "افزودن Worker سوم برای صف Webhook، پردازش پس‌زمینه و کش صفحات پرترافیک" },
-    { emoji: "🔺", text: "اتصال کامل سه‌طرفه Core، Edge و Processor فقط با Service Binding و یک worker.js مشترک" },
-    { emoji: "🧩", text: "یکسان‌شدن فایل Worker مرکزی و دوم؛ یک worker.js روی هر دو Worker قابل Deploy است" },
-    { emoji: "🔗", text: "اتصال خودکار دو Worker فقط با Service Binding و بدون URL یا API Key" },
-    { emoji: "⚖️", text: "تقسیم بار داخلی مسیرهای نمایندگان با EDGE_WORKER و CORE_WORKER و جلوگیری از حلقه درخواست" },
-    { emoji: "⚡", text: "افزایش سرعت پاسخ‌گویی ربات مرکزی و ربات‌های نمایندگان با کش امن تنظیمات و کلیدها" },
-    { emoji: "🧱", text: "رفع خطای D1 too many columns هنگام ورود به خرید ربات و مدیریت زیرمجموعه" },
-    { emoji: "🔄", text: "حذف همگام‌سازی سنگین PasarGuard از مسیرهای عادی و انتقال آن به بروزرسانی دستی و زمان‌بندی‌شده" },
-    { emoji: "🧩", text: "رفع قطعی خطای مهاجرت parent_bot_id در دیتابیس‌های قدیمی D1" },
-    { emoji: "🔒", text: "قفل هم‌زمانی مهاجرت برای جلوگیری از اجرای چندباره Schema در درخواست‌های موازی" },
-    { emoji: "🪪", text: "تثبیت نقش نماینده فروش برای ربات عادی و مستر نمایندگی برای ربات دارای فروش زیرمجموعه" },
-    { emoji: "🔐", text: "محدودشدن دسترسی واقعی PasarGuard به خریداران مستقیم ربات مرکزی" },
-    { emoji: "📊", text: "اتصال قطعی سرویس و مصرف ربات‌های زیرمجموعه به پنل مستر بالادست" }
+    { emoji: "🔐", text: "تشخیص خودکار رمز منقضی یا تغییرکرده پنل نماینده و جلوگیری از نمایش خطای انگلیسی" }
   ]),
   reseller: Object.freeze([
-    { emoji: "🤖", text: "بازگردانی پردازش مستقیم Webhook ربات‌های نماینده و حذف وابستگی پاسخ‌گویی آن‌ها به Cron صف Worker سوم" },
-    { emoji: "🧯", text: "افزودن محافظ سراسری پاسخ برای جلوگیری از صفحه خطای HTML و نمایش خطای دقیق در داشبوردهای وب" },
-    { emoji: "⚙️", text: "انتقال صف Webhook و کش سنگین به Worker سوم با بازگشت خودکار به Worker دوم در زمان قطعی" },
-    { emoji: "🔌", text: "تشخیص خودکار نقش مرکزی یا Edge براساس Binding دیتابیس همان Worker" },
-    { emoji: "🚀", text: "انتقال داخلی ورودی نمایندگان با Service Binding و بدون تغییر آدرس عمومی ربات‌ها" },
-    { emoji: "👑", text: "ربات مستر از پنل مستقل خریداری‌شده از مرکز برای ساخت سرویس زیرمجموعه استفاده می‌کند" },
-    { emoji: "🤖", text: "نماینده زیرمجموعه فقط ربات و داشبورد مدیریت مستقل دریافت می‌کند و پنل PasarGuard ندارد" },
-    { emoji: "💰", text: "مصرف هر نماینده زیرمجموعه جداگانه روی پنل مستر محاسبه و تسویه می‌شود" },
-    { emoji: "🛡", text: "جلوگیری از تغییر پنل سرویس توسط نماینده زیرمجموعه" }
+    { emoji: "♻️", text: "درخواست رمز جدید هنگام تأیید سفارش و ادامه خودکار همان سفارش پس از تأیید رمز" },
+    { emoji: "🧹", text: "حذف امن رمز نامعتبر ذخیره‌شده و جایگزینی آن با رمز جدید بدون قطع اتصال ربات" }
   ])
 });
 
@@ -6110,7 +6084,6 @@ async function verifyAndStoreAgencyPassword(env, userId, agencyId, rawPassword) 
     WHERE id=? AND user_id=? AND COALESCE(is_trial,0)=0
   `).bind(agencyId, userId).first();
   if (!agency) throw new Error("پنل انتخاب‌شده پیدا نشد");
-  if (agency.panel_password_enc) return agency;
 
   const password = cleanText(rawPassword, 200);
   if (!password) throw new Error("رمز پنل را ارسال کنید");
@@ -6131,7 +6104,7 @@ async function verifyAndStoreAgencyPassword(env, userId, agencyId, rawPassword) 
   const encryptedPassword = await encryptSecret(password, env);
   const result = await env.PASARGUARD_DB.prepare(`
     UPDATE agencies SET panel_password_enc=?,updated_at=?
-    WHERE id=? AND user_id=? AND panel_password_enc IS NULL
+    WHERE id=? AND user_id=?
   `).bind(encryptedPassword, nowIso(), agency.id, userId).run();
   if (!Number(result?.meta?.changes || 0)) {
     const fresh = await env.PASARGUARD_DB.prepare("SELECT * FROM agencies WHERE id=? AND user_id=?")
@@ -6140,7 +6113,7 @@ async function verifyAndStoreAgencyPassword(env, userId, agencyId, rawPassword) 
     return fresh;
   }
   agencyPasarguardTokenCache.set(String(agency.id), { token: String(data.access_token), expiresAt: Date.now() + 10 * 60 * 1000 });
-  await audit(env, userId, "imported_agency_password_verified", { agencyId: agency.id, remoteId: agency.remote_manager_id });
+  await audit(env, userId, "agency_password_verified_and_replaced", { agencyId: agency.id, remoteId: agency.remote_manager_id });
   return { ...agency, panel_password_enc: encryptedPassword };
 }
 
@@ -6162,7 +6135,22 @@ async function getAgencyPasarguardToken(env, agency, forceRefresh = false) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok || !data.access_token) {
     const detail = data.detail || data.message || data.error || ("HTTP " + response.status);
-    throw new Error("ورود پنل نماینده ناموفق بود: " + (typeof detail === "string" ? detail : JSON.stringify(detail)));
+    const detailText = typeof detail === "string" ? detail : JSON.stringify(detail);
+    const invalidCredentials = [400, 401, 403].includes(Number(response.status)) &&
+      /incorrect\s*(username|user name).*password|invalid\s*(username|credentials)|username\s*or\s*password|نام کاربری.*رمز|رمز.*نام کاربری/i.test(detailText);
+    if (invalidCredentials) {
+      agencyPasarguardTokenCache.delete(cacheKey);
+      try {
+        await env.PASARGUARD_DB.prepare("UPDATE agencies SET panel_password_enc=NULL,updated_at=? WHERE id=?")
+          .bind(nowIso(), agency.id).run();
+      } catch (_) {}
+      const error = new Error("رمز پنل نماینده تغییر کرده یا معتبر نیست؛ رمز جدید پنل را ارسال کنید");
+      error.code = "AGENCY_CREDENTIALS_INVALID";
+      error.agencyId = agency.id;
+      error.panelUsername = agency.panel_username;
+      throw error;
+    }
+    throw new Error("ارتباط با پنل نماینده ناموفق بود؛ چند لحظه بعد دوباره تلاش کنید");
   }
   const token = String(data.access_token);
   agencyPasarguardTokenCache.set(cacheKey, { token, expiresAt: Date.now() + 10 * 60 * 1000 });
@@ -10023,7 +10011,7 @@ async function routeApiUnsafe(request, env, path) {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '2.9.3';
+const BLUEPANEL_CORE_VERSION = '2.9.5';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
