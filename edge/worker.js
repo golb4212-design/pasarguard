@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.0.3
+ * Version: 3.0.4
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = "3.0.3";
+const APP_VERSION = "3.0.4";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -129,15 +129,23 @@ const resellerTokenCache = new Map();
 // The short TTL keeps status, license and webhook changes responsive.
 const resellerWebhookBotCache = new Map();
 
+// Prevents multiple requests from reconfiguring the same Telegram bot at once.
+const resellerRuntimeUpdateInFlight = new Map();
+
+// Caches only manager/staff membership checks; ordinary customers avoid a DB query on every message.
+const resellerManagerMembershipCache = new Map();
+
 const joinStatusCache = new Map();
 
-const SETTINGS_CACHE_TTL_MS = 15000;
+const SETTINGS_CACHE_TTL_MS = 60000;
 
 const RESELLER_TOKEN_CACHE_TTL_MS = 300000;
 
-const RESELLER_WEBHOOK_BOT_CACHE_TTL_MS = 5000;
+const RESELLER_WEBHOOK_BOT_CACHE_TTL_MS = 15000;
 
-const JOIN_STATUS_CACHE_TTL_MS = 60000;
+const RESELLER_MANAGER_MEMBERSHIP_CACHE_TTL_MS = 30000;
+
+const JOIN_STATUS_CACHE_TTL_MS = 120000;
 
 const DEFAULT_SETTINGS = {
   install_completed: "false",
@@ -1778,6 +1786,20 @@ async function ensureResellerBotRuntimeCurrent(env, bot) {
   }
 }
 
+function scheduleResellerRuntimeUpdate(env, bot, ctx = null) {
+  if (!bot || String(bot.bot_version || "") === RESELLER_BOT_VERSION) return;
+  const key = String(bot.id || "");
+  if (!key || resellerRuntimeUpdateInFlight.has(key)) return;
+  const task = ensureResellerBotRuntimeCurrent(env, { ...bot })
+    .then(updated => {
+      resellerWebhookBotCache.set(key, { at: Date.now(), bot: updated || bot });
+    })
+    .catch(error => console.error("background reseller runtime update failed", key, error))
+    .finally(() => resellerRuntimeUpdateInFlight.delete(key));
+  resellerRuntimeUpdateInFlight.set(key, task);
+  if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(task);
+}
+
 async function listSalesBotAgencies(env, userId) {
   const rows = await env.PASARGUARD_DB.prepare(`
     SELECT id,title,panel_username,status,
@@ -2290,18 +2312,22 @@ async function ensureSalesCustomer(env, bot, from, startPayload = "") {
   const telegramId = String(from?.id || "");
   if (!telegramId) throw new Error("شناسه مشتری دریافت نشد");
   const ts = nowIso();
-  await env.PASARGUARD_DB.prepare(`
-    INSERT INTO sales_customers(id,bot_id,telegram_id,username,first_name,last_name,created_at,updated_at,last_seen_at)
-    VALUES(?,?,?,?,?,?,?,?,?)
-    ON CONFLICT(bot_id,telegram_id) DO UPDATE SET
-      username=excluded.username,first_name=excluded.first_name,last_name=excluded.last_name,
-      updated_at=excluded.updated_at,last_seen_at=excluded.last_seen_at
-  `).bind(
-    id("cus"), bot.id, telegramId, cleanText(from?.username, 64), cleanText(from?.first_name, 100),
-    cleanText(from?.last_name, 100), ts, ts, ts
-  ).run();
-  let customer = await env.PASARGUARD_DB.prepare("SELECT * FROM sales_customers WHERE bot_id=? AND telegram_id=?")
-    .bind(bot.id, telegramId).first();
+  const customerBatch = await env.PASARGUARD_DB.batch([
+    env.PASARGUARD_DB.prepare(`
+      INSERT INTO sales_customers(id,bot_id,telegram_id,username,first_name,last_name,created_at,updated_at,last_seen_at)
+      VALUES(?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(bot_id,telegram_id) DO UPDATE SET
+        username=excluded.username,first_name=excluded.first_name,last_name=excluded.last_name,
+        updated_at=excluded.updated_at,last_seen_at=excluded.last_seen_at
+    `).bind(
+      id("cus"), bot.id, telegramId, cleanText(from?.username, 64), cleanText(from?.first_name, 100),
+      cleanText(from?.last_name, 100), ts, ts, ts
+    ),
+    env.PASARGUARD_DB.prepare("SELECT * FROM sales_customers WHERE bot_id=? AND telegram_id=?")
+      .bind(bot.id, telegramId)
+  ]);
+  let customer = (customerBatch[1]?.results || [])[0] || null;
+  if (!customer) throw new Error("حساب مشتری ساخته نشد");
   if (!customer.referral_code) {
     for (let attempt = 0; attempt < 5; attempt++) {
       const code = salesReferralCode();
@@ -2538,13 +2564,18 @@ async function replySalesTicketByOwner(env, bot, ownerUserId, ticketId, rawMessa
 }
 
 async function salesCustomerHomeView(env, bot, customer) {
-  const stats = await env.PASARGUARD_DB.prepare(`
-    SELECT
-      (SELECT COUNT(*) FROM sales_plans WHERE bot_id=? AND status='active') AS active_plans,
-      (SELECT COUNT(*) FROM sales_orders WHERE customer_id=?) AS orders_count,
-      (SELECT COUNT(DISTINCT remote_username) FROM sales_orders WHERE customer_id=? AND status='delivered' AND remote_username IS NOT NULL AND remote_username<>'') AS delivered_count,
-      (SELECT COUNT(*) FROM sales_customers WHERE referrer_customer_id=?) AS referrals_count
-  `).bind(bot.id, customer.id, customer.id, customer.id).first();
+  const homeBatch = await env.PASARGUARD_DB.batch([
+    env.PASARGUARD_DB.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM sales_plans WHERE bot_id=? AND status='active') AS active_plans,
+        (SELECT COUNT(*) FROM sales_orders WHERE customer_id=?) AS orders_count,
+        (SELECT COUNT(DISTINCT remote_username) FROM sales_orders WHERE customer_id=? AND status='delivered' AND remote_username IS NOT NULL AND remote_username<>'') AS delivered_count,
+        (SELECT COUNT(*) FROM sales_customers WHERE referrer_customer_id=?) AS referrals_count
+    `).bind(bot.id, customer.id, customer.id, customer.id),
+    env.PASARGUARD_DB.prepare("SELECT text_value FROM reseller_bot_texts WHERE bot_id=? AND text_key='welcome' LIMIT 1").bind(bot.id)
+  ]);
+  const stats = (homeBatch[0]?.results || [])[0] || {};
+  const welcomeRow = (homeBatch[1]?.results || [])[0] || null;
   const supportUrl = salesSupportUrl(bot);
   const rows = [
     [{ text: "🛒 خرید سرویس", callback_data: "sale:locations" }, { text: "♻️ تمدید سرویس", callback_data: "sale:services" }],
@@ -2557,7 +2588,7 @@ async function salesCustomerHomeView(env, bot, customer) {
   if (String(customer.telegram_id) === String(bot.owner_telegram_id || "")) rows.push([{ text: "⚙️ مدیریت ربات", callback_data: "owner:home" }]);
   if (supportUrl) rows.push([{ text: "🆘 ارتباط مستقیم", url: supportUrl }]);
   const name = customer.first_name || customer.username || "کاربر عزیز";
-  const welcome = await salesBotText(env, bot.id, "welcome", cleanText(bot.welcome_text, 1200) || "از منوی زیر سرویس بخرید، تمدید کنید یا حساب خود را مدیریت کنید.");
+  const welcome = cleanText(welcomeRow?.text_value, 3500) || cleanText(bot.welcome_text, 1200) || "از منوی زیر سرویس بخرید، تمدید کنید یا حساب خود را مدیریت کنید.";
   return {
     text: "👋 سلام <b>" + botEscape(name) + "</b>\n" +
       "به <b>" + botEscape(bot.brand_name) + "</b> خوش آمدید.\n\n" + botEscape(welcome) + "\n\n" +
@@ -4384,6 +4415,25 @@ function resellerOwnerMapMarkup(replyMarkup) {
   };
 }
 
+async function resellerMaybeManagerAccount(env, bot, from) {
+  const telegramId = String(from?.id || "");
+  if (!telegramId) return null;
+  if (telegramId === String(bot.owner_telegram_id || "")) return resellerOwnerAccount(env, bot, from);
+  const key = String(bot.id) + ":" + telegramId;
+  const cached = resellerManagerMembershipCache.get(key);
+  if (cached && Date.now() - cached.at < RESELLER_MANAGER_MEMBERSHIP_CACHE_TTL_MS) {
+    if (cached.isManager !== true) return null;
+    return resellerOwnerAccount(env, bot, from);
+  }
+  const staff = await env.PASARGUARD_DB.prepare(
+    "SELECT id FROM reseller_staff WHERE bot_id=? AND telegram_id=? AND status='active' LIMIT 1"
+  ).bind(bot.id, telegramId).first();
+  resellerManagerMembershipCache.set(key, { at: Date.now(), isManager: Boolean(staff) });
+  if (resellerManagerMembershipCache.size > 2000) resellerManagerMembershipCache.delete(resellerManagerMembershipCache.keys().next().value);
+  if (!staff) return null;
+  return resellerOwnerAccount(env, bot, from);
+}
+
 async function resellerOwnerAccount(env, bot, from) {
   const actorAccount = await ensureTelegramBotUser(env, from);
   const telegramId = String(from?.id || "");
@@ -6063,10 +6113,10 @@ async function getResellerBotForWebhook(env, botId) {
   return bot;
 }
 
-async function resellerSalesWebhook(request, env, botId) {
+async function resellerSalesWebhook(request, env, botId, ctx = null) {
   const bot = await getResellerBotForWebhook(env, botId);
   if (!bot) return fail("Bot not found", 404, "BOT_NOT_FOUND");
-  try { await ensureResellerBotRuntimeCurrent(env, bot); } catch (_) {}
+  scheduleResellerRuntimeUpdate(env, bot, ctx);
   const supplied = request.headers.get("x-telegram-bot-api-secret-token") || "";
   if (!bot.webhook_secret || supplied !== bot.webhook_secret) return fail("Forbidden", 403, "FORBIDDEN");
   const update = await parseBody(request);
@@ -6103,7 +6153,7 @@ async function resellerSalesWebhook(request, env, botId) {
   try {
     const text = String(message.text || "").trim();
     let ownerAccount = null;
-    try { ownerAccount = await resellerOwnerAccount(env, bot, message.from); } catch (_) {}
+    try { ownerAccount = await resellerMaybeManagerAccount(env, bot, message.from); } catch (_) {}
     const isManager = Boolean(ownerAccount);
     const isOwner = ownerAccount?.resellerActor?.role === "owner";
     if (!isManager) {
@@ -6131,7 +6181,10 @@ async function resellerSalesWebhook(request, env, botId) {
     }
 
     if (isOwner && /^\/(?:start|menu)(?:@\w+)?(?:\s+.*)?$/i.test(text)) {
-      await salesSessionClear(env, bot.id, ownerAccount.user.telegram_id);
+      const ownerCleanupTask = salesSessionClear(env, bot.id, ownerAccount.user.telegram_id)
+        .catch(error => console.error("reseller owner start cleanup failed", error));
+      if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(ownerCleanupTask);
+      else await ownerCleanupTask;
       const managementSent = await sendResellerManagementAccess(env, bot, ownerAccount, message.chat.id, requestPublicOrigin(request));
       if (managementSent) return json({ ok: true });
       // لینک مدیریت قبلاً تحویل شده است؛ ادامه بده تا منوی عادی مشتری نمایش داده شود.
@@ -6169,8 +6222,12 @@ async function resellerSalesWebhook(request, env, botId) {
       return json({ ok: true });
     }
     if (/^\/(?:start|menu)(?:@\w+)?/i.test(text)) {
-      await salesSessionClear(env, bot.id, customer.telegram_id);
-      await salesEvent(env, bot.id, customer.id, "start", { payload: parseStartPayload(text) });
+      const startMaintenanceTask = Promise.all([
+        salesSessionClear(env, bot.id, customer.telegram_id),
+        salesEvent(env, bot.id, customer.id, "start", { payload: parseStartPayload(text) })
+      ]).catch(error => console.error("reseller start maintenance failed", error));
+      if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(startMaintenanceTask);
+      else await startMaintenanceTask;
       await salesCustomerSendOrEdit(env, bot, { customer, chatId: message.chat.id }, "home");
       return json({ ok: true });
     }
@@ -6237,25 +6294,28 @@ async function ensureTelegramBotUser(env, from, preloadedSettings = null) {
   if (!telegramId) throw new Error("شناسه تلگرام دریافت نشد");
   const admin = isAdminTelegramId(settings, telegramId);
   const ts = nowIso();
-  await env.PASARGUARD_DB.prepare(`
-    INSERT INTO users(telegram_id, username, first_name, last_name, role, status, wallet_balance, created_at, updated_at)
-    VALUES(?, ?, ?, ?, ?, 'active', 0, ?, ?)
-    ON CONFLICT(telegram_id) DO UPDATE SET
-      username=excluded.username,
-      first_name=excluded.first_name,
-      last_name=excluded.last_name,
-      role=CASE WHEN excluded.role='admin' THEN 'admin' ELSE users.role END,
-      updated_at=excluded.updated_at
-  `).bind(
-    telegramId,
-    cleanText(from?.username, 64),
-    cleanText(from?.first_name, 100),
-    cleanText(from?.last_name, 100),
-    admin ? "admin" : "user",
-    ts,
-    ts
-  ).run();
-  const user = await env.PASARGUARD_DB.prepare("SELECT * FROM users WHERE telegram_id=?").bind(telegramId).first();
+  const userBatch = await env.PASARGUARD_DB.batch([
+    env.PASARGUARD_DB.prepare(`
+      INSERT INTO users(telegram_id, username, first_name, last_name, role, status, wallet_balance, created_at, updated_at)
+      VALUES(?, ?, ?, ?, ?, 'active', 0, ?, ?)
+      ON CONFLICT(telegram_id) DO UPDATE SET
+        username=excluded.username,
+        first_name=excluded.first_name,
+        last_name=excluded.last_name,
+        role=CASE WHEN excluded.role='admin' THEN 'admin' ELSE users.role END,
+        updated_at=excluded.updated_at
+    `).bind(
+      telegramId,
+      cleanText(from?.username, 64),
+      cleanText(from?.first_name, 100),
+      cleanText(from?.last_name, 100),
+      admin ? "admin" : "user",
+      ts,
+      ts
+    ),
+    env.PASARGUARD_DB.prepare("SELECT * FROM users WHERE telegram_id=?").bind(telegramId)
+  ]);
+  const user = (userBatch[1]?.results || [])[0] || null;
   if (!user || user.status !== "active") throw new Error("حساب شما غیرفعال است");
   return { user, settings, isAdmin: user.role === "admin" || admin };
 }
@@ -7077,11 +7137,11 @@ function resellerBlupalReturnPage(bot, origin) {
   return `<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f4f7ff"><title>بازگشت از پرداخت</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:20px;background:radial-gradient(circle at 90% 0,#536dfe22,transparent 38%),linear-gradient(180deg,#f8faff,#eef4ff);color:#18233a;font-family:Tahoma,Arial}.card{width:min(100%,480px);border:1px solid #ffffff22;border-radius:28px;padding:28px;background:#fffffff2;box-shadow:0 24px 70px #40508025;text-align:center}.icon{width:72px;height:72px;display:grid;place-items:center;margin:auto;border-radius:24px;background:#35d39a22;font-size:36px}.muted{color:#6d7890;line-height:1.9;font-size:13px}.btn{display:block;text-decoration:none;margin-top:12px;border-radius:16px;padding:14px;background:linear-gradient(135deg,#4e8cff,#765eff);color:#fff;font-weight:900}.secondary{background:#eef2ff;color:#425073}</style></head><body><main class="card"><div class="icon">✅</div><h1>بازگشت از پرداخت</h1><p class="muted">وضعیت پرداخت به‌صورت امن از بلوپال استعلام می‌شود. برای مشاهده نتیجه و دریافت سرویس، به مینی‌اپ ${String(bot.brand_name || "فروشگاه").replace(/[<>&]/g, "")} برگردید.</p><a class="btn" href="${deepLink}">بازکردن مینی‌اپ در تلگرام</a><a class="btn secondary" href="${urls.miniapp_url}#wallet">مشاهده وضعیت پرداخت</a></main></body></html>`;
 }
 
-async function authenticateSalesMiniApp(request, env, botId) {
+async function authenticateSalesMiniApp(request, env, botId, ctx = null) {
   await ensureDb(env);
-  const bot = await getResellerBotById(env, botId);
+  const bot = await getResellerBotForWebhook(env, botId);
   if (!bot) throw new Error("ربات نمایندگی پیدا نشد");
-  try { await ensureResellerBotRuntimeCurrent(env, bot); } catch (_) {}
+  scheduleResellerRuntimeUpdate(env, bot, ctx);
   if (bot.status !== "active") throw new Error("فروش این ربات موقتاً متوقف است");
   resellerRequireActiveLicense(bot);
   const initData = request.headers.get("x-telegram-init-data") || "";
@@ -7103,23 +7163,37 @@ async function authenticateSalesMiniApp(request, env, botId) {
   return { bot, customer, telegramUser: { id: customer.telegram_id, username: customer.username, first_name: customer.first_name, last_name: customer.last_name }, authMode: "web" };
 }
 
-async function salesMiniAppBootstrap(request, env, botId) {
+async function salesMiniAppBootstrap(request, env, botId, ctx = null) {
   try {
-    const { bot, customer, authMode } = await authenticateSalesMiniApp(request, env, botId);
-    const [categories, locations, plans, orders, ledger, walletRequests, referralCount, trial, textRows, notifications, tickets, paymentInvoices] = await Promise.all([
-      env.PASARGUARD_DB.prepare("SELECT id,title,emoji,sort_order FROM sales_categories WHERE bot_id=? AND status='active' ORDER BY sort_order,created_at").bind(bot.id).all(),
-      env.PASARGUARD_DB.prepare("SELECT id,title,emoji,description,sort_order FROM sales_locations WHERE bot_id=? AND status='active' ORDER BY sort_order,created_at").bind(bot.id).all(),
-      env.PASARGUARD_DB.prepare(`SELECT p.id,p.title,p.data_limit_bytes,p.duration_days,p.price_toman,p.category_id,p.location_id,p.plan_type,c.title AS category_title,c.emoji AS category_emoji,l.title AS location_title,l.emoji AS location_emoji FROM sales_plans p LEFT JOIN sales_categories c ON c.id=p.category_id LEFT JOIN sales_locations l ON l.id=p.location_id WHERE p.bot_id=? AND p.status='active' ORDER BY p.sort_order,p.price_toman,p.created_at`).bind(bot.id).all(),
-      env.PASARGUARD_DB.prepare(`SELECT o.id,o.amount_toman,o.original_amount_toman,o.discount_toman,o.promo_code,o.cashback_toman,o.status,o.order_type,o.target_order_id,o.payment_method,o.origin,o.remote_username,o.subscription_url,o.remote_status,o.remote_data_limit,o.remote_used_traffic,o.remote_expire,o.remote_online_at,o.remote_last_synced_at,o.error_message,o.created_at,o.updated_at,p.title AS plan_title,p.data_limit_bytes,p.duration_days,p.category_id,p.location_id,c.title AS category_title,c.emoji AS category_emoji,l.title AS location_title,l.emoji AS location_emoji FROM sales_orders o JOIN sales_plans p ON p.id=o.plan_id LEFT JOIN sales_categories c ON c.id=p.category_id LEFT JOIN sales_locations l ON l.id=p.location_id WHERE o.bot_id=? AND o.customer_id=? ORDER BY o.created_at DESC LIMIT 80`).bind(bot.id,customer.id).all(),
-      env.PASARGUARD_DB.prepare("SELECT type,amount,balance_after,description,created_at FROM sales_customer_ledger WHERE customer_id=? ORDER BY created_at DESC LIMIT 30").bind(customer.id).all(),
-      env.PASARGUARD_DB.prepare("SELECT id,amount_toman,status,bonus_toman,origin,created_at,updated_at FROM sales_wallet_requests WHERE bot_id=? AND customer_id=? ORDER BY created_at DESC LIMIT 20").bind(bot.id,customer.id).all(),
-      env.PASARGUARD_DB.prepare("SELECT COUNT(*) AS c FROM sales_customers WHERE referrer_customer_id=?").bind(customer.id).first(),
-      env.PASARGUARD_DB.prepare("SELECT id,status,origin,remote_username,subscription_url,error_message,created_at,updated_at FROM sales_trials WHERE bot_id=? AND customer_id=?").bind(bot.id,customer.id).first(),
-      env.PASARGUARD_DB.prepare("SELECT text_key,text_value FROM reseller_bot_texts WHERE bot_id=?").bind(bot.id).all(),
-      env.PASARGUARD_DB.prepare("SELECT id,order_id,type,title,message,status,created_at,read_at FROM sales_notifications WHERE bot_id=? AND customer_id=? ORDER BY created_at DESC LIMIT 40").bind(bot.id,customer.id).all(),
-      env.PASARGUARD_DB.prepare("SELECT id,public_code,category,priority,subject,status,last_message_at,created_at,updated_at,closed_at FROM sales_tickets WHERE bot_id=? AND customer_id=? ORDER BY last_message_at DESC LIMIT 50").bind(bot.id,customer.id).all(),
-      env.PASARGUARD_DB.prepare("SELECT id,provider_invoice_id,target_type,target_id,amount_toman,final_amount_rial,status,payment_link,card_number,paid_at,processed_at,error_message,created_at,updated_at FROM sales_payment_invoices WHERE bot_id=? AND customer_id=? ORDER BY created_at DESC LIMIT 30").bind(bot.id,customer.id).all()
+    const { bot, customer, authMode } = await authenticateSalesMiniApp(request, env, botId, ctx);
+    // One remote D1 batch replaces twelve Edge -> Core round-trips during initial panel load.
+    const bootstrapBatch = await env.PASARGUARD_DB.batch([
+      env.PASARGUARD_DB.prepare("SELECT id,title,emoji,sort_order FROM sales_categories WHERE bot_id=? AND status='active' ORDER BY sort_order,created_at").bind(bot.id),
+      env.PASARGUARD_DB.prepare("SELECT id,title,emoji,description,sort_order FROM sales_locations WHERE bot_id=? AND status='active' ORDER BY sort_order,created_at").bind(bot.id),
+      env.PASARGUARD_DB.prepare(`SELECT p.id,p.title,p.data_limit_bytes,p.duration_days,p.price_toman,p.category_id,p.location_id,p.plan_type,c.title AS category_title,c.emoji AS category_emoji,l.title AS location_title,l.emoji AS location_emoji FROM sales_plans p LEFT JOIN sales_categories c ON c.id=p.category_id LEFT JOIN sales_locations l ON l.id=p.location_id WHERE p.bot_id=? AND p.status='active' ORDER BY p.sort_order,p.price_toman,p.created_at`).bind(bot.id),
+      env.PASARGUARD_DB.prepare(`SELECT o.id,o.amount_toman,o.original_amount_toman,o.discount_toman,o.promo_code,o.cashback_toman,o.status,o.order_type,o.target_order_id,o.payment_method,o.origin,o.remote_username,o.subscription_url,o.remote_status,o.remote_data_limit,o.remote_used_traffic,o.remote_expire,o.remote_online_at,o.remote_last_synced_at,o.error_message,o.created_at,o.updated_at,p.title AS plan_title,p.data_limit_bytes,p.duration_days,p.category_id,p.location_id,c.title AS category_title,c.emoji AS category_emoji,l.title AS location_title,l.emoji AS location_emoji FROM sales_orders o JOIN sales_plans p ON p.id=o.plan_id LEFT JOIN sales_categories c ON c.id=p.category_id LEFT JOIN sales_locations l ON l.id=p.location_id WHERE o.bot_id=? AND o.customer_id=? ORDER BY o.created_at DESC LIMIT 80`).bind(bot.id,customer.id),
+      env.PASARGUARD_DB.prepare("SELECT type,amount,balance_after,description,created_at FROM sales_customer_ledger WHERE customer_id=? ORDER BY created_at DESC LIMIT 30").bind(customer.id),
+      env.PASARGUARD_DB.prepare("SELECT id,amount_toman,status,bonus_toman,origin,created_at,updated_at FROM sales_wallet_requests WHERE bot_id=? AND customer_id=? ORDER BY created_at DESC LIMIT 20").bind(bot.id,customer.id),
+      env.PASARGUARD_DB.prepare("SELECT COUNT(*) AS c FROM sales_customers WHERE referrer_customer_id=?").bind(customer.id),
+      env.PASARGUARD_DB.prepare("SELECT id,status,origin,remote_username,subscription_url,error_message,created_at,updated_at FROM sales_trials WHERE bot_id=? AND customer_id=?").bind(bot.id,customer.id),
+      env.PASARGUARD_DB.prepare("SELECT text_key,text_value FROM reseller_bot_texts WHERE bot_id=?").bind(bot.id),
+      env.PASARGUARD_DB.prepare("SELECT id,order_id,type,title,message,status,created_at,read_at FROM sales_notifications WHERE bot_id=? AND customer_id=? ORDER BY created_at DESC LIMIT 40").bind(bot.id,customer.id),
+      env.PASARGUARD_DB.prepare("SELECT id,public_code,category,priority,subject,status,last_message_at,created_at,updated_at,closed_at FROM sales_tickets WHERE bot_id=? AND customer_id=? ORDER BY last_message_at DESC LIMIT 50").bind(bot.id,customer.id),
+      env.PASARGUARD_DB.prepare("SELECT id,provider_invoice_id,target_type,target_id,amount_toman,final_amount_rial,status,payment_link,card_number,paid_at,processed_at,error_message,created_at,updated_at FROM sales_payment_invoices WHERE bot_id=? AND customer_id=? ORDER BY created_at DESC LIMIT 30").bind(bot.id,customer.id)
     ]);
+    const batchRows = index => bootstrapBatch[index] || { results: [] };
+    const categories = batchRows(0);
+    const locations = batchRows(1);
+    const plans = batchRows(2);
+    const orders = batchRows(3);
+    const ledger = batchRows(4);
+    const walletRequests = batchRows(5);
+    const referralCount = (batchRows(6).results || [])[0] || {};
+    const trial = (batchRows(7).results || [])[0] || null;
+    const textRows = batchRows(8);
+    const notifications = batchRows(9);
+    const tickets = batchRows(10);
+    const paymentInvoices = batchRows(11);
     const orderRows = orders.results || [];
     const services = buildSalesServices(orderRows);
     const activePromo = await salesActivePromoForCustomer(env, bot.id, customer);
@@ -7193,9 +7267,9 @@ async function salesMiniAppBootstrap(request, env, botId) {
   }
 }
 
-async function salesMiniAppAction(request, env, botId) {
+async function salesMiniAppAction(request, env, botId, ctx = null) {
   try {
-    const { bot, customer } = await authenticateSalesMiniApp(request, env, botId);
+    const { bot, customer } = await authenticateSalesMiniApp(request, env, botId, ctx);
     if (bot.status !== "active") throw new Error("فروش این ربات موقتاً متوقف است");
     const body = await parseBody(request);
     const action = String(body.action || "");
@@ -7692,7 +7766,8 @@ async function resellerAdminBootstrap(request, env, botId) {
   const account = await requireResellerAdminWeb(request, env, botId);
   if (account.response) return account.response;
   const bot = account.bot;
-  const [stats, orders, wallets, customers, plans, categories, locations, tickets, invoices, texts, promos, snapshots, auditLogs, healthChecks, securityEvents, staff, campaigns, ownerAgencies] = await Promise.all([
+  // A single D1 batch replaces eighteen Edge -> Core requests on the management dashboard.
+  const adminBootstrapBatch = await env.PASARGUARD_DB.batch([
     env.PASARGUARD_DB.prepare(`SELECT
       (SELECT COUNT(*) FROM sales_customers WHERE bot_id=?) AS customers_count,
       (SELECT COUNT(*) FROM sales_customers WHERE bot_id=? AND status='active') AS active_customers,
@@ -7712,49 +7787,68 @@ async function resellerAdminBootstrap(request, env, botId) {
       bot.id, bot.id, bot.id, new Date(Date.now()-86400000).toISOString(),
       bot.id, bot.id, bot.id, bot.id, bot.id, new Date(new Date().setHours(0,0,0,0)).toISOString(),
       bot.id, bot.id, bot.id, bot.id, bot.id, bot.id
-    ).first(),
+    ),
     env.PASARGUARD_DB.prepare(`SELECT o.id,o.status,o.order_type,o.payment_method,o.amount_toman,o.original_amount_toman,o.discount_toman,
       o.receipt_file_id,o.receipt_file_type,o.receipt_caption,o.remote_username,o.subscription_url,o.error_message,o.created_at,o.updated_at,
       p.title AS plan_title,c.id AS customer_id,c.telegram_id,c.username,c.first_name,c.last_name,
       sc.title AS category_title,sl.title AS location_title
       FROM sales_orders o JOIN sales_plans p ON p.id=o.plan_id JOIN sales_customers c ON c.id=o.customer_id
       LEFT JOIN sales_categories sc ON sc.id=p.category_id LEFT JOIN sales_locations sl ON sl.id=p.location_id
-      WHERE o.bot_id=? ORDER BY o.created_at DESC LIMIT 250`).bind(bot.id).all(),
+      WHERE o.bot_id=? ORDER BY o.created_at DESC LIMIT 250`).bind(bot.id),
     env.PASARGUARD_DB.prepare(`SELECT w.id,w.amount_toman,w.status,w.receipt_file_id,w.receipt_file_type,w.receipt_caption,w.bonus_toman,w.created_at,w.updated_at,
       c.id AS customer_id,c.telegram_id,c.username,c.first_name,c.last_name
       FROM sales_wallet_requests w JOIN sales_customers c ON c.id=w.customer_id
-      WHERE w.bot_id=? ORDER BY w.created_at DESC LIMIT 200`).bind(bot.id).all(),
+      WHERE w.bot_id=? ORDER BY w.created_at DESC LIMIT 200`).bind(bot.id),
     env.PASARGUARD_DB.prepare(`SELECT c.id,c.telegram_id,c.username,c.first_name,c.last_name,c.wallet_balance,c.status,c.customer_type,c.discount_percent,
       c.phone_number,c.phone_verified_at,c.lifetime_spend_toman,c.loyalty_level,c.loyalty_discount_percent,c.risk_score,c.risk_level,c.security_note,c.last_seen_at,c.created_at,c.updated_at,
       (SELECT COUNT(*) FROM sales_orders o WHERE o.customer_id=c.id) AS orders_count,
       (SELECT COUNT(*) FROM sales_orders o WHERE o.customer_id=c.id AND o.status='delivered') AS delivered_count
-      FROM sales_customers c WHERE c.bot_id=? ORDER BY c.updated_at DESC LIMIT 600`).bind(bot.id).all(),
+      FROM sales_customers c WHERE c.bot_id=? ORDER BY c.updated_at DESC LIMIT 600`).bind(bot.id),
     env.PASARGUARD_DB.prepare(`SELECT p.id,p.title,p.data_limit_bytes,p.duration_days,p.price_toman,p.status,p.sort_order,p.category_id,p.location_id,p.plan_type,p.created_at,p.updated_at,
       c.title AS category_title,c.emoji AS category_emoji,l.title AS location_title,l.emoji AS location_emoji
       FROM sales_plans p LEFT JOIN sales_categories c ON c.id=p.category_id LEFT JOIN sales_locations l ON l.id=p.location_id
-      WHERE p.bot_id=? ORDER BY p.sort_order,p.created_at DESC LIMIT 400`).bind(bot.id).all(),
-    env.PASARGUARD_DB.prepare("SELECT id,title,emoji,status,sort_order,created_at,updated_at FROM sales_categories WHERE bot_id=? ORDER BY sort_order,created_at").bind(bot.id).all(),
-    env.PASARGUARD_DB.prepare("SELECT id,title,emoji,description,group_ids_json,status,sort_order,created_at,updated_at FROM sales_locations WHERE bot_id=? ORDER BY sort_order,created_at").bind(bot.id).all(),
+      WHERE p.bot_id=? ORDER BY p.sort_order,p.created_at DESC LIMIT 400`).bind(bot.id),
+    env.PASARGUARD_DB.prepare("SELECT id,title,emoji,status,sort_order,created_at,updated_at FROM sales_categories WHERE bot_id=? ORDER BY sort_order,created_at").bind(bot.id),
+    env.PASARGUARD_DB.prepare("SELECT id,title,emoji,description,group_ids_json,status,sort_order,created_at,updated_at FROM sales_locations WHERE bot_id=? ORDER BY sort_order,created_at").bind(bot.id),
     env.PASARGUARD_DB.prepare(`SELECT t.id,t.public_code,t.subject,t.category,t.priority,t.status,t.last_message_at,t.created_at,t.updated_at,t.closed_at,
       c.id AS customer_id,c.telegram_id,c.username,c.first_name,c.last_name
       FROM sales_tickets t JOIN sales_customers c ON c.id=t.customer_id
-      WHERE t.bot_id=? ORDER BY t.last_message_at DESC LIMIT 200`).bind(bot.id).all(),
+      WHERE t.bot_id=? ORDER BY t.last_message_at DESC LIMIT 200`).bind(bot.id),
     env.PASARGUARD_DB.prepare(`SELECT i.id,i.provider_invoice_id,i.target_type,i.target_id,i.amount_toman,i.final_amount_rial,i.status,i.payment_link,i.paid_at,i.processed_at,i.error_message,i.created_at,i.updated_at,
       c.telegram_id,c.username,c.first_name,c.last_name
       FROM sales_payment_invoices i LEFT JOIN sales_customers c ON c.id=i.customer_id
-      WHERE i.bot_id=? ORDER BY i.created_at DESC LIMIT 250`).bind(bot.id).all(),
-    env.PASARGUARD_DB.prepare("SELECT text_key,text_value,updated_at FROM reseller_bot_texts WHERE bot_id=? ORDER BY text_key").bind(bot.id).all(),
+      WHERE i.bot_id=? ORDER BY i.created_at DESC LIMIT 250`).bind(bot.id),
+    env.PASARGUARD_DB.prepare("SELECT text_key,text_value,updated_at FROM reseller_bot_texts WHERE bot_id=? ORDER BY text_key").bind(bot.id),
     env.PASARGUARD_DB.prepare(`SELECT id,code,kind,value_type,value,min_purchase_toman,max_uses,per_user_limit,use_count,status,expires_at,description,created_at,updated_at
-      FROM sales_promo_codes WHERE bot_id=? ORDER BY created_at DESC LIMIT 250`).bind(bot.id).all(),
-    env.PASARGUARD_DB.prepare("SELECT id,snapshot_type,label,size_bytes,created_by_telegram_id,created_at FROM reseller_snapshots WHERE bot_id=? ORDER BY created_at DESC LIMIT 20").bind(bot.id).all(),
-    env.PASARGUARD_DB.prepare("SELECT id,actor_telegram_id,actor_role,action,details,created_at FROM reseller_audit_logs WHERE bot_id=? ORDER BY created_at DESC LIMIT 150").bind(bot.id).all(),
-    env.PASARGUARD_DB.prepare("SELECT id,overall_status,score,details_json,created_at FROM reseller_health_checks WHERE bot_id=? ORDER BY created_at DESC LIMIT 10").bind(bot.id).all(),
+      FROM sales_promo_codes WHERE bot_id=? ORDER BY created_at DESC LIMIT 250`).bind(bot.id),
+    env.PASARGUARD_DB.prepare("SELECT id,snapshot_type,label,size_bytes,created_by_telegram_id,created_at FROM reseller_snapshots WHERE bot_id=? ORDER BY created_at DESC LIMIT 20").bind(bot.id),
+    env.PASARGUARD_DB.prepare("SELECT id,actor_telegram_id,actor_role,action,details,created_at FROM reseller_audit_logs WHERE bot_id=? ORDER BY created_at DESC LIMIT 150").bind(bot.id),
+    env.PASARGUARD_DB.prepare("SELECT id,overall_status,score,details_json,created_at FROM reseller_health_checks WHERE bot_id=? ORDER BY created_at DESC LIMIT 10").bind(bot.id),
     env.PASARGUARD_DB.prepare(`SELECT e.id,e.event_type,e.severity,e.score_delta,e.details,e.created_at,c.telegram_id,c.username,c.first_name
-      FROM sales_security_events e LEFT JOIN sales_customers c ON c.id=e.customer_id WHERE e.bot_id=? ORDER BY e.created_at DESC LIMIT 120`).bind(bot.id).all(),
-    env.PASARGUARD_DB.prepare("SELECT id,telegram_id,display_name,role,status,created_at,updated_at FROM reseller_staff WHERE bot_id=? ORDER BY created_at DESC LIMIT 50").bind(bot.id).all(),
-    env.PASARGUARD_DB.prepare("SELECT id,send_mode,target_scope,message_text,scheduled_at,status,success_count,failed_count,created_at,started_at,finished_at,error_message FROM sales_campaigns WHERE bot_id=? ORDER BY created_at DESC LIMIT 100").bind(bot.id).all(),
-    env.PASARGUARD_DB.prepare("SELECT id,title,panel_username,status,CASE WHEN panel_password_enc IS NULL THEN 0 ELSE 1 END AS has_password FROM agencies WHERE user_id=? AND COALESCE(is_trial,0)=0 ORDER BY updated_at DESC LIMIT 100").bind(account.user.id).all()
+      FROM sales_security_events e LEFT JOIN sales_customers c ON c.id=e.customer_id WHERE e.bot_id=? ORDER BY e.created_at DESC LIMIT 120`).bind(bot.id),
+    env.PASARGUARD_DB.prepare("SELECT id,telegram_id,display_name,role,status,created_at,updated_at FROM reseller_staff WHERE bot_id=? ORDER BY created_at DESC LIMIT 50").bind(bot.id),
+    env.PASARGUARD_DB.prepare("SELECT id,send_mode,target_scope,message_text,scheduled_at,status,success_count,failed_count,created_at,started_at,finished_at,error_message FROM sales_campaigns WHERE bot_id=? ORDER BY created_at DESC LIMIT 100").bind(bot.id),
+    env.PASARGUARD_DB.prepare("SELECT id,title,panel_username,status,CASE WHEN panel_password_enc IS NULL THEN 0 ELSE 1 END AS has_password FROM agencies WHERE user_id=? AND COALESCE(is_trial,0)=0 ORDER BY updated_at DESC LIMIT 100").bind(account.user.id)
   ]);
+  const adminBatchRows = index => adminBootstrapBatch[index] || { results: [] };
+  const stats = (adminBatchRows(0).results || [])[0] || {};
+  const orders = adminBatchRows(1);
+  const wallets = adminBatchRows(2);
+  const customers = adminBatchRows(3);
+  const plans = adminBatchRows(4);
+  const categories = adminBatchRows(5);
+  const locations = adminBatchRows(6);
+  const tickets = adminBatchRows(7);
+  const invoices = adminBatchRows(8);
+  const texts = adminBatchRows(9);
+  const promos = adminBatchRows(10);
+  const snapshots = adminBatchRows(11);
+  const auditLogs = adminBatchRows(12);
+  const healthChecks = adminBatchRows(13);
+  const securityEvents = adminBatchRows(14);
+  const staff = adminBatchRows(15);
+  const campaigns = adminBatchRows(16);
+  const ownerAgencies = adminBatchRows(17);
   const masterEnabled = resellerBotCanCreateDownline(bot);
   const settings = await getSettings(env);
   const downlines = masterEnabled ? await listDownlineBots(env, bot.id) : [];
@@ -8846,7 +8940,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_EDGE_VERSION='3.0.1';
+const BLUEPANEL_EDGE_VERSION='3.0.4';
 function bluePanelEdgeJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function bluePanelEdgeInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
 function bluePanelEdgeRuntimeBinding(env,name){const value=env?.[name];return{name,exact_key_present:Object.prototype.hasOwnProperty.call(env||{},name),value_present:value!==undefined&&value!==null,fetch_callable:Boolean(value&&typeof value.fetch==='function'),constructor_name:value?.constructor?.name||''}}
@@ -8869,7 +8963,7 @@ export default {
   if(['/control','/admin','/panel','/dashboard'].includes(path)&&request.method==='GET')return new Response(CENTRAL_CONTROL_HTML.replaceAll('__APP_VERSION__',APP_VERSION),{headers:bluePanelStaticHeaders()});
   if(path==='/control-advanced'&&request.method==='GET')return new Response(MINI_APP_HTML.replaceAll('__APP_VERSION__',APP_VERSION).replaceAll('__CONTROL_MODE__','true'),{headers:bluePanelStaticHeaders()});
   if(['/', '/app','/miniapp'].includes(path)&&request.method==='GET')return new Response(MINI_APP_HTML.replaceAll('__APP_VERSION__',APP_VERSION).replaceAll('__CONTROL_MODE__','false'),{headers:bluePanelStaticHeaders()});
-  const wh=path.match(/^\/sales-bot\/([^/]+)\/webhook$/);if(wh&&request.method==='POST')return resellerSalesWebhook(request,runtime,decodeURIComponent(wh[1]));
+  const wh=path.match(/^\/sales-bot\/([^/]+)\/webhook$/);if(wh&&request.method==='POST')return resellerSalesWebhook(request,runtime,decodeURIComponent(wh[1]),ctx);
   const pwh=path.match(/^\/sales-payments\/([^/]+)\/blupal\/webhook$/);if(pwh&&request.method==='POST')return resellerBlupalWebhook(request,runtime,ctx,decodeURIComponent(pwh[1]));
   const pret=path.match(/^\/sales-payments\/([^/]+)\/return$/);if(pret&&request.method==='GET'){await ensureDb(runtime);const bot=await getResellerBotById(runtime,decodeURIComponent(pret[1]));if(!bot)return new Response('Not found',{status:404});return new Response(resellerBlupalReturnPage(bot,request.headers.get('x-bluepanel-public-origin')||url.origin),{headers:bluePanelStaticHeaders()});}
   const auth=path.match(/^\/reseller-control-auth\/([^/]+)\/(login|logout)$/);if(auth&&request.method==='POST')return auth[2]==='login'?resellerAdminWebLogin(request,runtime,decodeURIComponent(auth[1])):resellerAdminWebLogout(request,runtime,decodeURIComponent(auth[1]));
@@ -8878,7 +8972,7 @@ export default {
   const receipt=path.match(/^\/reseller-control-api\/([^/]+)\/receipt\/(order|wallet)\/([^/]+)$/);if(receipt&&request.method==='GET')return resellerAdminReceipt(request,runtime,decodeURIComponent(receipt[1]),receipt[2],decodeURIComponent(receipt[3]));
   const sa=path.match(/^\/sales-auth\/([^/]+)\/(request-code|verify-code|logout)$/);if(sa&&request.method==='POST'){const botId=decodeURIComponent(sa[1]);if(sa[2]==='request-code')return salesWebRequestCode(request,runtime,botId);if(sa[2]==='verify-code')return salesWebVerifyCode(request,runtime,botId);return salesWebLogout(request,runtime,botId);}
   const sapp=path.match(/^\/sales-app\/([^/]+)$/);if(sapp&&request.method==='GET'){await ensureDb(runtime);const botId=decodeURIComponent(sapp[1]),bot=await getResellerBotById(runtime,botId);if(!bot||Number(bot.miniapp_enabled??1)!==1)return new Response('Mini App unavailable',{status:404});return new Response(SALES_MINI_APP_HTML.replaceAll('__BOT_ID__',botId),{headers:bluePanelStaticHeaders()});}
-  const sapi=path.match(/^\/sales-api\/([^/]+)\/(bootstrap|action)$/);if(sapi&&request.method==='POST'){const botId=decodeURIComponent(sapi[1]);return sapi[2]==='bootstrap'?salesMiniAppBootstrap(request,runtime,botId):salesMiniAppAction(request,runtime,botId);}
+  const sapi=path.match(/^\/sales-api\/([^/]+)\/(bootstrap|action)$/);if(sapi&&request.method==='POST'){const botId=decodeURIComponent(sapi[1]);return sapi[2]==='bootstrap'?salesMiniAppBootstrap(request,runtime,botId,ctx):salesMiniAppAction(request,runtime,botId,ctx);}
   return bluePanelEdgeForwardCore(request,env);
  }catch(error){console.error('edge fetch error',error);return bluePanelEdgeJson({success:false,ok:false,role:'bluepanel-edge',version:APP_VERSION,error:String(error?.message||error),code:'EDGE_RUNTIME_ERROR'},500)}}
 };

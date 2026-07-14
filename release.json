@@ -1,6 +1,6 @@
 {
-  "version": "3.0.3",
-  "release_id": "3.0.3-20260714-telegram-github-zip-uploader",
+  "version": "3.0.4",
+  "release_id": "3.0.4-20260714-speed-batch-hotpath",
   "architecture": "fully-split-three-worker",
   "files": {
     "core": "core/worker.js",
@@ -8,58 +8,38 @@
     "processor": "processor/worker.js"
   },
   "sha256": {
-    "core": "fe4c5d82d46af60d2e5b21b0713d19248ef5abf138afedcfad64c08cf976b5e5",
-    "edge": "0b0495acc7b600a98561fcf98b132891b9b01e9b595d9024f976d752b8a2aeb6",
-    "processor": "e813e229554edb7ece1e802ea1a05cd7225fece16d1bc4b2e5740d304072576d"
+    "core": "8a158176bcf0c06efcd133a84b85a073bcd43530544c28a67c82247958004190",
+    "edge": "8901163f7f9fe94964ba3d992ffcae850c3c209abfec36af784be3bf2282012c",
+    "processor": "374d6635b0d1581c124018aaeebe93ac8fbab06caea36a4c793f4db2a209e9fd"
   },
   "roles": {
-    "core": "central bot, secure Telegram ZIP extraction, single-commit GitHub publishing, finance, licenses, central APIs and D1 authority",
-    "edge": "web panels, reseller bots, reseller report setup and customer miniapps",
-    "processor": "automatic report delivery, aggregation, retry queue and background jobs"
+    "core": "central bot, finance, licenses, central APIs, GitHub publishing and D1 authority",
+    "edge": "web panels, reseller bots, customer miniapps and latency-sensitive request handling",
+    "processor": "reports, retry queue, backups and background jobs"
   },
   "bindings": {
-    "core": [
-      "PASARGUARD_DB",
-      "EDGE_WORKER",
-      "PROCESSOR_WORKER"
-    ],
-    "edge": [
-      "EDGE_DB",
-      "CORE_WORKER",
-      "PROCESSOR_WORKER"
-    ],
-    "processor": [
-      "PROCESSOR_DB",
-      "CORE_WORKER",
-      "EDGE_WORKER"
-    ]
+    "core": ["PASARGUARD_DB", "EDGE_WORKER", "PROCESSOR_WORKER"],
+    "edge": ["EDGE_DB", "CORE_WORKER", "PROCESSOR_WORKER"],
+    "processor": ["PROCESSOR_DB", "CORE_WORKER", "EDGE_WORKER"]
   },
-  "telegram_zip_uploader": {
-    "enabled": true,
-    "admin_only": true,
-    "max_download_bytes": 20971520,
-    "required_files": [
-      "core/worker.js",
-      "edge/worker.js",
-      "processor/worker.js",
-      "version",
-      "release.json"
-    ],
-    "single_git_commit": true,
-    "automatic_cluster_deploy": true,
-    "readme_excluded": true
+  "performance": {
+    "sales_bootstrap_remote_roundtrips": "12_to_1_batch",
+    "reseller_admin_bootstrap_remote_roundtrips": "18_to_1_batch",
+    "runtime_botfather_sync": "background",
+    "start_session_cleanup": "background",
+    "settings_cache_ttl_seconds": 60,
+    "join_status_cache_ttl_seconds": 120,
+    "reseller_bot_cache_ttl_seconds": 15
   },
   "fixes": [
-    "accept project ZIP files directly from central bot administrators",
-    "configure GitHub token, repository and branch from the central Telegram bot",
-    "download Telegram documents securely within the official 20 MB Bot API limit",
-    "extract stored and deflate ZIP entries with CRC32, path traversal, symlink and zip bomb protection",
-    "strip one wrapper directory while preserving the real project directory layout",
-    "exclude README files and common archive junk automatically",
-    "validate all three worker markers, versions, release manifest and optional SHA-256 hashes before publishing",
-    "publish all extracted files to GitHub as one atomic Git tree commit",
-    "prevent duplicate processing of the same Telegram file",
-    "trigger immediate three-worker deployment after a successful GitHub commit",
-    "release channel announcement contains only version 3.0.3 changes"
+    "move reseller BotFather/runtime synchronization out of the user response path",
+    "batch all initial customer miniapp queries into one Edge-to-Core database call",
+    "batch reseller management dashboard queries into one Edge-to-Core database call",
+    "combine user creation and lookup operations in database batches",
+    "move start-session cleanup and analytics writes to background tasks",
+    "extend safe in-memory caches for settings, reseller bot metadata and join status",
+    "keep request-triggered update checks away from Telegram webhook hot paths",
+    "release channel announcement contains only version 3.0.4 changes",
+    "README files are excluded"
   ]
 }

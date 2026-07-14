@@ -1,23 +1,25 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.0.3
+ * Version: 3.0.4
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.0.3";
+const APP_VERSION = "3.0.4";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
   central: Object.freeze([
-    { emoji: "📦", text: "دریافت مستقیم فایل ZIP بروزرسانی از مدیر در ربات مرکزی" },
-    { emoji: "🗂", text: "استخراج امن ZIP و بارگذاری واقعی فایل‌ها با حفظ ساختار پوشه‌ها در GitHub" },
-    { emoji: "🧾", text: "ثبت همه فایل‌های بروزرسانی در یک Commit مرتب و جلوگیری از آپلود تکراری" },
-    { emoji: "🚀", text: "شروع خودکار استقرار سه Worker بلافاصله پس از ثبت موفق Commit" },
-    { emoji: "🔐", text: "امکان ثبت امن توکن، مخزن و Branch گیت‌هاب از داخل ربات مرکزی" }
+    { emoji: "⚡", text: "کاهش رفت‌وبرگشت بین Workerها در مسیرهای پرتکرار" },
+    { emoji: "🚀", text: "ارسال سریع‌تر منوی شروع با انتقال ثبت گزارش و پاک‌سازی نشست به پس‌زمینه" },
+    { emoji: "🧠", text: "کش کوتاه‌مدت تنظیمات و وضعیت عضویت برای پاسخ سریع‌تر" }
   ]),
-  reseller: Object.freeze([])
+  reseller: Object.freeze([
+    { emoji: "📦", text: "تجمیع درخواست‌های اولیه پنل فروش و مدیریت در یک Batch دیتابیس" },
+    { emoji: "🤖", text: "حذف همگام‌سازی سنگین BotFather از مسیر پاسخ کاربران" },
+    { emoji: "⚡", text: "افزایش سرعت پاسخ ربات‌های نماینده و بازشدن پنل‌ها" }
+  ])
 });
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
@@ -110,13 +112,13 @@ const resellerTokenCache = new Map();
 
 const joinStatusCache = new Map();
 
-const SETTINGS_CACHE_TTL_MS = 15000;
+const SETTINGS_CACHE_TTL_MS = 60000;
 
 const PY_HELPER_INSIGHT_TIMEOUT_MS = 350;
 
 const RESELLER_TOKEN_CACHE_TTL_MS = 300000;
 
-const JOIN_STATUS_CACHE_TTL_MS = 60000;
+const JOIN_STATUS_CACHE_TTL_MS = 120000;
 
 const TELEGRAM_GITHUB_ZIP_MAX_BYTES = 20 * 1024 * 1024;
 const GITHUB_ZIP_MAX_UNCOMPRESSED_BYTES = 30 * 1024 * 1024;
@@ -7854,25 +7856,28 @@ async function ensureTelegramBotUser(env, from, preloadedSettings = null) {
   if (!telegramId) throw new Error("شناسه تلگرام دریافت نشد");
   const admin = isAdminTelegramId(settings, telegramId);
   const ts = nowIso();
-  await env.PASARGUARD_DB.prepare(`
-    INSERT INTO users(telegram_id, username, first_name, last_name, role, status, wallet_balance, created_at, updated_at)
-    VALUES(?, ?, ?, ?, ?, 'active', 0, ?, ?)
-    ON CONFLICT(telegram_id) DO UPDATE SET
-      username=excluded.username,
-      first_name=excluded.first_name,
-      last_name=excluded.last_name,
-      role=CASE WHEN excluded.role='admin' THEN 'admin' ELSE users.role END,
-      updated_at=excluded.updated_at
-  `).bind(
-    telegramId,
-    cleanText(from?.username, 64),
-    cleanText(from?.first_name, 100),
-    cleanText(from?.last_name, 100),
-    admin ? "admin" : "user",
-    ts,
-    ts
-  ).run();
-  const user = await env.PASARGUARD_DB.prepare("SELECT * FROM users WHERE telegram_id=?").bind(telegramId).first();
+  const userBatch = await env.PASARGUARD_DB.batch([
+    env.PASARGUARD_DB.prepare(`
+      INSERT INTO users(telegram_id, username, first_name, last_name, role, status, wallet_balance, created_at, updated_at)
+      VALUES(?, ?, ?, ?, ?, 'active', 0, ?, ?)
+      ON CONFLICT(telegram_id) DO UPDATE SET
+        username=excluded.username,
+        first_name=excluded.first_name,
+        last_name=excluded.last_name,
+        role=CASE WHEN excluded.role='admin' THEN 'admin' ELSE users.role END,
+        updated_at=excluded.updated_at
+    `).bind(
+      telegramId,
+      cleanText(from?.username, 64),
+      cleanText(from?.first_name, 100),
+      cleanText(from?.last_name, 100),
+      admin ? "admin" : "user",
+      ts,
+      ts
+    ),
+    env.PASARGUARD_DB.prepare("SELECT * FROM users WHERE telegram_id=?").bind(telegramId)
+  ]);
+  const user = (userBatch[1]?.results || [])[0] || null;
   if (!user || user.status !== "active") throw new Error("حساب شما غیرفعال است");
   return { user, settings, isAdmin: user.role === "admin" || admin };
 }
@@ -10770,7 +10775,10 @@ async function telegramWebhook(request, env, ctx = null) {
     else if (/^\/(?:transactions|history)(?:@\w+)?$/i.test(text)) view = "ledger";
     else if (/^\/help(?:@\w+)?$/i.test(text)) view = "help";
     if (isStartOrMenu) {
-      await botClearSession(env, account.user.telegram_id);
+      const cleanupTask = botClearSession(env, account.user.telegram_id)
+        .catch(error => console.error("central start session cleanup failed", error));
+      if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(cleanupTask);
+      else await cleanupTask;
       await botSendWelcome(env, account, message.chat.id, origin);
       return json({ ok: true });
     }
@@ -11309,7 +11317,7 @@ async function routeApiUnsafe(request, env, path) {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.0.3';
+const BLUEPANEL_CORE_VERSION = '3.0.4';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
@@ -11385,11 +11393,11 @@ async function bluePanelCoreHealth(env) {
   };
 }
 let bluePanelNextRequestUpdateCheckAt = 0;
-const BLUEPANEL_REQUEST_UPDATE_INTERVAL_MS = 5000;
+const BLUEPANEL_REQUEST_UPDATE_INTERVAL_MS = 60000;
 
 function scheduleRequestTriggeredUpdate(env, ctx, path) {
   if (!ctx || typeof ctx.waitUntil !== "function") return;
-  if (path === "/health" || path.startsWith("/__bluepanel/")) return;
+  if (path === "/health" || path.startsWith("/__bluepanel/") || path === "/telegram/webhook" || path.startsWith("/sales-bot/")) return;
   const now = Date.now();
   if (now < bluePanelNextRequestUpdateCheckAt) return;
   bluePanelNextRequestUpdateCheckAt = now + BLUEPANEL_REQUEST_UPDATE_INTERVAL_MS;
