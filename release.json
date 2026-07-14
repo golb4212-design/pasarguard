@@ -1,6 +1,6 @@
 {
-  "version": "3.0.5",
-  "release_id": "3.0.5-20260714-bitpin-crypto-deposits",
+  "version": "3.0.6",
+  "release_id": "3.0.6-20260714-central-login-payment-count-fix",
   "architecture": "fully-split-three-worker",
   "files": {
     "core": "core/worker.js",
@@ -8,9 +8,9 @@
     "processor": "processor/worker.js"
   },
   "sha256": {
-    "core": "b5c8d3fef6a233570687c8520c8541fd822d34556f462c6391b3f24a49e1c769",
-    "edge": "2c616ff09e06a933c02ddd6c8a402c2e4678e20fa32db8f0f376220706993593",
-    "processor": "44050677ba8459c859ee90b16a242a84b3d4a5c16cb7f467f433fba5fb42f3a0"
+    "core": "9d86a6633e3fec565f004311f2138d4cfe09dc92cb1ccfcca124468c36ce6f21",
+    "edge": "323042e7b734fa3ca50df5b3a5a149ab5fae3c37c29bc6e163ef99f2007ab115",
+    "processor": "e70cef3aec079fd8cbd153b17613eea1b7ca6413423a495b65411508ec369842"
   },
   "roles": {
     "core": "central bot, finance, licenses, central APIs, GitHub publishing and D1 authority",
@@ -54,14 +54,15 @@
     "README files are excluded",
     "store Bitpin API credentials encrypted with the existing application AES-GCM key",
     "reject duplicate TXIDs and protect wallet crediting with idempotent ledger references",
-    "require administrator review before wallet credit because aggregate exchange balances cannot identify the depositing user"
+    "require administrator review before wallet credit because aggregate exchange balances cannot identify the depositing user",
+    "add the missing paymentCount element to the central finance view",
+    "guard the payment counter render so an optional UI element cannot break administrator login",
+    "make central login error rendering null-safe"
   ],
-  "title": "اتصال بیت‌پین و مدیریت واریز رمزارزی",
+  "title": "رفع خطای ورود مدیریت مرکزی و تکمیل شمارنده پرداخت‌ها",
   "notes": [
-    "افزودن تنظیمات رمزگذاری‌شده API Key و Secret بیت‌پین در مدیریت مرکزی",
-    "تست اتصال و مشاهده موجودی کیف پول رمزارزی از API بیت‌پین",
-    "ثبت درخواست واریز کاربران با مقدار رمزارز و TXID یکتا",
-    "تأیید یا رد مدیریتی و شارژ یک‌باره کیف پول همراه با دفترکل و اعلان تلگرام",
-    "افزودن رابط کاربری واریز بیت‌پین و فهرست درخواست‌های رمزارزی"
+    "رفع خطای Cannot set properties of null هنگام ورود به مدیریت مرکزی",
+    "افزودن شمارنده پرداخت‌های بلوپال و واریزهای بیت‌پین در صفحه مالی",
+    "حفظ کامل امکانات اتصال بیت‌پین نسخه 3.0.5"
   ]
 }
