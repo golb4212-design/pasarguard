@@ -5,7 +5,7 @@
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.1.0";
+const APP_VERSION = "3.1.1";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -14,7 +14,8 @@ const RELEASE_NOTES = Object.freeze({
     { emoji: "⚡", text: "کاهش رفت‌وبرگشت بین Workerها در مسیرهای پرتکرار" },
     { emoji: "🚀", text: "ارسال سریع‌تر منوی شروع با انتقال ثبت گزارش و پاک‌سازی نشست به پس‌زمینه" },
     { emoji: "🧠", text: "کش کوتاه‌مدت تنظیمات و وضعیت عضویت برای پاسخ سریع‌تر" },
-    { emoji: "🪙", text: "افزودن درگاه رمزارزی Plisio با Callback امضاشده و شارژ یک‌باره" }
+    { emoji: "🪙", text: "افزودن درگاه رمزارزی Plisio با Callback امضاشده و شارژ یک‌باره" },
+    { emoji: "🔑", text: "افزودن مدیریت مستقیم API Key پاسارگارد در پنل مرکزی و ربات مرکزی" }
   ]),
   reseller: Object.freeze([
     { emoji: "📦", text: "تجمیع درخواست‌های اولیه پنل فروش و مدیریت در یک Batch دیتابیس" },
@@ -326,6 +327,9 @@ const DEFAULT_SETTINGS = {
   pasarguard_admin_data_limit_bytes: "0",
   pasarguard_sub_domain: "",
   pasarguard_support_url: "",
+  pasarguard_api_key_updated_at: "",
+  pasarguard_api_last_verified_at: "",
+  pasarguard_api_last_error: "",
   github_repo: "golb4212-design/pasarguard",
   github_branch: "main",
   github_worker_file: "core/worker.js",
@@ -1909,6 +1913,10 @@ function adminSettings(settings) {
     pasarguard_admin_data_limit_bytes: Number(settings.pasarguard_admin_data_limit_bytes || 0),
     pasarguard_sub_domain: settings.pasarguard_sub_domain || "",
     pasarguard_support_url: settings.pasarguard_support_url || "",
+    pasarguard_auth_mode: pasarguardAuthMode(settings),
+    pasarguard_api_key_updated_at: settings.pasarguard_api_key_updated_at || "",
+    pasarguard_api_last_verified_at: settings.pasarguard_api_last_verified_at || "",
+    pasarguard_api_last_error: settings.pasarguard_api_last_error || "",
     github_repo: settings.github_repo || "",
     github_branch: settings.github_branch || "main",
     github_worker_file: settings.github_worker_file || "worker.js",
@@ -2692,10 +2700,17 @@ async function notifyVersionActivation(env) {
 
 let pasarguardTokenCache = { token: "", expiresAt: 0 };
 
-function pasarguardBaseUrl(settings) {
-  const raw = String(settings.pasarguard_panel_url || "").trim();
-  if (!raw) throw new Error("آدرس پنل PasarGuard در مدیریت تنظیم نشده است");
+function normalizePasarguardPanelUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) throw new Error("آدرس پنل PasarGuard را وارد کنید");
+  let parsed;
+  try { parsed = new URL(raw); } catch (_) { throw new Error("آدرس پنل PasarGuard معتبر نیست"); }
+  if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("آدرس پنل باید با http یا https شروع شود");
   return raw.replace(/\/+$/, "").replace(/\/dashboard$/i, "");
+}
+
+function pasarguardBaseUrl(settings) {
+  return normalizePasarguardPanelUrl(settings.pasarguard_panel_url);
 }
 
 function pasarguardDashboardUrl(settings) {
@@ -2785,6 +2800,52 @@ async function pasargadRequest(env, method, path, body, retry = true) {
     throw error;
   }
   return data;
+}
+
+async function pasarguardApiKeyProbe(panelUrl, apiKey) {
+  const baseUrl = normalizePasarguardPanelUrl(panelUrl);
+  const key = String(apiKey || "").trim();
+  if (!isPasarguardApiKey(key) || key.length < 20 || /\s/.test(key)) {
+    throw new Error("API Key پاسارگارد معتبر نیست؛ کلید باید با pg_key_ شروع شود");
+  }
+  let response;
+  try {
+    response = await fetchWithTimeout(baseUrl + "/api/admin", {
+      method: "GET",
+      headers: { "x-api-key": key, "accept": "application/json" },
+      redirect: "manual"
+    }, 12000);
+  } catch (error) {
+    if (String(error?.name || "") === "AbortError") throw new Error("پاسخ پنل پاسارگارد طول کشید؛ آدرس پنل یا اتصال را بررسی کنید");
+    throw new Error("اتصال به پنل پاسارگارد برقرار نشد: " + cleanText(error?.message || error, 180));
+  }
+  const parsed = await readJsonResponseSafe(response, "API پاسارگارد");
+  if (!response.ok) {
+    const detail = parsed.data?.detail || parsed.data?.message || parsed.data?.error || ("HTTP " + response.status);
+    if ([401, 403].includes(Number(response.status))) throw new Error("API Key پاسارگارد نامعتبر است یا مجوز لازم را ندارد");
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+  }
+  return { profile: parsed.data || {}, panel_url: baseUrl };
+}
+
+async function testPasarguardApiConnection(env) {
+  const settings = await getSettings(env);
+  try {
+    const result = await pasarguardApiKeyProbe(settings.pasarguard_panel_url, settings.pasarguard_access_token);
+    const verifiedAt = nowIso();
+    await setSettings(env, { pasarguard_api_last_verified_at: verifiedAt, pasarguard_api_last_error: "" });
+    return {
+      success: true,
+      auth_mode: "api_key",
+      panel_url: result.panel_url,
+      username: cleanText(result.profile?.username || result.profile?.profile_title || "", 120),
+      admin_id: result.profile?.id ?? null,
+      verified_at: verifiedAt
+    };
+  } catch (error) {
+    await setSettings(env, { pasarguard_api_last_error: cleanText(error?.message || error, 500) });
+    throw error;
+  }
 }
 
 async function resolvePasarguardRoleId(env, suppliedSettings = null, roleKind = "sales") {
@@ -9092,7 +9153,8 @@ async function botAdminSettingsView(env, account) {
       "🎁 تست رایگان مرکزی: <b>" + (s.central_trial_enabled === "true" ? "فعال" : "غیرفعال") + "</b>\n" +
       "💳 حداقل شارژ: <b>" + botMoney(s.min_recharge) + " تومان</b>\n" +
       "🔐 جوین اجباری: <b>" + (s.central_join_enabled === "true" ? "فعال" : "غیرفعال") + "</b>\n" +
-      "⚙️ همگام‌سازی مصرف: <b>" + (s.usage_sync_enabled === "true" ? "فعال" : "غیرفعال") + "</b>",
+      "⚙️ همگام‌سازی مصرف: <b>" + (s.usage_sync_enabled === "true" ? "فعال" : "غیرفعال") + "</b>\n" +
+      "🔌 API پاسارگارد: <b>" + (isPasarguardApiKey(s.pasarguard_access_token) ? "ثبت شده" : "ثبت نشده") + "</b>",
     reply_markup: { inline_keyboard: [
       [{ text: "💠 قیمت هر گیگ", callback_data: "bot:setting:price_per_gb" }, { text: "💰 حداقل موجودی پنل", callback_data: "bot:setting:setup_fee" }],
       [{ text: "🤖 هزینه ساخت ربات", callback_data: "bot:setting:reseller_bot_setup_fee" }, { text: "🪪 تمدید ماهانه", callback_data: "bot:setting:reseller_bot_license_renewal_fee" }],
@@ -9100,6 +9162,7 @@ async function botAdminSettingsView(env, account) {
       [{ text: "🎁 تنظیم تست مرکزی", callback_data: "bot:admin:trial" }],
       [{ text: "💳 حداقل شارژ", callback_data: "bot:setting:min_recharge" }, { text: "⏱ انقضای فاکتور", callback_data: "bot:setting:pending_invoice_ttl_hours" }],
       [{ text: "🔐 تنظیمات عضویت", callback_data: "bot:admin:settings:access" }, { text: "⚙️ تنظیمات خودکار", callback_data: "bot:admin:settings:automation" }],
+      [{ text: "🔌 اتصال API پاسارگارد", callback_data: "bot:admin:pasarguard_api" }],
       [{ text: "↩️ مدیریت سامانه", callback_data: "bot:admin" }]
     ] }
   };
@@ -9130,6 +9193,32 @@ async function botAdminPlisioView(env, account) {
       [{text:"🧪 بررسی تنظیمات",callback_data:"bot:admin:plisio:test"},{text:enabled?"⏸ غیرفعال‌کردن":"▶️ فعال‌کردن",callback_data:"bot:admin:plisio:toggle"}],
       [{text:"↩️ تعرفه و هزینه‌ها",callback_data:"bot:admin:settings:finance"}]
     ]}
+  };
+}
+
+async function botAdminPasarguardApiView(env, account) {
+  if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+  const settings = await getSettings(env);
+  const panelUrl = cleanText(settings.pasarguard_panel_url, 500);
+  const keySet = isPasarguardApiKey(settings.pasarguard_access_token);
+  const ready = Boolean(panelUrl && keySet);
+  const rows = [
+    [{ text: keySet ? "🔑 تغییر API Key" : "🔑 ثبت API Key", callback_data: "bot:admin:pasarguard_api:key" }],
+    [{ text: "🌐 تغییر آدرس پنل", callback_data: "bot:admin:pasarguard_api:url" }, { text: "🧪 تست اتصال", callback_data: "bot:admin:pasarguard_api:test" }]
+  ];
+  if (keySet) rows.push([{ text: "🗑 حذف API Key", callback_data: "bot:admin:pasarguard_api:delete" }]);
+  rows.push([{ text: "↩️ تنظیمات سامانه", callback_data: "bot:admin:settings" }]);
+  return {
+    text: "🔌 <b>اتصال API پاسارگارد</b>\n━━━━━━━━━━━━━━\n" +
+      "وضعیت: <b>" + (ready ? "🟢 آماده استفاده" : "🔴 تنظیمات ناقص") + "</b>\n" +
+      "آدرس پنل: <code>" + botEscape(panelUrl || "ثبت نشده") + "</code>\n" +
+      "API Key: <b>" + (keySet ? "ثبت شده و مخفی" : "ثبت نشده") + "</b>\n" +
+      "حالت اتصال: <b>" + (keySet ? "X-Api-Key" : "نام کاربری و رمز / توکن قدیمی") + "</b>\n" +
+      (settings.pasarguard_api_key_updated_at ? "آخرین تغییر کلید: <b>" + botDate(settings.pasarguard_api_key_updated_at) + "</b>\n" : "") +
+      (settings.pasarguard_api_last_verified_at ? "آخرین تست موفق: <b>" + botDate(settings.pasarguard_api_last_verified_at) + "</b>\n" : "") +
+      (settings.pasarguard_api_last_error ? "\n⚠️ آخرین خطا:\n<code>" + botEscape(settings.pasarguard_api_last_error) + "</code>" : "") +
+      "\n\nکلید باید از بخش API Keys پنل PasarGuard ساخته شود و با <code>pg_key_</code> شروع شود.",
+    reply_markup: { inline_keyboard: rows }
   };
 }
 
@@ -9340,6 +9429,7 @@ async function botRenderView(env, account, view) {
   if (view === "admin_trial") return botAdminTrialView(env, account);
   if (view === "admin_settings_finance") return botAdminSettingsGroupView(env, account, "finance");
   if (view === "admin_plisio") return botAdminPlisioView(env, account);
+  if (view === "admin_pasarguard_api") return botAdminPasarguardApiView(env, account);
   if (view === "admin_settings_access") return botAdminSettingsGroupView(env, account, "access");
   if (view === "admin_settings_automation") return botAdminSettingsGroupView(env, account, "automation");
   if (view === "admin_join_channels") return botAdminJoinChannelsView(env, account);
@@ -9741,6 +9831,39 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
   }
   if (data === "bot:admin:settings:finance") {
     await botSendOrEdit(env, { account, chatId, messageId }, "admin_settings_finance");
+    return;
+  }
+  if (data === "bot:admin:pasarguard_api") { await botSendOrEdit(env, { account, chatId, messageId }, "admin_pasarguard_api"); return; }
+  if (data === "bot:admin:pasarguard_api:key") {
+    if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+    await botSetSession(env, account.user.telegram_id, "setting_pasarguard_api_key", {});
+    await botPrompt(env, chatId, "🔑 <b>ثبت API Key پاسارگارد</b>\n\nکلید ساخته‌شده در پنل PasarGuard را ارسال کنید. کلید باید با <code>pg_key_</code> شروع شود.\n\nپیام شما پس از بررسی و ذخیره حذف می‌شود.");
+    return;
+  }
+  if (data === "bot:admin:pasarguard_api:url") {
+    if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+    await botSetSession(env, account.user.telegram_id, "setting_pasarguard_panel_url", {});
+    await botPrompt(env, chatId, "🌐 آدرس کامل پنل PasarGuard را ارسال کنید.\nمثال: <code>https://panel.example.com</code>");
+    return;
+  }
+  if (data === "bot:admin:pasarguard_api:test") {
+    if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+    const result = await testPasarguardApiConnection(env);
+    await botPrompt(env, chatId, "✅ اتصال API پاسارگارد موفق بود.\nآدرس: <code>" + botEscape(result.panel_url) + "</code>" + (result.username ? "\nمدیر: <b>" + botEscape(result.username) + "</b>" : ""), [[{ text: "↩️ اتصال API", callback_data: "bot:admin:pasarguard_api" }]]);
+    return;
+  }
+  if (data === "bot:admin:pasarguard_api:delete") {
+    if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+    await botPrompt(env, chatId, "⚠️ API Key پاسارگارد حذف شود؟ پس از حذف، سامانه به روش نام کاربری و رمز یا Access Token قدیمی برمی‌گردد.", [[{ text: "✅ بله، حذف شود", callback_data: "bot:admin:pasarguard_api:delete_confirm" }], [{ text: "لغو", callback_data: "bot:admin:pasarguard_api" }]]);
+    return;
+  }
+  if (data === "bot:admin:pasarguard_api:delete_confirm") {
+    if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+    await setSettings(env, { pasarguard_access_token: "", pasarguard_api_key_updated_at: nowIso(), pasarguard_api_last_verified_at: "", pasarguard_api_last_error: "" });
+    pasarguardTokenCache = { token: "", expiresAt: 0 };
+    await audit(env, account.user.id, "pasarguard_api_key_deleted", {});
+    const fresh = await ensureTelegramBotUser(env, callback.from); fresh.public_origin = origin;
+    await botSendOrEdit(env, { account: fresh, chatId, messageId }, "admin_pasarguard_api");
     return;
   }
   if (data === "bot:admin:plisio") { await botSendOrEdit(env,{account,chatId,messageId},"admin_plisio"); return; }
@@ -10886,6 +11009,41 @@ async function botHandleSessionMessage(env, account, message, session, origin, c
     return true;
   }
 
+  if (session.state === "setting_pasarguard_api_key") {
+    if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+    const apiKey = cleanText(text, 2048);
+    const settings = await getSettings(env);
+    let probe;
+    try { probe = await pasarguardApiKeyProbe(settings.pasarguard_panel_url, apiKey); }
+    catch (error) { await setSettings(env, { pasarguard_api_last_error: cleanText(error?.message || error, 500) }); throw error; }
+    const ts = nowIso();
+    await setSettings(env, { pasarguard_access_token: apiKey, pasarguard_api_key_updated_at: ts, pasarguard_api_last_verified_at: ts, pasarguard_api_last_error: "" });
+    pasarguardTokenCache = { token: "", expiresAt: 0 };
+    await audit(env, account.user.id, "pasarguard_api_key_saved", { panel_url: probe.panel_url, auth_mode: "api_key" });
+    await botClearSession(env, account.user.telegram_id);
+    try { await telegramApi(env, "deleteMessage", { chat_id: chatId, message_id: message.message_id }); } catch (_) {}
+    const fresh = await ensureTelegramBotUser(env, message.from); fresh.public_origin = origin;
+    await botSendOrEdit(env, { account: fresh, chatId }, "admin_pasarguard_api");
+    return true;
+  }
+  if (session.state === "setting_pasarguard_panel_url") {
+    if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+    const panelUrl = normalizePasarguardPanelUrl(text);
+    const settings = await getSettings(env);
+    const values = { pasarguard_panel_url: panelUrl, pasarguard_api_last_error: "" };
+    if (isPasarguardApiKey(settings.pasarguard_access_token)) {
+      try { await pasarguardApiKeyProbe(panelUrl, settings.pasarguard_access_token); }
+      catch (error) { await setSettings(env, { pasarguard_api_last_error: cleanText(error?.message || error, 500) }); throw error; }
+      values.pasarguard_api_last_verified_at = nowIso();
+    }
+    await setSettings(env, values);
+    pasarguardTokenCache = { token: "", expiresAt: 0 };
+    await audit(env, account.user.id, "pasarguard_panel_url_changed", { panel_url: panelUrl, api_retested: Boolean(values.pasarguard_api_last_verified_at) });
+    await botClearSession(env, account.user.telegram_id);
+    const fresh = await ensureTelegramBotUser(env, message.from); fresh.public_origin = origin;
+    await botSendOrEdit(env, { account: fresh, chatId }, "admin_pasarguard_api");
+    return true;
+  }
   if (["setting_plisio_key","setting_plisio_rate","setting_plisio_currencies","setting_plisio_expire"].includes(session.state)) {
     if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");const values={};
     if(session.state==="setting_plisio_key"){if(text.length<12)throw new Error("Secret Key معتبر نیست");values.plisio_api_key="enc:"+await encryptSecret(text,env);try{await telegramApi(env,"deleteMessage",{chat_id:chatId,message_id:message.message_id})}catch(_){}}
@@ -11522,6 +11680,34 @@ async function centralAdminAction(request, env) {
   const body = await parseBody(request);
   const action = cleanText(body.action, 80);
   try {
+    if (action === "save_pasarguard_api") {
+      const current = await getSettings(env);
+      const panelUrl = normalizePasarguardPanelUrl(body.panel_url || current.pasarguard_panel_url);
+      const submittedKey = cleanText(body.api_key, 2048);
+      const apiKey = submittedKey || (isPasarguardApiKey(current.pasarguard_access_token) ? String(current.pasarguard_access_token) : "");
+      if (!apiKey) throw new Error("API Key پاسارگارد را وارد کنید");
+      let probe;
+      try { probe = await pasarguardApiKeyProbe(panelUrl, apiKey); }
+      catch (error) { await setSettings(env, { pasarguard_api_last_error: cleanText(error?.message || error, 500) }); throw error; }
+      const ts = nowIso();
+      const values = { pasarguard_panel_url: panelUrl, pasarguard_api_last_verified_at: ts, pasarguard_api_last_error: "" };
+      if (submittedKey) { values.pasarguard_access_token = apiKey; values.pasarguard_api_key_updated_at = ts; }
+      await setSettings(env, values);
+      pasarguardTokenCache = { token: "", expiresAt: 0 };
+      await audit(env, auth.user.id, "pasarguard_api_saved_from_central_panel", { panel_url: panelUrl, key_changed: Boolean(submittedKey), username: cleanText(probe.profile?.username || "", 120) });
+      return json({ success: true, message: "API پاسارگارد ذخیره و اتصال آن تأیید شد", result: { panel_url: panelUrl, username: cleanText(probe.profile?.username || probe.profile?.profile_title || "", 120), verified_at: ts } });
+    }
+    if (action === "test_pasarguard_api") {
+      const result = await testPasarguardApiConnection(env);
+      await audit(env, auth.user.id, "pasarguard_api_tested_from_central_panel", { panel_url: result.panel_url, username: result.username || "" });
+      return json({ success: true, message: "اتصال API پاسارگارد موفق بود", result });
+    }
+    if (action === "delete_pasarguard_api") {
+      await setSettings(env, { pasarguard_access_token: "", pasarguard_api_key_updated_at: nowIso(), pasarguard_api_last_verified_at: "", pasarguard_api_last_error: "" });
+      pasarguardTokenCache = { token: "", expiresAt: 0 };
+      await audit(env, auth.user.id, "pasarguard_api_deleted_from_central_panel", {});
+      return json({ success: true, message: "API Key پاسارگارد حذف شد" });
+    }
     if (action === "save_sales_settings") {
       const currentSalesSettings = await getSettings(env);
       const agencyEnabled = body.agency_sales_enabled === undefined

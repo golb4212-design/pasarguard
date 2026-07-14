@@ -1,6 +1,6 @@
 {
-  "version": "3.1.0",
-  "release_id": "3.1.0-20260714-pasarguard-v5.1-compat",
+  "version": "3.1.1",
+  "release_id": "3.1.1-20260714-central-pasarguard-api-manager",
   "architecture": "fully-split-three-worker",
   "files": {
     "core": "core/worker.js",
@@ -8,9 +8,9 @@
     "processor": "processor/worker.js"
   },
   "sha256": {
-    "core": "018f766bdcc270d97e26e2b34e202fb34eb172f299e1f3c0f17f8cf031d5cebd",
-    "edge": "3a454d43598ef115ea3fbbd8c139597ccb0a477d330cffcd22727decee885061",
-    "processor": "7820afc5b301d24f6c88dea745d2d78a38680ee20d1655b9983f93fe022ea3cf"
+    "core": "9e3aa18a5a9637f41cd809439301867410bcfdc24dcb49dabac3da281e8e50c9",
+    "edge": "ccc67f7f3573889e56a53988399316253775e59cd8147baf06adf5c2c4771278",
+    "processor": "80b92ee3170ac0673daff4f3682e66f759a6ac1cb8bc4025b0edaafe371cb30b"
   },
   "roles": {
     "core": "central bot, finance, licenses, PasarGuard owner integration, central Plisio invoices and callbacks, central APIs and D1 authority",
@@ -35,22 +35,23 @@
     ]
   },
   "features": [
-    "update compatibility baseline from PasarGuard 5.0.3 to PasarGuard 5.1.0",
-    "support the new PasarGuard pg_key_ API keys through the existing access-token setting",
-    "send PasarGuard API keys with X-Api-Key while preserving Bearer access-token and username/password fallback modes",
-    "keep admin creation, role assignment, user creation, user update, usage sync and revoke-subscription endpoints compatible",
-    "show the detected PasarGuard authentication mode in control diagnostics",
-    "improve authentication errors for invalid API keys, insufficient API-key permissions and expired legacy access tokens",
-    "add the API-key field to first-run setup and clarify it in the advanced management panel",
-    "keep Plisio, BluePal, card-to-card and wallet flows unchanged",
+    "add a prominent PasarGuard API Key manager to the central web control panel",
+    "add PasarGuard API Key registration, panel URL change, connection test and deletion to the central Telegram bot",
+    "validate pg_key_ credentials against /api/admin before saving",
+    "hide the API key after storage and delete the Telegram message containing it",
+    "record last successful API verification and the last connection error",
+    "preserve legacy username/password and bearer access-token fallback modes",
+    "keep Plisio, BluePal, reseller bots and the fully split three-worker architecture unchanged",
     "README files are excluded"
   ],
   "validation": {
     "javascript_syntax": "passed for core, edge and processor",
-    "pasarguard_v51_auth_header_model": "passed: pg_key_ uses X-Api-Key; legacy token and password sessions use Bearer",
-    "legacy_password_and_bearer_fallback": "passed by static compatibility assertions",
-    "pasarguard_endpoint_compatibility_review": "admin and user endpoints reviewed against upstream v5.1.0",
-    "live_pasarguard_v51_call": "not run; no live panel credentials were supplied",
-    "setup_and_admin_ui": "passed: optional API key is accepted and secret fields remain masked"
+    "embedded_panel_scripts": "passed for central control and advanced management HTML scripts",
+    "central_bot_api_manager": "passed by static route, callback and session assertions",
+    "central_web_api_manager": "passed by static DOM, form-handler and backend-action assertions",
+    "api_key_validation": "pg_key_ format checked and /api/admin is called before saving",
+    "secret_exposure": "API key stays masked in bootstrap, is not returned by save actions, and Telegram source messages are deleted",
+    "legacy_auth_fallback": "username/password and legacy bearer token modes remain available after API-key deletion",
+    "live_pasarguard_call": "not run; no live panel API key was supplied"
   }
 }
