@@ -1,6 +1,6 @@
 {
-  "version": "3.0.9",
-  "release_id": "3.0.9-20260714-plisio-clean",
+  "version": "3.1.0",
+  "release_id": "3.1.0-20260714-pasarguard-v5.1-compat",
   "architecture": "fully-split-three-worker",
   "files": {
     "core": "core/worker.js",
@@ -8,12 +8,12 @@
     "processor": "processor/worker.js"
   },
   "sha256": {
-    "core": "91b6c6a835e72b954ef080dffcb37f63867904ccc1e10206d6fa7e26bb332e5d",
-    "edge": "99e40d5f774f95b2a99384b75de304f180f65b0ef011e322ec9f5dbf22ed15c6",
-    "processor": "9e1f2eb6c89e829b4f7dee4fa17d3736dbeff5f2cec431ffcd4534bd7a4b2c13"
+    "core": "018f766bdcc270d97e26e2b34e202fb34eb172f299e1f3c0f17f8cf031d5cebd",
+    "edge": "3a454d43598ef115ea3fbbd8c139597ccb0a477d330cffcd22727decee885061",
+    "processor": "7820afc5b301d24f6c88dea745d2d78a38680ee20d1655b9983f93fe022ea3cf"
   },
   "roles": {
-    "core": "central bot, finance, licenses, central Plisio invoices and callbacks, central APIs and D1 authority",
+    "core": "central bot, finance, licenses, PasarGuard owner integration, central Plisio invoices and callbacks, central APIs and D1 authority",
     "edge": "web panels, reseller bots, customer miniapps, reseller Plisio invoices and callbacks, and latency-sensitive request handling",
     "processor": "reports, retry queue, backups and background jobs"
   },
@@ -35,23 +35,22 @@
     ]
   },
   "features": [
-    "remove the previous exchange integration, menus, settings and database migrations",
-    "add Plisio invoice payment to the central bot wallet recharge flow",
-    "add independent Plisio configuration and wallet recharge to every reseller bot and reseller miniapp",
-    "verify Plisio JSON callbacks using HMAC-SHA1 and the shop Secret Key",
-    "credit wallets exactly once with duplicate callback and duplicate ledger protection",
-    "store reseller Plisio settings in a separate table to avoid the D1 reseller_bots column limit",
-    "encrypt Plisio Secret Keys and delete Telegram messages containing secrets after storage",
-    "use callback-only payment confirmation without Plisio balance or transaction polling",
-    "keep BluePal, card-to-card and internal wallet payment methods unchanged",
+    "update compatibility baseline from PasarGuard 5.0.3 to PasarGuard 5.1.0",
+    "support the new PasarGuard pg_key_ API keys through the existing access-token setting",
+    "send PasarGuard API keys with X-Api-Key while preserving Bearer access-token and username/password fallback modes",
+    "keep admin creation, role assignment, user creation, user update, usage sync and revoke-subscription endpoints compatible",
+    "show the detected PasarGuard authentication mode in control diagnostics",
+    "improve authentication errors for invalid API keys, insufficient API-key permissions and expired legacy access tokens",
+    "add the API-key field to first-run setup and clarify it in the advanced management panel",
+    "keep Plisio, BluePal, card-to-card and wallet flows unchanged",
     "README files are excluded"
   ],
   "validation": {
     "javascript_syntax": "passed for core, edge and processor",
-    "plisio_callback_hmac_model": "passed",
-    "exactly_once_credit_model": "passed",
-    "d1_schema_and_invoice_sql": "passed",
-    "live_plisio_payment": "not run; a real Plisio shop Secret Key was not supplied",
-    "legacy_exchange_reference_scan": "passed; no legacy exchange references remain"
+    "pasarguard_v51_auth_header_model": "passed: pg_key_ uses X-Api-Key; legacy token and password sessions use Bearer",
+    "legacy_password_and_bearer_fallback": "passed by static compatibility assertions",
+    "pasarguard_endpoint_compatibility_review": "admin and user endpoints reviewed against upstream v5.1.0",
+    "live_pasarguard_v51_call": "not run; no live panel credentials were supplied",
+    "setup_and_admin_ui": "passed: optional API key is accepted and secret fields remain masked"
   }
 }

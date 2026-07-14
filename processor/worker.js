@@ -5,7 +5,7 @@
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = "3.0.9";
+const APP_VERSION = "3.1.0";
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",

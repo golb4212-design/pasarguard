@@ -5,7 +5,7 @@
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.0.9";
+const APP_VERSION = "3.1.0";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -2271,6 +2271,8 @@ async function centralControlAuthStatus(env) {
     panel_host: panelHost,
     owner_username_configured: Boolean(settings.pasarguard_admin_username),
     owner_password_configured: Boolean(settings.pasarguard_admin_password),
+    panel_auth_mode: pasarguardAuthMode(settings),
+    pasarguard_v51_api_key_ready: isPasarguardApiKey(settings.pasarguard_access_token),
     passwordless_control_login: false,
     password_control_login: true,
     central_bot_username: settings.central_bot_username || "",
@@ -2700,9 +2702,34 @@ function pasarguardDashboardUrl(settings) {
   return pasarguardBaseUrl(settings) + "/dashboard";
 }
 
+function isPasarguardApiKey(value) {
+  return String(value || "").trim().startsWith("pg_key_");
+}
+
+function pasarguardAuthMode(settings) {
+  const configured = String(settings?.pasarguard_access_token || "").trim();
+  if (isPasarguardApiKey(configured)) return "api_key";
+  if (configured) return "access_token";
+  if (settings?.pasarguard_admin_username && settings?.pasarguard_admin_password) return "password";
+  return "missing";
+}
+
+async function pasarguardRequestAuth(env, settings) {
+  const configured = String(settings?.pasarguard_access_token || "").trim();
+  if (isPasarguardApiKey(configured)) {
+    return { mode: "api_key", headers: { "x-api-key": configured } };
+  }
+  if (configured) {
+    return { mode: "access_token", headers: { authorization: "Bearer " + configured } };
+  }
+  const token = await getPasarguardToken(env, false, settings);
+  return { mode: "password", headers: { authorization: "Bearer " + token } };
+}
+
 async function getPasarguardToken(env, forceRefresh = false, suppliedSettings = null) {
   const settings = suppliedSettings || await getSettings(env);
-  if (settings.pasarguard_access_token) return String(settings.pasarguard_access_token).trim();
+  const configuredAuth = String(settings.pasarguard_access_token || "").trim();
+  if (configuredAuth && !isPasarguardApiKey(configuredAuth)) return configuredAuth;
   if (!forceRefresh && pasarguardTokenCache.token && pasarguardTokenCache.expiresAt > Date.now() + 60000) {
     return pasarguardTokenCache.token;
   }
@@ -2728,16 +2755,16 @@ async function getPasarguardToken(env, forceRefresh = false, suppliedSettings = 
 
 async function pasargadRequest(env, method, path, body, retry = true) {
   const settings = await getSettings(env);
-  const token = await getPasarguardToken(env, false, settings);
+  const auth = await pasarguardRequestAuth(env, settings);
   const response = await fetch(pasarguardBaseUrl(settings) + path, {
     method,
     headers: {
-      authorization: "Bearer " + token,
+      ...auth.headers,
       ...(body === undefined ? {} : { "content-type": "application/json" })
     },
     body: body === undefined ? undefined : JSON.stringify(body)
   });
-  if (response.status === 401 && retry && !settings.pasarguard_access_token) {
+  if (response.status === 401 && retry && auth.mode === "password") {
     pasarguardTokenCache = { token: "", expiresAt: 0 };
     return pasargadRequest(env, method, path, body, false);
   }
@@ -2745,8 +2772,17 @@ async function pasargadRequest(env, method, path, body, retry = true) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const detail = data.detail || data.message || data.error || ("HTTP " + response.status);
-    const text = typeof detail === "string" ? detail : JSON.stringify(detail);
-    throw new Error(text);
+    let message = typeof detail === "string" ? detail : JSON.stringify(detail);
+    if (auth.mode === "api_key" && [401, 403].includes(Number(response.status))) {
+      message = "API Key پاسارگارد نامعتبر است یا مجوز لازم برای این عملیات را ندارد";
+    } else if (auth.mode === "access_token" && Number(response.status) === 401) {
+      message = "Access Token پاسارگارد منقضی یا نامعتبر است";
+    }
+    const error = new Error(message);
+    error.status = response.status;
+    error.authMode = auth.mode;
+    error.details = data;
+    throw error;
   }
   return data;
 }
@@ -11315,6 +11351,7 @@ async function installApp(request, env) {
     auto_update_interval_seconds: "5",
     app_url: canonicalAppUrl(body.app_url, new URL(request.url).origin),
     pasarguard_panel_url: cleanText(body.pasarguard_panel_url, 500),
+    pasarguard_access_token: cleanText(body.pasarguard_access_token, 2048),
     pasarguard_admin_username: cleanText(body.pasarguard_admin_username, 200),
     pasarguard_admin_password: cleanText(body.pasarguard_admin_password, 2048),
     pasarguard_reseller_role_id: cleanText(body.pasarguard_reseller_role_id, 50),
