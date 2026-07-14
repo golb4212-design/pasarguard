@@ -1,11 +1,11 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.0.4
+ * Version: 3.0.5
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.0.4";
+const APP_VERSION = "3.0.5";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -274,6 +274,17 @@ const DEFAULT_SETTINGS = {
   blupal_api_key: "",
   blupal_card_number: "",
   blupal_webhook_token: "",
+  bitpin_enabled: "false",
+  bitpin_base_url: "https://api.bitpin.ir",
+  bitpin_api_key: "",
+  bitpin_api_secret: "",
+  bitpin_asset: "USDT",
+  bitpin_network: "TRC20",
+  bitpin_deposit_address: "",
+  bitpin_toman_per_unit: "100000",
+  bitpin_min_crypto_amount: "1",
+  bitpin_last_verified_at: "",
+  bitpin_last_error: "",
   payment_poll_enabled: "true",
   auto_delete_pending_invoices: "true",
   pending_invoice_ttl_hours: "24",
@@ -356,7 +367,7 @@ const DEFAULT_SETTINGS = {
 const SECRET_SETTING_KEYS = new Set([
   "bot_token", "app_encryption_key", "telegram_webhook_secret",
   "pasarguard_access_token", "pasarguard_admin_password",
-  "blupal_api_key", "blupal_webhook_token",
+  "blupal_api_key", "blupal_webhook_token", "bitpin_api_key", "bitpin_api_secret",
   "github_token", "cf_api_token", "edge_worker_api_key", "setup_password_hash", "setup_password_salt"
 ]);
 
@@ -436,6 +447,31 @@ CREATE TABLE IF NOT EXISTS payment_invoices (
 
 CREATE INDEX IF NOT EXISTS idx_payment_invoices_user ON payment_invoices(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_payment_invoices_status ON payment_invoices(status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS bitpin_deposits (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  asset TEXT NOT NULL DEFAULT 'USDT',
+  network TEXT NOT NULL DEFAULT 'TRC20',
+  txid TEXT NOT NULL UNIQUE,
+  crypto_amount REAL NOT NULL,
+  rate_toman INTEGER NOT NULL,
+  amount_toman INTEGER NOT NULL,
+  destination_address TEXT,
+  status TEXT NOT NULL DEFAULT 'pending_review',
+  wallet_balance_snapshot TEXT,
+  provider_payload TEXT,
+  note TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  reviewed_at TEXT,
+  reviewed_by INTEGER,
+  credited_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bitpin_deposits_user ON bitpin_deposits(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bitpin_deposits_status ON bitpin_deposits(status, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS agencies (
   id TEXT PRIMARY KEY,
@@ -1795,6 +1831,13 @@ function publicSettings(settings) {
     release_last_announcement_error: settings.release_last_announcement_error || "",
     min_recharge: Number(settings.min_recharge || 0),
     payment_provider: "blupal",
+    bitpin_enabled: settings.bitpin_enabled === "true" && Boolean(settings.bitpin_deposit_address),
+    bitpin_asset: settings.bitpin_asset || "USDT",
+    bitpin_network: settings.bitpin_network || "TRC20",
+    bitpin_deposit_address: settings.bitpin_deposit_address || "",
+    bitpin_toman_per_unit: Number(settings.bitpin_toman_per_unit || 0),
+    bitpin_min_crypto_amount: Number(settings.bitpin_min_crypto_amount || 0),
+    bitpin_review_mode: "txid_manual_review",
     support_username: settings.support_username || "",
     version: APP_VERSION
   };
@@ -1833,6 +1876,15 @@ function adminSettings(settings) {
     support_username: settings.support_username || "",
     blupal_base_url: settings.blupal_base_url || "https://blupal.net/api",
     blupal_card_number: settings.blupal_card_number || "",
+    bitpin_enabled: settings.bitpin_enabled === "true",
+    bitpin_base_url: settings.bitpin_base_url || "https://api.bitpin.ir",
+    bitpin_asset: settings.bitpin_asset || "USDT",
+    bitpin_network: settings.bitpin_network || "TRC20",
+    bitpin_deposit_address: settings.bitpin_deposit_address || "",
+    bitpin_toman_per_unit: Number(settings.bitpin_toman_per_unit || 0),
+    bitpin_min_crypto_amount: Number(settings.bitpin_min_crypto_amount || 0),
+    bitpin_last_verified_at: settings.bitpin_last_verified_at || "",
+    bitpin_last_error: settings.bitpin_last_error || "",
     payment_poll_enabled: settings.payment_poll_enabled === "true",
     auto_delete_pending_invoices: settings.auto_delete_pending_invoices === "true",
     pending_invoice_ttl_hours: Number(settings.pending_invoice_ttl_hours || 24),
@@ -3666,6 +3718,11 @@ async function bootstrap(request, env) {
            payment_link, card_number, paid_at, credited_at, created_at, updated_at
     FROM payment_invoices WHERE user_id=? ORDER BY created_at DESC LIMIT 30
   `).bind(auth.user.id).all();
+  const bitpinDeposits = await env.PASARGUARD_DB.prepare(`
+    SELECT id,asset,network,txid,crypto_amount,rate_toman,amount_toman,destination_address,status,note,
+           created_at,updated_at,reviewed_at,credited_at
+    FROM bitpin_deposits WHERE user_id=? ORDER BY created_at DESC LIMIT 30
+  `).bind(auth.user.id).all();
   const ledger = await env.PASARGUARD_DB.prepare(`
     SELECT id, type, amount, balance_after, description, created_at
     FROM wallet_ledger WHERE user_id=? ORDER BY created_at DESC LIMIT 40
@@ -3694,12 +3751,18 @@ async function bootstrap(request, env) {
       FROM payment_invoices p JOIN users u ON u.id=p.user_id
       ORDER BY p.created_at DESC LIMIT 100
     `).all();
+    const recentBitpinDeposits = await env.PASARGUARD_DB.prepare(`
+      SELECT d.id,d.asset,d.network,d.txid,d.crypto_amount,d.rate_toman,d.amount_toman,d.status,d.note,
+             d.created_at,d.updated_at,d.reviewed_at,d.credited_at,u.telegram_id,u.username,u.first_name,u.last_name
+      FROM bitpin_deposits d JOIN users u ON u.id=d.user_id
+      ORDER BY d.created_at DESC LIMIT 100
+    `).all();
     const stats = await env.PASARGUARD_DB.prepare(`
       SELECT
         (SELECT COUNT(*) FROM users) AS users_count,
         (SELECT COUNT(*) FROM agencies) AS agencies_count,
         (SELECT COUNT(*) FROM agencies WHERE status='active') AS active_agencies,
-        (SELECT COUNT(*) FROM payment_invoices WHERE status='PENDING') AS pending_payments,
+        ((SELECT COUNT(*) FROM payment_invoices WHERE status='PENDING') + (SELECT COUNT(*) FROM bitpin_deposits WHERE status='pending_review')) AS pending_payments,
         (SELECT COALESCE(SUM(wallet_balance),0) FROM users) AS total_wallet_balance,
         (SELECT COALESCE(SUM(total_charged),0) FROM agencies) AS total_usage_revenue
     `).first();
@@ -3715,6 +3778,7 @@ async function bootstrap(request, env) {
     configuration.python_helper_binding_detected = Boolean(env.PY_HELPER && typeof env.PY_HELPER.fetch === "function");
     admin = {
       recentPayments: recentPayments.results || [],
+      recentBitpinDeposits: recentBitpinDeposits.results || [],
       users: users.results || [],
       stats,
       configuration
@@ -3736,6 +3800,7 @@ async function bootstrap(request, env) {
     central_trial: centralTrial,
     agencies: agencyList,
     payments: paymentList,
+    bitpin_deposits: bitpinDeposits.results || [],
     ledger: ledger.results || [],
     dashboard_insight: dashboardInsightResult,
     pasarguard_sync: pasarguardSync,
@@ -3803,6 +3868,258 @@ async function blupalRequest(env, method, path, body = undefined) {
     throw error;
   }
   return data;
+}
+
+
+function normalizeBitpinBaseUrl(value) {
+  const raw = String(value || "https://api.bitpin.ir").trim();
+  let url;
+  try { url = new URL(raw); } catch (_) { throw new Error("آدرس API بیت‌پین معتبر نیست"); }
+  if (url.protocol !== "https:" || url.hostname.toLowerCase() !== "api.bitpin.ir") {
+    throw new Error("آدرس API بیت‌پین باید https://api.bitpin.ir باشد");
+  }
+  return "https://api.bitpin.ir";
+}
+
+function bitpinWalletRows(payload) {
+  if (Array.isArray(payload)) return payload;
+  for (const key of ["results", "wallets", "data", "items"]) {
+    if (Array.isArray(payload?.[key])) return payload[key];
+  }
+  if (payload?.data && typeof payload.data === "object") {
+    for (const key of ["results", "wallets", "items"]) if (Array.isArray(payload.data[key])) return payload.data[key];
+  }
+  return [];
+}
+
+function bitpinWalletSymbol(row) {
+  return cleanText(
+    row?.currency?.code || row?.currency?.symbol || row?.currency?.title || row?.symbol || row?.code ||
+    row?.currency_symbol || row?.asset || row?.coin || row?.name,
+    40
+  ).toUpperCase();
+}
+
+function bitpinWalletBalance(row) {
+  const candidates = [row?.available_balance, row?.available, row?.balance, row?.total_balance, row?.total, row?.amount, row?.credit];
+  for (const value of candidates) {
+    const number = Number(value);
+    if (Number.isFinite(number)) return number;
+  }
+  return 0;
+}
+
+function sanitizeBitpinWallets(payload) {
+  return bitpinWalletRows(payload).slice(0, 250).map(row => ({
+    asset: bitpinWalletSymbol(row),
+    balance: bitpinWalletBalance(row),
+    frozen: Number(row?.frozen_balance ?? row?.frozen ?? row?.blocked ?? 0) || 0
+  })).filter(row => row.asset);
+}
+
+async function bitpinSettingSecret(settings, key, env) {
+  const raw = String(settings?.[key] || "").trim();
+  if (!raw) return "";
+  if (!raw.startsWith("enc:")) return raw;
+  try { return await decryptSecret(raw.slice(4), env); }
+  catch (_) {
+    const error = new Error("رمزگشایی اطلاعات اتصال بیت‌پین ناموفق بود؛ کلید رمزگذاری برنامه را بررسی کنید");
+    error.code = "BITPIN_SECRET_DECRYPT_FAILED";
+    error.status = 500;
+    throw error;
+  }
+}
+
+async function bitpinApiSession(settings, env) {
+  const apiKey = (await bitpinSettingSecret(settings, "bitpin_api_key", env)).trim();
+  const apiSecret = (await bitpinSettingSecret(settings, "bitpin_api_secret", env)).trim();
+  if (!apiKey || !apiSecret) {
+    const error = new Error("API Key و Secret بیت‌پین در تنظیمات ثبت نشده است");
+    error.code = "BITPIN_NOT_CONFIGURED";
+    error.status = 400;
+    throw error;
+  }
+  const base = normalizeBitpinBaseUrl(settings.bitpin_base_url);
+  const response = await fetchWithTimeout(base + "/v1/usr/api/login/", {
+    method: "POST",
+    headers: { "content-type": "application/json", "accept": "application/json" },
+    body: JSON.stringify({ api_key: apiKey, secret_key: apiSecret })
+  }, 15000);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data?.access) {
+    const error = new Error(cleanText(data?.detail || data?.message || data?.error || ("Bitpin HTTP " + response.status), 500));
+    error.code = "BITPIN_LOGIN_FAILED";
+    error.status = response.status || 502;
+    throw error;
+  }
+  return { base, access: String(data.access), refresh: String(data.refresh || "") };
+}
+
+async function fetchBitpinWallets(settings, env) {
+  const session = await bitpinApiSession(settings, env);
+  const response = await fetchWithTimeout(session.base + "/v1/wlt/wallets/", {
+    method: "GET",
+    headers: { "accept": "application/json", "Authorization": "Bearer " + session.access }
+  }, 15000);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(cleanText(data?.detail || data?.message || data?.error || ("Bitpin HTTP " + response.status), 500));
+    error.code = "BITPIN_WALLETS_FAILED";
+    error.status = response.status || 502;
+    throw error;
+  }
+  return { raw: data, wallets: sanitizeBitpinWallets(data) };
+}
+
+async function recordBitpinConnectionState(env, success, errorMessage = "") {
+  const values = success
+    ? { bitpin_last_verified_at: nowIso(), bitpin_last_error: "" }
+    : { bitpin_last_error: cleanText(errorMessage, 800) };
+  try { await setSettings(env, values); } catch (_) {}
+}
+
+async function testBitpinConnection(request, env) {
+  const auth = await requireAuth(request, env, true);
+  if (auth.response) return auth.response;
+  const settings = await getSettings(env);
+  try {
+    const snapshot = await fetchBitpinWallets(settings, env);
+    await recordBitpinConnectionState(env, true);
+    const asset = String(settings.bitpin_asset || "USDT").toUpperCase();
+    const selected = snapshot.wallets.find(row => row.asset === asset) || null;
+    await audit(env, auth.user.id, "bitpin_connection_tested", { asset, walletFound: Boolean(selected) });
+    return json({ success: true, asset, selected_wallet: selected, wallets: snapshot.wallets });
+  } catch (error) {
+    await recordBitpinConnectionState(env, false, error.message);
+    return fail("اتصال به بیت‌پین ناموفق بود: " + error.message, error.status || 502, error.code || "BITPIN_TEST_FAILED");
+  }
+}
+
+async function createBitpinDepositClaim(request, env) {
+  const auth = await requireAuth(request, env);
+  if (auth.response) return auth.response;
+  const settings = await getSettings(env);
+  if (settings.bitpin_enabled !== "true") return fail("واریز رمزارزی بیت‌پین غیرفعال است", 403, "BITPIN_DISABLED");
+  const address = cleanText(settings.bitpin_deposit_address, 300);
+  if (!address) return fail("آدرس واریز بیت‌پین در تنظیمات ثبت نشده است", 503, "BITPIN_ADDRESS_MISSING");
+  const body = await parseBody(request);
+  const cryptoAmount = Number(body.crypto_amount);
+  const minCrypto = Math.max(0.00000001, Number(settings.bitpin_min_crypto_amount || 1));
+  if (!Number.isFinite(cryptoAmount) || cryptoAmount < minCrypto || cryptoAmount > 1000000000) {
+    return fail("مقدار رمزارز معتبر نیست؛ حداقل " + minCrypto + " است", 400, "INVALID_CRYPTO_AMOUNT");
+  }
+  const txid = cleanText(body.txid, 220).replace(/\s+/g, "").toLowerCase();
+  if (!/^[a-z0-9:_-]{16,220}$/i.test(txid)) return fail("شناسه تراکنش (TXID) معتبر نیست", 400, "INVALID_TXID");
+  const rate = clampInt(settings.bitpin_toman_per_unit, 1, 1000000000000);
+  const amountToman = Math.floor(cryptoAmount * rate);
+  if (amountToman < Math.max(10000, clampInt(settings.min_recharge, 0))) {
+    return fail("ارزش واریز از حداقل شارژ کمتر است", 400, "AMOUNT_TOO_LOW");
+  }
+  let snapshot;
+  try {
+    snapshot = await fetchBitpinWallets(settings, env);
+    await recordBitpinConnectionState(env, true);
+  } catch (error) {
+    await recordBitpinConnectionState(env, false, error.message);
+    return fail("استعلام حساب بیت‌پین ناموفق بود: " + error.message, error.status || 502, error.code || "BITPIN_SYNC_FAILED");
+  }
+  const asset = cleanText(settings.bitpin_asset || "USDT", 30).toUpperCase();
+  const network = cleanText(settings.bitpin_network || "TRC20", 40).toUpperCase();
+  const selectedWallet = snapshot.wallets.find(row => row.asset === asset) || null;
+  const claimId = id("bpd");
+  const ts = nowIso();
+  try {
+    await env.PASARGUARD_DB.prepare(`
+      INSERT INTO bitpin_deposits(
+        id,user_id,asset,network,txid,crypto_amount,rate_toman,amount_toman,destination_address,status,
+        wallet_balance_snapshot,provider_payload,note,created_at,updated_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,'pending_review',?,?,?,?,?)
+    `).bind(
+      claimId, auth.user.id, asset, network, txid, cryptoAmount, rate, amountToman, address,
+      selectedWallet ? String(selectedWallet.balance) : "", JSON.stringify({ wallets: snapshot.wallets }), cleanText(body.note, 300), ts, ts
+    ).run();
+  } catch (error) {
+    if (/unique|constraint/i.test(String(error?.message || error))) return fail("این TXID قبلاً ثبت شده است", 409, "DUPLICATE_TXID");
+    return fail("ثبت درخواست واریز ناموفق بود", 500, "BITPIN_CLAIM_STORAGE_FAILED");
+  }
+  await audit(env, auth.user.id, "bitpin_deposit_claim_created", { claimId, asset, network, txid, cryptoAmount, rate, amountToman });
+  const adminIds = parseAdminTelegramIds(settings.admin_ids || "");
+  for (const adminId of adminIds.slice(0, 20)) {
+    try {
+      await notifyTelegramUser(env, adminId, "🪙 درخواست واریز بیت‌پین\n" +
+        "کاربر: " + String(auth.user.telegram_id) + "\n" +
+        "مقدار: " + cryptoAmount + " " + asset + "\n" +
+        "ارزش: " + amountToman.toLocaleString("fa-IR") + " تومان\n" +
+        "شبکه: " + network + "\nTXID: " + txid);
+    } catch (_) {}
+  }
+  return json({ success: true, deposit: { id: claimId, asset, network, txid, crypto_amount: cryptoAmount, rate_toman: rate, amount_toman: amountToman, status: "pending_review", created_at: ts } });
+}
+
+async function reviewBitpinDeposit(request, env, claimId, decision, providedBody = null) {
+  const auth = await requireAuth(request, env, true);
+  if (auth.response) return auth.response;
+  const body = providedBody && typeof providedBody === "object" ? providedBody : await parseBody(request);
+  const claim = await env.PASARGUARD_DB.prepare(`
+    SELECT d.*,u.telegram_id,u.username,u.first_name,u.last_name,u.wallet_balance
+    FROM bitpin_deposits d JOIN users u ON u.id=d.user_id WHERE d.id=?
+  `).bind(claimId).first();
+  if (!claim) return fail("درخواست بیت‌پین پیدا نشد", 404, "BITPIN_CLAIM_NOT_FOUND");
+  if (decision === "reject") {
+    if (claim.credited_at) return fail("درخواست قبلاً شارژ شده و قابل رد نیست", 409, "ALREADY_CREDITED");
+    const ts = nowIso();
+    const result = await env.PASARGUARD_DB.prepare(`
+      UPDATE bitpin_deposits SET status='rejected',note=?,reviewed_at=?,reviewed_by=?,updated_at=?
+      WHERE id=? AND status='pending_review' AND credited_at IS NULL
+    `).bind(cleanText(body.note, 400), ts, auth.user.id, ts, claim.id).run();
+    if (!Number(result?.meta?.changes || 0)) return fail("این درخواست قبلاً بررسی شده است", 409, "ALREADY_REVIEWED");
+    await audit(env, auth.user.id, "bitpin_deposit_rejected", { claimId: claim.id, txid: claim.txid, note: cleanText(body.note, 400) });
+    await notifyTelegramUser(env, claim.telegram_id, "❌ درخواست واریز رمزارزی شما رد شد.\nTXID: " + claim.txid + (body.note ? "\nتوضیح: " + cleanText(body.note, 300) : ""));
+    return json({ success: true, status: "rejected" });
+  }
+
+  if (claim.credited_at) return json({ success: true, status: "approved", already_credited: true });
+  if (claim.status !== "pending_review") return fail("فقط درخواست در انتظار بررسی قابل تأیید است", 409, "INVALID_CLAIM_STATUS");
+  const settings = await getSettings(env);
+  let snapshot;
+  try {
+    snapshot = await fetchBitpinWallets(settings, env);
+    await recordBitpinConnectionState(env, true);
+  } catch (error) {
+    await recordBitpinConnectionState(env, false, error.message);
+    return fail("پیش از تأیید، اتصال بیت‌پین ناموفق بود: " + error.message, error.status || 502, error.code || "BITPIN_SYNC_FAILED");
+  }
+  const wallet = snapshot.wallets.find(row => row.asset === String(claim.asset || "").toUpperCase()) || null;
+  const ts = nowIso();
+  const ledgerId = "led_bitpin_" + claim.id;
+  const description = "شارژ بیت‌پین " + claim.crypto_amount + " " + claim.asset + " · TXID " + claim.txid;
+  const statements = [
+    env.PASARGUARD_DB.prepare(`
+      UPDATE bitpin_deposits
+      SET status='approved',credited_at=?,reviewed_at=?,reviewed_by=?,updated_at=?,note=?,provider_payload=?,wallet_balance_snapshot=?
+      WHERE id=? AND status='pending_review' AND credited_at IS NULL
+    `).bind(ts, ts, auth.user.id, ts, cleanText(body.note, 400), JSON.stringify({ wallets: snapshot.wallets }), wallet ? String(wallet.balance) : "", claim.id),
+    env.PASARGUARD_DB.prepare(`
+      UPDATE users SET wallet_balance=wallet_balance+?,updated_at=?
+      WHERE id=?
+        AND EXISTS(SELECT 1 FROM bitpin_deposits WHERE id=? AND status='approved' AND credited_at=?)
+        AND NOT EXISTS(SELECT 1 FROM wallet_ledger WHERE id=?)
+    `).bind(Number(claim.amount_toman), ts, claim.user_id, claim.id, ts, ledgerId),
+    env.PASARGUARD_DB.prepare(`
+      INSERT OR IGNORE INTO wallet_ledger(id,user_id,type,amount,balance_after,ref_type,ref_id,description,created_at)
+      SELECT ?,id,'recharge',?,wallet_balance,'bitpin',?,?,?
+      FROM users WHERE id=? AND EXISTS(SELECT 1 FROM bitpin_deposits WHERE id=? AND credited_at=?)
+    `).bind(ledgerId, Number(claim.amount_toman), claim.id, description, ts, claim.user_id, claim.id, ts)
+  ];
+  const results = await env.PASARGUARD_DB.batch(statements);
+  if (!Number(results?.[0]?.meta?.changes || 0)) return fail("تأیید انجام نشد یا درخواست هم‌زمان بررسی شده است", 409, "BITPIN_APPROVAL_CONFLICT");
+  const updatedUser = await env.PASARGUARD_DB.prepare("SELECT wallet_balance FROM users WHERE id=?").bind(claim.user_id).first();
+  await audit(env, auth.user.id, "bitpin_deposit_approved", { claimId: claim.id, txid: claim.txid, cryptoAmount: claim.crypto_amount, amountToman: claim.amount_toman, walletBalance: wallet?.balance ?? null });
+  await notifyTelegramUser(env, claim.telegram_id, "✅ واریز رمزارزی شما تأیید شد.\n" +
+    "مقدار: " + claim.crypto_amount + " " + claim.asset + "\n" +
+    "شارژ: " + Number(claim.amount_toman).toLocaleString("fa-IR") + " تومان\n" +
+    "موجودی جدید: " + Number(updatedUser?.wallet_balance || 0).toLocaleString("fa-IR") + " تومان");
+  return json({ success: true, status: "approved", amount_toman: Number(claim.amount_toman), wallet_balance: Number(updatedUser?.wallet_balance || 0), bitpin_wallet: wallet });
 }
 
 function normalizePaymentStatus(value) {
@@ -4450,6 +4767,7 @@ async function saveAdminSettings(request, env) {
     "reseller_store_bot_setup_fee", "reseller_store_bot_license_renewal_fee", "reseller_master_bot_setup_fee", "reseller_master_bot_license_renewal_fee", "master_min_markup_toman",
     "agency_sales_enabled", "reseller_bot_sales_enabled", "central_recharge_bonus_percent", "central_trial_enabled", "central_trial_data_limit_bytes", "central_trial_duration_hours", "min_recharge", "support_username",
     "blupal_base_url", "blupal_api_key", "blupal_card_number", "blupal_webhook_token", "payment_poll_enabled",
+    "bitpin_enabled", "bitpin_base_url", "bitpin_api_key", "bitpin_api_secret", "bitpin_asset", "bitpin_network", "bitpin_deposit_address", "bitpin_toman_per_unit", "bitpin_min_crypto_amount",
     "auto_delete_pending_invoices", "pending_invoice_ttl_hours", "usage_sync_enabled", "auto_update", "auto_update_interval_seconds", "bot_token", "admin_ids",
     "auth_max_age_seconds", "allow_dev_auth", "dev_telegram_id", "app_encryption_key", "app_url",
     "telegram_webhook_secret", "pasarguard_panel_url", "pasarguard_access_token",
@@ -4484,10 +4802,23 @@ async function saveAdminSettings(request, env) {
     try { values.blupal_base_url = normalizeBlupalBaseUrl(values.blupal_base_url); }
     catch (error) { return fail(error.message, 400, "INVALID_BLUPAL_URL"); }
   }
+  if (values.bitpin_base_url !== undefined) {
+    try { values.bitpin_base_url = normalizeBitpinBaseUrl(values.bitpin_base_url); }
+    catch (error) { return fail(error.message, 400, "INVALID_BITPIN_URL"); }
+  }
+  if (values.bitpin_asset !== undefined) values.bitpin_asset = cleanText(values.bitpin_asset, 30).toUpperCase() || "USDT";
+  if (values.bitpin_network !== undefined) values.bitpin_network = cleanText(values.bitpin_network, 40).toUpperCase() || "TRC20";
+  if (values.bitpin_deposit_address !== undefined) values.bitpin_deposit_address = cleanText(values.bitpin_deposit_address, 300).replace(/\s+/g, "");
+  if (values.bitpin_toman_per_unit !== undefined) values.bitpin_toman_per_unit = String(clampInt(values.bitpin_toman_per_unit, 1, 1000000000000));
+  if (values.bitpin_min_crypto_amount !== undefined) {
+    const minCrypto = Number(values.bitpin_min_crypto_amount);
+    if (!Number.isFinite(minCrypto) || minCrypto <= 0) return fail("حداقل مقدار رمزارز معتبر نیست", 400, "INVALID_BITPIN_MIN_AMOUNT");
+    values.bitpin_min_crypto_amount = String(minCrypto);
+  }
   if (values.app_url !== undefined) {
     values.app_url = canonicalAppUrl(values.app_url, new URL(request.url).origin);
   }
-  for (const key of ["central_trial_enabled", "agency_sales_enabled", "reseller_bot_sales_enabled", "usage_sync_enabled", "payment_poll_enabled", "auto_delete_pending_invoices", "auto_update", "allow_dev_auth", "pasarguard_set_telegram_id", "python_helper_auto_provision"]) {
+  for (const key of ["central_trial_enabled", "agency_sales_enabled", "reseller_bot_sales_enabled", "usage_sync_enabled", "payment_poll_enabled", "auto_delete_pending_invoices", "auto_update", "allow_dev_auth", "pasarguard_set_telegram_id", "python_helper_auto_provision", "bitpin_enabled"]) {
     if (body[key] !== undefined) values[key] = String(body[key] === true || body[key] === "true");
   }
   if (values.admin_ids !== undefined) {
@@ -4525,6 +4856,9 @@ async function saveAdminSettings(request, env) {
   }
   if (values.pending_invoice_ttl_hours !== undefined) {
     values.pending_invoice_ttl_hours = String(Math.max(1, Math.min(720, Number(values.pending_invoice_ttl_hours || 24))));
+  }
+  for (const key of ["bitpin_api_key", "bitpin_api_secret"]) {
+    if (values[key] !== undefined) values[key] = "enc:" + await encryptSecret(String(values[key]), env);
   }
   await setSettings(env, values);
   const advancedCleanup = [];
@@ -10964,7 +11298,7 @@ async function centralAdminBootstrap(request, env) {
   }
   const settings = await getSettings(env);
   const today = new Date(); today.setHours(0,0,0,0);
-  const [stats, agencies, bots, users, payments, logs, resellerHealth] = await Promise.all([
+  const [stats, agencies, bots, users, payments, bitpinDeposits, logs, resellerHealth] = await Promise.all([
     env.PASARGUARD_DB.prepare(`SELECT
       (SELECT COUNT(*) FROM users) AS users_count,
       (SELECT COUNT(*) FROM users WHERE status='active') AS active_users,
@@ -10972,13 +11306,13 @@ async function centralAdminBootstrap(request, env) {
       (SELECT COUNT(*) FROM agencies WHERE status='active') AS active_agencies,
       (SELECT COUNT(*) FROM reseller_bots) AS bots_count,
       (SELECT COUNT(*) FROM reseller_bots WHERE status='active') AS active_bots,
-      (SELECT COUNT(*) FROM payment_invoices WHERE status='PENDING') AS pending_payments,
+      ((SELECT COUNT(*) FROM payment_invoices WHERE status='PENDING') + (SELECT COUNT(*) FROM bitpin_deposits WHERE status='pending_review')) AS pending_payments,
       (SELECT COALESCE(SUM(wallet_balance),0) FROM users) AS total_wallet_balance,
       (SELECT COALESCE(SUM(total_charged),0) FROM agencies) AS total_usage_revenue,
-      (SELECT COALESCE(SUM(amount_toman),0) FROM payment_invoices WHERE credited_at IS NOT NULL) AS total_recharge,
-      (SELECT COALESCE(SUM(amount_toman),0) FROM payment_invoices WHERE credited_at IS NOT NULL AND created_at>=?) AS today_recharge,
+      ((SELECT COALESCE(SUM(amount_toman),0) FROM payment_invoices WHERE credited_at IS NOT NULL) + (SELECT COALESCE(SUM(amount_toman),0) FROM bitpin_deposits WHERE credited_at IS NOT NULL)) AS total_recharge,
+      ((SELECT COALESCE(SUM(amount_toman),0) FROM payment_invoices WHERE credited_at IS NOT NULL AND created_at>=?) + (SELECT COALESCE(SUM(amount_toman),0) FROM bitpin_deposits WHERE credited_at IS NOT NULL AND created_at>=?)) AS today_recharge,
       (SELECT COALESCE(SUM(amount_toman),0) FROM sales_orders WHERE status='delivered') AS reseller_total_sales
-    `).bind(today.toISOString()).first(),
+    `).bind(today.toISOString(), today.toISOString()).first(),
     env.PASARGUARD_DB.prepare(`SELECT a.id,a.title,a.panel_username,a.status,a.last_usage_bytes,a.total_charged,a.provisioning_source,a.runtime_version,a.created_at,a.updated_at,
       u.id AS owner_id,u.telegram_id,u.username,u.first_name,u.last_name,u.wallet_balance,u.status AS owner_status,
       rb.id AS bot_id,rb.bot_username,rb.status AS bot_status
@@ -11003,6 +11337,9 @@ async function centralAdminBootstrap(request, env) {
     env.PASARGUARD_DB.prepare(`SELECT p.id,p.provider_invoice_id,p.amount_toman,p.status,p.paid_at,p.credited_at,p.created_at,p.updated_at,
       u.id AS user_id,u.telegram_id,u.username,u.first_name,u.last_name
       FROM payment_invoices p JOIN users u ON u.id=p.user_id ORDER BY p.created_at DESC LIMIT 300`).all(),
+    env.PASARGUARD_DB.prepare(`SELECT d.id,d.asset,d.network,d.txid,d.crypto_amount,d.rate_toman,d.amount_toman,d.status,d.note,d.created_at,d.updated_at,d.reviewed_at,d.credited_at,
+      u.id AS user_id,u.telegram_id,u.username,u.first_name,u.last_name
+      FROM bitpin_deposits d JOIN users u ON u.id=d.user_id ORDER BY d.created_at DESC LIMIT 300`).all(),
     env.PASARGUARD_DB.prepare(`SELECT l.id,l.actor_user_id,l.action,l.details,l.created_at,u.telegram_id,u.username,u.first_name,u.last_name
       FROM audit_logs l LEFT JOIN users u ON u.id=l.actor_user_id ORDER BY l.created_at DESC LIMIT 200`).all(),
     env.PASARGUARD_DB.prepare(`SELECT
@@ -11021,7 +11358,7 @@ async function centralAdminBootstrap(request, env) {
     admin: { id: auth.user.id, telegram_id: auth.user.telegram_id, username: auth.user.username, first_name: auth.user.first_name, last_name: auth.user.last_name },
     stats: stats || {}, configuration,
     sales: { agency_enabled: agencySalesOpen(settings), reseller_bot_enabled: resellerBotSalesOpen(settings) },
-    agencies: agencies.results || [], bots: botRows, users: users.results || [], payments: payments.results || [], audit_logs: logs.results || [],
+    agencies: agencies.results || [], bots: botRows, users: users.results || [], payments: payments.results || [], bitpin_deposits: bitpinDeposits.results || [], audit_logs: logs.results || [],
     links: { customer_app: origin + "/app", advanced_control: origin + "/control-advanced", central_bot: settings.central_bot_username ? "https://t.me/" + String(settings.central_bot_username).replace(/^@/, "") : "" },
     edge: { enabled: liveEdge.connected === true && settings.edge_worker_manual_disabled !== "true", binding_detected: liveEdge.binding_detected === true, core_binding_detected: liveEdge.core_binding_detected === true, processor_binding_detected: liveEdge.processor_binding_detected === true, core_ok: liveEdge.core_ok === true, processor_ok: liveEdge.processor_ok === true, database_query_ok: liveEdge.database_query_ok !== false, mode: "service_binding", status: settings.edge_worker_manual_disabled === "true" ? "disabled" : (liveEdge.status || "disconnected"), script_name: liveEdge.script_name || settings.edge_worker_script_name || "", last_check_at: liveEdge.diagnostics?.checked_at || settings.edge_worker_last_check_at || "", last_error: settings.edge_worker_manual_disabled === "true" ? "تقسیم بار از پنل غیرفعال شده است" : (liveEdge.error || settings.edge_worker_last_error || ""), version: liveEdge.version || settings.edge_worker_last_version || "", pending_jobs: Number(liveEdge.pending_jobs || 0), last_deployed_at: settings.edge_worker_last_deployed_at || "", probe: liveEdge.probe || null, core_probe: liveEdge.core_probe || liveEdge.diagnostics?.edge_to_core || null, processor_probe: liveEdge.processor_probe || liveEdge.diagnostics?.edge_to_processor || null, runtime_bindings: liveEdge.runtime_bindings || liveEdge.diagnostics?.runtime_bindings || null, diagnostics: liveEdge.diagnostics || null },
     processor: { enabled: liveProcessor.connected === true && settings.processor_worker_manual_disabled !== "true", binding_detected: liveProcessor.binding_detected === true, core_binding_detected: liveProcessor.core_binding_detected === true, edge_binding_detected: liveProcessor.edge_binding_detected === true, core_ok: liveProcessor.core_ok === true, edge_ok: liveProcessor.edge_ok === true, database_query_ok: liveProcessor.database_query_ok !== false, mode: "service_binding", status: settings.processor_worker_manual_disabled === "true" ? "disabled" : (liveProcessor.status || "disconnected"), script_name: liveProcessor.script_name || settings.processor_worker_script_name || "", last_check_at: liveProcessor.diagnostics?.checked_at || settings.processor_worker_last_check_at || "", last_error: settings.processor_worker_manual_disabled === "true" ? "پردازش Worker سوم از پنل غیرفعال شده است" : (liveProcessor.error || settings.processor_worker_last_error || ""), version: liveProcessor.version || settings.processor_worker_last_version || "", pending_jobs: Number(liveProcessor.pending_jobs || 0), processed_jobs: Number(liveProcessor.processed_jobs || 0), last_deployed_at: settings.processor_worker_last_deployed_at || "", probe: liveProcessor.probe || null, core_probe: liveProcessor.core_probe || liveProcessor.diagnostics?.processor_to_core || null, edge_probe: liveProcessor.edge_probe || liveProcessor.diagnostics?.processor_to_edge || null, runtime_bindings: liveProcessor.runtime_bindings || liveProcessor.diagnostics?.runtime_bindings || null, diagnostics: liveProcessor.diagnostics || null },
@@ -11029,6 +11366,7 @@ async function centralAdminBootstrap(request, env) {
       database: true,
       central_bot: Boolean(settings.bot_token),
       blupal: Boolean(settings.blupal_api_key),
+      bitpin: settings.bitpin_enabled === "true" && Boolean(settings.bitpin_api_key && settings.bitpin_api_secret && settings.bitpin_deposit_address),
       pasarguard: Boolean(settings.pasarguard_panel_url && (settings.pasarguard_access_token || (settings.pasarguard_admin_username && settings.pasarguard_admin_password))),
       auto_update: Boolean(settings.github_repo && settings.cf_account_id && settings.cf_api_token && settings.cf_worker_name),
       python_helper: Boolean(env.PY_HELPER && typeof env.PY_HELPER.fetch === "function"),
@@ -11250,6 +11588,17 @@ async function centralAdminAction(request, env) {
     if (action === "sync_payments") {
       const result = await pollPendingPayments(env, 200); await audit(env, auth.user.id, "central_dashboard_payment_sync", result); return json({ success: true, message: "پرداخت‌ها استعلام شدند", result });
     }
+    if (action === "bitpin_test") {
+      const settings = await getSettings(env);
+      const snapshot = await fetchBitpinWallets(settings, env);
+      await recordBitpinConnectionState(env, true);
+      const asset = String(settings.bitpin_asset || "USDT").toUpperCase();
+      const selected = snapshot.wallets.find(row => row.asset === asset) || null;
+      await audit(env, auth.user.id, "bitpin_connection_tested", { asset, walletFound: Boolean(selected) });
+      return json({ success: true, message: selected ? "اتصال بیت‌پین برقرار است؛ موجودی " + asset + ": " + selected.balance : "اتصال بیت‌پین برقرار است", selected_wallet: selected, wallets: snapshot.wallets });
+    }
+    if (action === "bitpin_approve") return reviewBitpinDeposit(request, env, cleanText(body.id, 100), "approve", body);
+    if (action === "bitpin_reject") return reviewBitpinDeposit(request, env, cleanText(body.id, 100), "reject", body);
     if (action === "cleanup_payments") {
       const result = await cleanupStalePendingInvoices(env, { settings: await getSettings(env), limit: 500 }); await audit(env, auth.user.id, "central_dashboard_payment_cleanup", result); return json({ success: true, message: "فاکتورهای قدیمی پاک‌سازی شدند", result });
     }
@@ -11293,6 +11642,7 @@ async function routeApiUnsafe(request, env, path) {
   if (path === "/api/admin/control/action" && request.method === "POST") return centralAdminAction(request, env);
   if (path === "/api/usage/live" && request.method === "GET") return liveUsageSnapshot(request, env);
   if (path === "/api/payments/blupal/create" && request.method === "POST") return createPaymentInvoice(request, env);
+  if (path === "/api/payments/bitpin/claim" && request.method === "POST") return createBitpinDepositClaim(request, env);
   if (path === "/api/agencies" && request.method === "POST") return createAgency(request, env);
   if (path === "/api/trial" && request.method === "POST") return createCentralTrial(request, env);
   if (path === "/api/admin/settings" && request.method === "POST") return saveAdminSettings(request, env);
@@ -11300,6 +11650,7 @@ async function routeApiUnsafe(request, env, path) {
   if (path === "/api/admin/payments/sync" && request.method === "POST") return adminPaymentSync(request, env);
   if (path === "/api/admin/payments/cleanup" && request.method === "POST") return adminPaymentCleanup(request, env);
   if (path === "/api/admin/payments/blupal/webhook-url" && request.method === "GET") return getBlupalWebhookUrl(request, env);
+  if (path === "/api/admin/payments/bitpin/test" && request.method === "POST") return testBitpinConnection(request, env);
   if (path === "/api/admin/update/check" && request.method === "POST") return updateAction(request, env, false);
   if (path === "/api/admin/update/deploy" && request.method === "POST") return updateAction(request, env, true);
   if (path === "/api/admin/python/provision" && request.method === "POST") return adminProvisionPythonHelper(request, env);
@@ -11311,13 +11662,15 @@ async function routeApiUnsafe(request, env, path) {
   if (match && request.method === "PUT") return updateAgencyInfo(request, env, decodeURIComponent(match[1]));
   match = path.match(/^\/api\/agencies\/([^/]+)\/credentials$/);
   if (match && request.method === "GET") return getAgencyCredentials(request, env, decodeURIComponent(match[1]));
+  match = path.match(/^\/api\/admin\/payments\/bitpin\/([^/]+)\/(approve|reject)$/);
+  if (match && request.method === "POST") return reviewBitpinDeposit(request, env, decodeURIComponent(match[1]), match[2]);
   match = path.match(/^\/api\/payments\/([^/]+)\/status$/);
   if (match && request.method === "GET") return getPaymentStatus(request, env, decodeURIComponent(match[1]));
   return fail("مسیر API پیدا نشد", 404, "NOT_FOUND");
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.0.4';
+const BLUEPANEL_CORE_VERSION = '3.0.5';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {

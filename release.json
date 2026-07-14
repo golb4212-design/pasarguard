@@ -1,6 +1,6 @@
 {
-  "version": "3.0.4",
-  "release_id": "3.0.4-20260714-speed-batch-hotpath",
+  "version": "3.0.5",
+  "release_id": "3.0.5-20260714-bitpin-crypto-deposits",
   "architecture": "fully-split-three-worker",
   "files": {
     "core": "core/worker.js",
@@ -8,9 +8,9 @@
     "processor": "processor/worker.js"
   },
   "sha256": {
-    "core": "8a158176bcf0c06efcd133a84b85a073bcd43530544c28a67c82247958004190",
-    "edge": "8901163f7f9fe94964ba3d992ffcae850c3c209abfec36af784be3bf2282012c",
-    "processor": "374d6635b0d1581c124018aaeebe93ac8fbab06caea36a4c793f4db2a209e9fd"
+    "core": "b5c8d3fef6a233570687c8520c8541fd822d34556f462c6391b3f24a49e1c769",
+    "edge": "2c616ff09e06a933c02ddd6c8a402c2e4678e20fa32db8f0f376220706993593",
+    "processor": "44050677ba8459c859ee90b16a242a84b3d4a5c16cb7f467f433fba5fb42f3a0"
   },
   "roles": {
     "core": "central bot, finance, licenses, central APIs, GitHub publishing and D1 authority",
@@ -18,9 +18,21 @@
     "processor": "reports, retry queue, backups and background jobs"
   },
   "bindings": {
-    "core": ["PASARGUARD_DB", "EDGE_WORKER", "PROCESSOR_WORKER"],
-    "edge": ["EDGE_DB", "CORE_WORKER", "PROCESSOR_WORKER"],
-    "processor": ["PROCESSOR_DB", "CORE_WORKER", "EDGE_WORKER"]
+    "core": [
+      "PASARGUARD_DB",
+      "EDGE_WORKER",
+      "PROCESSOR_WORKER"
+    ],
+    "edge": [
+      "EDGE_DB",
+      "CORE_WORKER",
+      "PROCESSOR_WORKER"
+    ],
+    "processor": [
+      "PROCESSOR_DB",
+      "CORE_WORKER",
+      "EDGE_WORKER"
+    ]
   },
   "performance": {
     "sales_bootstrap_remote_roundtrips": "12_to_1_batch",
@@ -39,7 +51,17 @@
     "move start-session cleanup and analytics writes to background tasks",
     "extend safe in-memory caches for settings, reseller bot metadata and join status",
     "keep request-triggered update checks away from Telegram webhook hot paths",
-    "release channel announcement contains only version 3.0.4 changes",
-    "README files are excluded"
+    "README files are excluded",
+    "store Bitpin API credentials encrypted with the existing application AES-GCM key",
+    "reject duplicate TXIDs and protect wallet crediting with idempotent ledger references",
+    "require administrator review before wallet credit because aggregate exchange balances cannot identify the depositing user"
+  ],
+  "title": "اتصال بیت‌پین و مدیریت واریز رمزارزی",
+  "notes": [
+    "افزودن تنظیمات رمزگذاری‌شده API Key و Secret بیت‌پین در مدیریت مرکزی",
+    "تست اتصال و مشاهده موجودی کیف پول رمزارزی از API بیت‌پین",
+    "ثبت درخواست واریز کاربران با مقدار رمزارز و TXID یکتا",
+    "تأیید یا رد مدیریتی و شارژ یک‌باره کیف پول همراه با دفترکل و اعلان تلگرام",
+    "افزودن رابط کاربری واریز بیت‌پین و فهرست درخواست‌های رمزارزی"
   ]
 }
