@@ -1,11 +1,11 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.1.2
+ * Version: 3.1.3
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.1.2";
+const APP_VERSION = "3.1.3";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -15,7 +15,8 @@ const RELEASE_NOTES = Object.freeze({
     { emoji: "🚀", text: "ارسال سریع‌تر منوی شروع با انتقال ثبت گزارش و پاک‌سازی نشست به پس‌زمینه" },
     { emoji: "🧠", text: "کش کوتاه‌مدت تنظیمات و وضعیت عضویت برای پاسخ سریع‌تر" },
     { emoji: "🪙", text: "افزودن درگاه رمزارزی Plisio با Callback امضاشده و شارژ یک‌باره" },
-    { emoji: "🔑", text: "افزودن مدیریت مستقیم API Key پاسارگارد در پنل مرکزی و ربات مرکزی" }
+    { emoji: "🔑", text: "افزودن مدیریت مستقیم API Key پاسارگارد در پنل مرکزی و ربات مرکزی" },
+    { emoji: "💵", text: "دریافت خودکار نرخ دلار به تومان برای فاکتورهای Plisio با کش و نرخ پشتیبان" }
   ]),
   reseller: Object.freeze([
     { emoji: "📦", text: "تجمیع درخواست‌های اولیه پنل فروش و مدیریت در یک Batch دیتابیس" },
@@ -280,6 +281,18 @@ const DEFAULT_SETTINGS = {
   plisio_api_key: "",
   plisio_source_currency: "USD",
   plisio_toman_per_source_unit: "0",
+  plisio_rate_mode: "auto",
+  plisio_fx_provider: "navasan",
+  plisio_fx_api_key: "",
+  plisio_fx_item: "usd_sell",
+  plisio_fx_unit: "toman",
+  plisio_fx_refresh_minutes: "15",
+  plisio_fx_max_stale_minutes: "1440",
+  plisio_fx_markup_percent: "0",
+  plisio_fx_last_rate_toman: "0",
+  plisio_fx_last_raw_rate: "0",
+  plisio_fx_last_fetched_at: "",
+  plisio_fx_last_error: "",
   plisio_allowed_currencies: "",
   plisio_expire_minutes: "60",
   plisio_test_currency: "BTC",
@@ -370,7 +383,7 @@ const DEFAULT_SETTINGS = {
 const SECRET_SETTING_KEYS = new Set([
   "bot_token", "app_encryption_key", "telegram_webhook_secret",
   "pasarguard_access_token", "pasarguard_admin_password",
-  "blupal_api_key", "blupal_webhook_token", "plisio_api_key",
+  "blupal_api_key", "blupal_webhook_token", "plisio_api_key", "plisio_fx_api_key",
   "github_token", "cf_api_token", "edge_worker_api_key", "setup_password_hash", "setup_password_salt"
 ]);
 
@@ -1827,9 +1840,11 @@ function publicSettings(settings) {
     release_last_announcement_error: settings.release_last_announcement_error || "",
     min_recharge: Number(settings.min_recharge || 0),
     payment_provider: settings.plisio_enabled === "true" ? "plisio" : "blupal",
-    plisio_enabled: settings.plisio_enabled === "true" && Boolean(settings.plisio_api_key) && Number(settings.plisio_toman_per_source_unit || 0) > 0,
+    plisio_enabled: plisioConfigured(settings),
     plisio_source_currency: settings.plisio_source_currency || "USD",
-    plisio_toman_per_source_unit: Number(settings.plisio_toman_per_source_unit || 0),
+    plisio_toman_per_source_unit: Number(settings.plisio_fx_last_rate_toman || settings.plisio_toman_per_source_unit || 0),
+    plisio_rate_mode: plisioRateMode(settings),
+    plisio_fx_last_fetched_at: settings.plisio_fx_last_fetched_at || "",
     plisio_allowed_currencies: settings.plisio_allowed_currencies || "",
     plisio_expire_minutes: Number(settings.plisio_expire_minutes || 60),
     support_username: settings.support_username || "",
@@ -1870,6 +1885,18 @@ function adminSettings(settings) {
     plisio_enabled: settings.plisio_enabled === "true",
     plisio_source_currency: settings.plisio_source_currency || "USD",
     plisio_toman_per_source_unit: Number(settings.plisio_toman_per_source_unit || 0),
+    plisio_rate_mode: plisioRateMode(settings),
+    plisio_fx_provider: settings.plisio_fx_provider || "navasan",
+    plisio_fx_key_configured: Boolean(settings.plisio_fx_api_key),
+    plisio_fx_item: settings.plisio_fx_item || "usd_sell",
+    plisio_fx_unit: settings.plisio_fx_unit || "toman",
+    plisio_fx_refresh_minutes: Number(settings.plisio_fx_refresh_minutes || 15),
+    plisio_fx_max_stale_minutes: Number(settings.plisio_fx_max_stale_minutes || 1440),
+    plisio_fx_markup_percent: Number(settings.plisio_fx_markup_percent || 0),
+    plisio_fx_last_rate_toman: Number(settings.plisio_fx_last_rate_toman || 0),
+    plisio_fx_last_raw_rate: Number(settings.plisio_fx_last_raw_rate || 0),
+    plisio_fx_last_fetched_at: settings.plisio_fx_last_fetched_at || "",
+    plisio_fx_last_error: settings.plisio_fx_last_error || "",
     plisio_allowed_currencies: settings.plisio_allowed_currencies || "",
     plisio_expire_minutes: Number(settings.plisio_expire_minutes || 60),
     plisio_test_currency: settings.plisio_test_currency || "BTC",
@@ -3963,8 +3990,128 @@ function normalizePlisioStatus(value) {
   return "PENDING";
 }
 
+let plisioFxRefreshPromise = null;
+
+function normalizeDigitsForNumber(value) {
+  const fa = "۰۱۲۳۴۵۶۷۸۹", ar = "٠١٢٣٤٥٦٧٨٩";
+  return String(value ?? "")
+    .replace(/[۰-۹]/g, d => String(fa.indexOf(d)))
+    .replace(/[٠-٩]/g, d => String(ar.indexOf(d)))
+    .replace(/[,٬\s]/g, "")
+    .replace(/[^0-9.\-]/g, "");
+}
+
+function parseFxNumber(value) {
+  const parsed = Number(normalizeDigitsForNumber(value));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function plisioRateMode(settings) {
+  return String(settings?.plisio_rate_mode || "auto").toLowerCase() === "manual" ? "manual" : "auto";
+}
+
+function plisioAutoRateConfigured(settings) {
+  return !!String(settings?.plisio_fx_api_key || "").trim() || Number(settings?.plisio_fx_last_rate_toman || 0) > 0;
+}
+
 function plisioConfigured(settings) {
-  return settings?.plisio_enabled === "true" && !!String(settings?.plisio_api_key || "").trim() && Number(settings?.plisio_toman_per_source_unit || 0) > 0;
+  const rateReady = plisioRateMode(settings) === "manual"
+    ? Number(settings?.plisio_toman_per_source_unit || 0) > 0
+    : (plisioAutoRateConfigured(settings) || Number(settings?.plisio_toman_per_source_unit || 0) > 0);
+  return settings?.plisio_enabled === "true" && !!String(settings?.plisio_api_key || "").trim() && rateReady;
+}
+
+async function centralPlisioFxApiKey(settings, env) {
+  const raw = String(settings?.plisio_fx_api_key || "").trim();
+  if (!raw) throw new Error("API Key سرویس نرخ ارز ثبت نشده است");
+  if (!raw.startsWith("enc:")) return raw;
+  try {
+    const value = await decryptSecret(raw.slice(4), env);
+    if (!value) throw new Error("empty");
+    return value;
+  } catch (_) {
+    throw new Error("API Key سرویس نرخ ارز قابل بازیابی نیست؛ آن را دوباره ثبت کنید");
+  }
+}
+
+function fxCacheAgeMinutes(settings) {
+  const ts = Date.parse(settings?.plisio_fx_last_fetched_at || "");
+  return Number.isFinite(ts) ? Math.max(0, (Date.now() - ts) / 60000) : Number.POSITIVE_INFINITY;
+}
+
+async function storeCentralFxState(env, values) {
+  await setSettings(env, values);
+  return getSettings(env);
+}
+
+async function fetchNavasanUsdTomanRate(settings, env) {
+  const apiKey = await centralPlisioFxApiKey(settings, env);
+  const item = cleanText(settings?.plisio_fx_item || "usd_sell", 50).toLowerCase() || "usd_sell";
+  const url = new URL("https://api.navasan.tech/latest/");
+  url.searchParams.set("api_key", apiKey);
+  url.searchParams.set("item", item);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  let response;
+  try {
+    response = await fetch(url.toString(), { headers: { accept: "application/json" }, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(cleanText(data?.message || data?.error || ("Navasan HTTP " + response.status), 500));
+  const entry = data?.[item] ?? data?.data?.[item] ?? data?.result?.[item] ?? data;
+  const raw = parseFxNumber(entry?.value ?? entry?.price ?? entry?.rate ?? entry);
+  if (!Number.isFinite(raw) || raw <= 0) throw new Error("نرخ معتبر از سرویس نرخ ارز دریافت نشد");
+  const unit = String(settings?.plisio_fx_unit || "toman").toLowerCase();
+  const baseToman = unit === "rial" ? raw / 10 : raw;
+  const markup = Math.max(-20, Math.min(50, Number(settings?.plisio_fx_markup_percent || 0)));
+  const rateToman = Math.round(baseToman * (1 + markup / 100));
+  if (!Number.isFinite(rateToman) || rateToman < 1000 || rateToman > 100000000) throw new Error("نرخ دریافتی خارج از بازه امن است");
+  return { rate_toman: rateToman, raw_rate: raw, item, unit, markup_percent: markup, provider: "navasan" };
+}
+
+async function refreshCentralPlisioFxRate(env, { force = false } = {}) {
+  const initial = await getSettings(env);
+  if (plisioRateMode(initial) !== "auto") {
+    const manual = Number(initial.plisio_toman_per_source_unit || 0);
+    if (manual <= 0) throw new Error("نرخ دستی Plisio ثبت نشده است");
+    return { rate_toman: manual, source: "manual", stale: false, fetched_at: initial.plisio_fx_last_fetched_at || "" };
+  }
+  const refreshMinutes = Math.max(5, Math.min(1440, Number(initial.plisio_fx_refresh_minutes || 15)));
+  const cached = Number(initial.plisio_fx_last_rate_toman || 0);
+  if (!force && cached > 0 && fxCacheAgeMinutes(initial) < refreshMinutes) {
+    return { rate_toman: cached, source: "cache", stale: false, fetched_at: initial.plisio_fx_last_fetched_at || "" };
+  }
+  if (plisioFxRefreshPromise) return plisioFxRefreshPromise;
+  plisioFxRefreshPromise = (async () => {
+    try {
+      const result = await fetchNavasanUsdTomanRate(initial, env);
+      const fetchedAt = nowIso();
+      await storeCentralFxState(env, {
+        plisio_fx_last_rate_toman: String(result.rate_toman),
+        plisio_fx_last_raw_rate: String(result.raw_rate),
+        plisio_fx_last_fetched_at: fetchedAt,
+        plisio_fx_last_error: "",
+        plisio_source_currency: "USD"
+      });
+      return { ...result, source: "navasan", stale: false, fetched_at: fetchedAt };
+    } catch (error) {
+      await storeCentralFxState(env, { plisio_fx_last_error: cleanText(error.message, 800) }).catch(() => null);
+      const current = await getSettings(env);
+      const maxStale = Math.max(15, Math.min(10080, Number(current.plisio_fx_max_stale_minutes || 1440)));
+      const last = Number(current.plisio_fx_last_rate_toman || 0);
+      if (last > 0 && fxCacheAgeMinutes(current) <= maxStale) {
+        return { rate_toman: last, source: "stale_cache", stale: true, warning: error.message, fetched_at: current.plisio_fx_last_fetched_at || "" };
+      }
+      const fallback = Number(current.plisio_toman_per_source_unit || 0);
+      if (fallback > 0) return { rate_toman: fallback, source: "manual_fallback", stale: true, warning: error.message, fetched_at: "" };
+      throw error;
+    } finally {
+      plisioFxRefreshPromise = null;
+    }
+  })();
+  return plisioFxRefreshPromise;
 }
 
 async function centralPlisioApiKey(settings, env) {
@@ -3999,9 +4146,9 @@ async function plisioRequest(settings, env, path, params = {}) {
   return data.data;
 }
 
-function plisioSourceAmount(amountToman, settings) {
-  const rate = Number(settings?.plisio_toman_per_source_unit || 0);
-  if (!Number.isFinite(rate) || rate <= 0) throw new Error("نرخ تبدیل تومان به ارز مبنا در تنظیمات Plisio ثبت نشده است");
+function plisioSourceAmount(amountToman, rateToman) {
+  const rate = Number(rateToman || 0);
+  if (!Number.isFinite(rate) || rate <= 0) throw new Error("نرخ تبدیل دلار به تومان در دسترس نیست");
   const value = Number((Number(amountToman || 0) / rate).toFixed(2));
   if (!Number.isFinite(value) || value < 0.01) throw new Error("مبلغ فاکتور پس از تبدیل کمتر از حد مجاز Plisio است");
   return value;
@@ -4055,9 +4202,9 @@ async function testCentralPlisioConnection(env) {
   const settings = await getSettings(env);
   const secret = await centralPlisioApiKey(settings, env);
   if (String(secret).length < 12) throw new Error("Secret Key معتبر نیست");
-  if (Number(settings.plisio_toman_per_source_unit || 0) <= 0) throw new Error("نرخ تبدیل ثبت نشده است");
+  const fx = await refreshCentralPlisioFxRate(env, { force: plisioRateMode(settings) === "auto" });
   await recordCentralPlisioState(env, true);
-  return { configured: true, source_currency: settings.plisio_source_currency || "USD" };
+  return { configured: true, source_currency: settings.plisio_source_currency || "USD", rate_toman: fx.rate_toman, rate_source: fx.source, stale: !!fx.stale };
 }
 
 function normalizePaymentStatus(value) {
@@ -4142,7 +4289,10 @@ async function createPlisioPaymentInvoice(request, env) {
   const minRecharge = Math.max(10000, clampInt(settings.min_recharge, 0));
   if (amountToman < minRecharge) return fail("حداقل مبلغ شارژ " + minRecharge.toLocaleString("fa-IR") + " تومان است", 400, "AMOUNT_TOO_LOW");
   const localId = id("ppay");
-  const sourceAmount = plisioSourceAmount(amountToman, settings);
+  let fx;
+  try { fx = await refreshCentralPlisioFxRate(env); }
+  catch (error) { return fail("دریافت نرخ دلار ناموفق بود: " + error.message, 503, "FX_RATE_UNAVAILABLE"); }
+  const sourceAmount = plisioSourceAmount(amountToman, fx.rate_toman);
   const urls = centralPlisioUrls(new URL(request.url).origin);
   const params = {
     source_currency: cleanText(settings.plisio_source_currency || "USD", 20).toUpperCase() || "USD",
@@ -4172,7 +4322,7 @@ async function createPlisioPaymentInvoice(request, env) {
   if (!providerInvoiceId || !paymentLink) return fail("پاسخ Plisio ناقص است", 502, "INVALID_PROVIDER_RESPONSE");
   const amountRial = amountToman * 10;
   const ts = nowIso();
-  const storedPayload = { request: { ...params, api_key: undefined }, response: provider };
+  const storedPayload = { request: { ...params, api_key: undefined }, response: provider, fx: { rate_toman: fx.rate_toman, source: fx.source, stale: !!fx.stale, fetched_at: fx.fetched_at || "" } };
   try {
     await env.PASARGUARD_DB.prepare(`
       INSERT INTO payment_invoices(id,user_id,provider,provider_invoice_id,amount_rial,amount_toman,final_amount_rial,status,payment_link,card_number,provider_payload,created_at,updated_at)
@@ -4181,7 +4331,7 @@ async function createPlisioPaymentInvoice(request, env) {
   } catch (error) {
     return fail("ثبت فاکتور در دیتابیس ناموفق بود", 500, "PAYMENT_STORAGE_FAILED");
   }
-  await audit(env, auth.user.id, "plisio_invoice_created", { paymentId: localId, providerInvoiceId, amountToman, sourceAmount, sourceCurrency: params.source_currency });
+  await audit(env, auth.user.id, "plisio_invoice_created", { paymentId: localId, providerInvoiceId, amountToman, sourceAmount, sourceCurrency: params.source_currency, fxRateToman: fx.rate_toman, fxSource: fx.source });
   return json({ success: true, payment: { id: localId, invoice_id: providerInvoiceId, amount: amountToman, status: "PENDING", payment_link: paymentLink, provider: "plisio", source_amount: sourceAmount, source_currency: params.source_currency } }, 201);
 }
 
@@ -4863,7 +5013,7 @@ async function saveAdminSettings(request, env) {
     "brand_name", "price_per_gb", "setup_fee", "reseller_bot_setup_fee", "reseller_bot_license_renewal_fee",
     "reseller_store_bot_setup_fee", "reseller_store_bot_license_renewal_fee", "reseller_master_bot_setup_fee", "reseller_master_bot_license_renewal_fee", "master_min_markup_toman",
     "agency_sales_enabled", "reseller_bot_sales_enabled", "central_recharge_bonus_percent", "central_trial_enabled", "central_trial_data_limit_bytes", "central_trial_duration_hours", "min_recharge", "support_username",
-    "blupal_base_url", "blupal_api_key", "blupal_card_number", "blupal_webhook_token", "plisio_enabled", "plisio_api_key", "plisio_source_currency", "plisio_toman_per_source_unit", "plisio_allowed_currencies", "plisio_expire_minutes", "plisio_test_currency", "payment_poll_enabled",
+    "blupal_base_url", "blupal_api_key", "blupal_card_number", "blupal_webhook_token", "plisio_enabled", "plisio_api_key", "plisio_source_currency", "plisio_toman_per_source_unit", "plisio_rate_mode", "plisio_fx_api_key", "plisio_fx_item", "plisio_fx_unit", "plisio_fx_refresh_minutes", "plisio_fx_max_stale_minutes", "plisio_fx_markup_percent", "plisio_allowed_currencies", "plisio_expire_minutes", "plisio_test_currency", "payment_poll_enabled",
     "auto_delete_pending_invoices", "pending_invoice_ttl_hours", "usage_sync_enabled", "auto_update", "auto_update_interval_seconds", "bot_token", "admin_ids",
     "auth_max_age_seconds", "allow_dev_auth", "dev_telegram_id", "app_encryption_key", "app_url",
     "telegram_webhook_secret", "pasarguard_panel_url", "pasarguard_access_token",
@@ -4898,6 +5048,12 @@ async function saveAdminSettings(request, env) {
     try { values.blupal_base_url = normalizeBlupalBaseUrl(values.blupal_base_url); }
     catch (error) { return fail(error.message, 400, "INVALID_BLUPAL_URL"); }
   }
+  if (values.plisio_rate_mode !== undefined) values.plisio_rate_mode = String(values.plisio_rate_mode).toLowerCase() === "manual" ? "manual" : "auto";
+  if (values.plisio_fx_item !== undefined) values.plisio_fx_item = cleanText(values.plisio_fx_item || "usd_sell", 50).toLowerCase() || "usd_sell";
+  if (values.plisio_fx_unit !== undefined) values.plisio_fx_unit = String(values.plisio_fx_unit).toLowerCase() === "rial" ? "rial" : "toman";
+  if (values.plisio_fx_refresh_minutes !== undefined) values.plisio_fx_refresh_minutes = String(Math.max(5, Math.min(1440, Number(values.plisio_fx_refresh_minutes || 15))));
+  if (values.plisio_fx_max_stale_minutes !== undefined) values.plisio_fx_max_stale_minutes = String(Math.max(15, Math.min(10080, Number(values.plisio_fx_max_stale_minutes || 1440))));
+  if (values.plisio_fx_markup_percent !== undefined) values.plisio_fx_markup_percent = String(Math.max(-20, Math.min(50, Number(values.plisio_fx_markup_percent || 0))));
   if (values.app_url !== undefined) {
     values.app_url = canonicalAppUrl(values.app_url, new URL(request.url).origin);
   }
@@ -9311,24 +9467,40 @@ async function botAdminPlisioView(env, account) {
   if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
   const s = await getSettings(env);
   const keySet = !!String(s.plisio_api_key || "").trim();
+  const fxKeySet = !!String(s.plisio_fx_api_key || "").trim();
   const enabled = s.plisio_enabled === "true";
-  const ready = keySet && Number(s.plisio_toman_per_source_unit || 0) > 0;
+  const mode = plisioRateMode(s);
+  const currentRate = mode === "auto" ? Number(s.plisio_fx_last_rate_toman || 0) : Number(s.plisio_toman_per_source_unit || 0);
+  const ready = keySet && (currentRate > 0 || (mode === "auto" && fxKeySet));
+  const lines = [
+    "🪙 <b>درگاه رمزارزی Plisio</b>",
+    "━━━━━━━━━━━━━━",
+    "وضعیت: <b>" + (enabled && ready ? "🟢 فعال" : enabled ? "🟠 تنظیمات ناقص" : "🔴 غیرفعال") + "</b>",
+    "Secret Key: <b>" + (keySet ? "ثبت و رمزگذاری شده" : "ثبت نشده") + "</b>",
+    "ارز مبنا: <b>USD</b>",
+    "روش نرخ: <b>" + (mode === "auto" ? "خودکار از ناواسان" : "دستی") + "</b>",
+    "نرخ فعلی: <b>" + botMoney(currentRate) + " تومان</b>"
+  ];
+  if (mode === "auto") {
+    lines.push("API نرخ ارز: <b>" + (fxKeySet ? "ثبت و رمزگذاری شده" : "ثبت نشده") + "</b>");
+    lines.push("بروزرسانی: هر <b>" + botMoney(s.plisio_fx_refresh_minutes || 15) + " دقیقه</b>");
+  }
+  if (s.plisio_fx_last_fetched_at) lines.push("آخرین دریافت نرخ: <b>" + botDate(s.plisio_fx_last_fetched_at) + "</b>");
+  lines.push("نرخ دستی پشتیبان: <b>" + botMoney(s.plisio_toman_per_source_unit || 0) + " تومان</b>");
+  lines.push("رمزارزهای مجاز: <code>" + botEscape(s.plisio_allowed_currencies || "انتخاب از تنظیمات حساب Plisio") + "</code>");
+  lines.push("انقضای فاکتور: <b>" + botMoney(s.plisio_expire_minutes || 60) + " دقیقه</b>");
+  if (s.plisio_fx_last_error) lines.push("", "⚠️ آخرین خطای نرخ ارز:", "<code>" + botEscape(s.plisio_fx_last_error) + "</code>");
+  if (s.plisio_last_error) lines.push("", "⚠️ آخرین خطای Plisio:", "<code>" + botEscape(s.plisio_last_error) + "</code>");
+  lines.push("", "در حالت خودکار، نرخ دلار هنگام ساخت فاکتور بررسی می‌شود؛ در قطعی منبع، آخرین نرخ سالم و سپس نرخ دستی پشتیبان استفاده می‌شود.");
   return {
-    text: "🪙 <b>درگاه رمزارزی Plisio</b>\n━━━━━━━━━━━━━━\n" +
-      "وضعیت: <b>" + (enabled && ready ? "🟢 فعال" : enabled ? "🟠 تنظیمات ناقص" : "🔴 غیرفعال") + "</b>\n" +
-      "Secret Key: <b>" + (keySet ? "ثبت و رمزگذاری شده" : "ثبت نشده") + "</b>\n" +
-      "ارز مبنا: <b>" + botEscape(s.plisio_source_currency || "USD") + "</b>\n" +
-      "نرخ هر واحد ارز مبنا: <b>" + botMoney(s.plisio_toman_per_source_unit || 0) + " تومان</b>\n" +
-      "رمزارزهای مجاز: <code>" + botEscape(s.plisio_allowed_currencies || "انتخاب از تنظیمات حساب Plisio") + "</code>\n" +
-      "انقضای فاکتور: <b>" + botMoney(s.plisio_expire_minutes || 60) + " دقیقه</b>\n" +
-      (s.plisio_last_verified_at ? "آخرین بررسی موفق: <b>" + botDate(s.plisio_last_verified_at) + "</b>\n" : "") +
-      (s.plisio_last_error ? "\n⚠️ آخرین خطا:\n<code>" + botEscape(s.plisio_last_error) + "</code>" : "") +
-      "\n\nCallback به‌صورت خودکار هنگام ساخت فاکتور ارسال و امضای verify_hash بررسی می‌شود.",
+    text: lines.join("\n"),
     reply_markup:{inline_keyboard:[
       [{text:keySet?"🔑 تغییر Secret Key":"🔑 ثبت Secret Key",callback_data:"bot:admin:plisio:key"}],
-      [{text:"💱 ارز مبنا و نرخ",callback_data:"bot:admin:plisio:rate"},{text:"🪙 رمزارزهای مجاز",callback_data:"bot:admin:plisio:currencies"}],
-      [{text:"⏱ زمان انقضای فاکتور",callback_data:"bot:admin:plisio:expire"}],
-      [{text:"🧪 بررسی تنظیمات",callback_data:"bot:admin:plisio:test"},{text:enabled?"⏸ غیرفعال‌کردن":"▶️ فعال‌کردن",callback_data:"bot:admin:plisio:toggle"}],
+      [{text:fxKeySet?"💵 تغییر API نرخ دلار":"💵 ثبت API نرخ دلار",callback_data:"bot:admin:plisio:fxkey"},{text:"🔄 بروزرسانی نرخ",callback_data:"bot:admin:plisio:fxrefresh"}],
+      [{text:mode === "auto" ? "✍️ تغییر به نرخ دستی" : "🤖 تغییر به نرخ خودکار",callback_data:"bot:admin:plisio:ratemode"}],
+      [{text:"🛟 نرخ دستی پشتیبان",callback_data:"bot:admin:plisio:rate"},{text:"⚙️ بازه بروزرسانی",callback_data:"bot:admin:plisio:fxoptions"}],
+      [{text:"🪙 رمزارزهای مجاز",callback_data:"bot:admin:plisio:currencies"},{text:"⏱ زمان انقضا",callback_data:"bot:admin:plisio:expire"}],
+      [{text:"🧪 بررسی کامل",callback_data:"bot:admin:plisio:test"},{text:enabled?"⏸ غیرفعال‌کردن":"▶️ فعال‌کردن",callback_data:"bot:admin:plisio:toggle"}],
       [{text:"↩️ تعرفه و هزینه‌ها",callback_data:"bot:admin:settings:finance"}]
     ]}
   };
@@ -9638,7 +9810,8 @@ async function botCreatePlisioPaymentInvoice(env, user, amountToman, origin) {
   const minRecharge = Math.max(10000, clampInt(settings.min_recharge, 0));
   if (amount < minRecharge) throw new Error("حداقل مبلغ شارژ " + botMoney(minRecharge) + " تومان است");
   const localId = id("ppay");
-  const sourceAmount = plisioSourceAmount(amount, settings);
+  const fx = await refreshCentralPlisioFxRate(env);
+  const sourceAmount = plisioSourceAmount(amount, fx.rate_toman);
   const urls = centralPlisioUrls(origin);
   const params = {
     source_currency: cleanText(settings.plisio_source_currency || "USD", 20).toUpperCase() || "USD",
@@ -9660,9 +9833,9 @@ async function botCreatePlisioPaymentInvoice(env, user, amountToman, origin) {
   if (!providerInvoiceId || !paymentLink) throw new Error("پاسخ Plisio ناقص است");
   const amountRial = amount * 10, ts = nowIso();
   await env.PASARGUARD_DB.prepare(`INSERT INTO payment_invoices(id,user_id,provider,provider_invoice_id,amount_rial,amount_toman,final_amount_rial,status,payment_link,card_number,provider_payload,created_at,updated_at) VALUES(?,?,'plisio',?,?,?,?,'PENDING',?,NULL,?,?,?)`)
-    .bind(localId,user.id,providerInvoiceId,amountRial,amount,amountRial,paymentLink,JSON.stringify({request:params,response:provider}),ts,ts).run();
+    .bind(localId,user.id,providerInvoiceId,amountRial,amount,amountRial,paymentLink,JSON.stringify({request:params,response:provider,fx:{rate_toman:fx.rate_toman,source:fx.source,stale:!!fx.stale,fetched_at:fx.fetched_at||""}}),ts,ts).run();
   await recordCentralPlisioState(env, true);
-  await audit(env,user.id,"bot_plisio_invoice_created",{paymentId:localId,providerInvoiceId,amountToman:amount,sourceAmount});
+  await audit(env,user.id,"bot_plisio_invoice_created",{paymentId:localId,providerInvoiceId,amountToman:amount,sourceAmount,fxRateToman:fx.rate_toman,fxSource:fx.source});
   return { id:localId, providerInvoiceId, amount, paymentLink, status:"PENDING", provider:"plisio" };
 }
 
@@ -10006,11 +10179,15 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
   }
   if (data === "bot:admin:plisio") { await botSendOrEdit(env,{account,chatId,messageId},"admin_plisio"); return; }
   if (data === "bot:admin:plisio:key") { if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");await botSetSession(env,account.user.telegram_id,"setting_plisio_key",{});await botPrompt(env,chatId,"🔑 Secret Key دریافتی از Plisio را ارسال کنید. پیام پس از ذخیره حذف می‌شود.");return; }
-  if (data === "bot:admin:plisio:rate") { if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");await botSetSession(env,account.user.telegram_id,"setting_plisio_rate",{});await botPrompt(env,chatId,"💱 ارز مبنا و نرخ تومان را با | ارسال کنید.\nمثال: <code>USD | 100000</code>");return; }
+  if (data === "bot:admin:plisio:fxkey") { if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");await botSetSession(env,account.user.telegram_id,"setting_plisio_fx_key",{});await botPrompt(env,chatId,"💵 API Key سرویس ناواسان را ارسال کنید.\nاین کلید پس از ذخیره رمزگذاری و پیام حذف می‌شود.");return; }
+  if (data === "bot:admin:plisio:fxrefresh") { if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");const r=await refreshCentralPlisioFxRate(env,{force:true});await botPrompt(env,chatId,"✅ نرخ دلار بروزرسانی شد.\nنرخ: <b>"+botMoney(r.rate_toman)+" تومان</b>\nمنبع: <b>"+botEscape(r.source)+"</b>",[[{text:"↩️ Plisio",callback_data:"bot:admin:plisio"}]]);return; }
+  if (data === "bot:admin:plisio:ratemode") { if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");const st=await getSettings(env),next=plisioRateMode(st)==="auto"?"manual":"auto";if(next==="manual"&&Number(st.plisio_toman_per_source_unit||0)<=0)throw new Error("ابتدا نرخ دستی پشتیبان را ثبت کنید");await setSettings(env,{plisio_rate_mode:next});const fresh=await ensureTelegramBotUser(env,callback.from);fresh.public_origin=origin;await botSendOrEdit(env,{account:fresh,chatId,messageId},"admin_plisio");return; }
+  if (data === "bot:admin:plisio:fxoptions") { if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");await botSetSession(env,account.user.telegram_id,"setting_plisio_fx_options",{});await botPrompt(env,chatId,"⚙️ بازه بروزرسانی و درصد حاشیه نرخ را با | ارسال کنید.\nمثال: <code>15 | 0</code>\nعدد اول دقیقه (۵ تا ۱۴۴۰) و عدد دوم درصد (-۲۰ تا ۵۰) است.");return; }
+  if (data === "bot:admin:plisio:rate") { if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");await botSetSession(env,account.user.telegram_id,"setting_plisio_rate",{});await botPrompt(env,chatId,"🛟 نرخ دستی پشتیبان دلار را به تومان ارسال کنید.\nمثال: <code>100000</code>");return; }
   if (data === "bot:admin:plisio:currencies") { if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");await botSetSession(env,account.user.telegram_id,"setting_plisio_currencies",{});await botPrompt(env,chatId,"🪙 شناسه رمزارزهای مجاز Plisio را با کاما ارسال کنید.\nبرای استفاده از تنظیمات حساب Plisio، <code>-</code> بفرستید.");return; }
   if (data === "bot:admin:plisio:expire") { if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");await botSetSession(env,account.user.telegram_id,"setting_plisio_expire",{});await botPrompt(env,chatId,"⏱ مدت انقضای فاکتور را به دقیقه ارسال کنید.\nمثال: <code>60</code>");return; }
-  if (data === "bot:admin:plisio:test") { if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");try{const r=await testCentralPlisioConnection(env);await botPrompt(env,chatId,"✅ تنظیمات Plisio معتبر است.\nارز مبنا: <b>"+botEscape(r.source_currency)+"</b>\nتأیید پرداخت‌ها از Callback امضاشده انجام می‌شود.",[[{text:"↩️ Plisio",callback_data:"bot:admin:plisio"}]]);}catch(e){await recordCentralPlisioState(env,false,e.message);throw e}return; }
-  if (data === "bot:admin:plisio:toggle") { if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");const st=await getSettings(env),next=st.plisio_enabled==="true"?"false":"true";if(next==="true"&&(!st.plisio_api_key||Number(st.plisio_toman_per_source_unit||0)<=0))throw new Error("ابتدا Secret Key و نرخ تبدیل را ثبت کنید");await setSettings(env,{plisio_enabled:next});const fresh=await ensureTelegramBotUser(env,callback.from);fresh.public_origin=origin;await botSendOrEdit(env,{account:fresh,chatId,messageId},"admin_plisio");return; }
+  if (data === "bot:admin:plisio:test") { if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");try{const r=await testCentralPlisioConnection(env);await botPrompt(env,chatId,"✅ تنظیمات Plisio و نرخ ارز معتبر است.\nارز مبنا: <b>"+botEscape(r.source_currency)+"</b>\nنرخ دلار: <b>"+botMoney(r.rate_toman)+" تومان</b>\nمنبع نرخ: <b>"+botEscape(r.rate_source)+"</b>\nتأیید پرداخت‌ها از Callback امضاشده انجام می‌شود.",[[{text:"↩️ Plisio",callback_data:"bot:admin:plisio"}]]);}catch(e){await recordCentralPlisioState(env,false,e.message);throw e}return; }
+  if (data === "bot:admin:plisio:toggle") { if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");const st=await getSettings(env),next=st.plisio_enabled==="true"?"false":"true";if(next==="true"&&(!st.plisio_api_key||(!plisioAutoRateConfigured(st)&&Number(st.plisio_toman_per_source_unit||0)<=0)))throw new Error("ابتدا Secret Key و تنظیم نرخ خودکار یا نرخ دستی پشتیبان را ثبت کنید");await setSettings(env,{plisio_enabled:next});const fresh=await ensureTelegramBotUser(env,callback.from);fresh.public_origin=origin;await botSendOrEdit(env,{account:fresh,chatId,messageId},"admin_plisio");return; }
   if (data === "bot:admin:settings:access") {
     await botSendOrEdit(env, { account, chatId, messageId }, "admin_settings_access");
     return;
@@ -11182,10 +11359,12 @@ async function botHandleSessionMessage(env, account, message, session, origin, c
     await botSendOrEdit(env, { account: fresh, chatId }, "admin_pasarguard_api");
     return true;
   }
-  if (["setting_plisio_key","setting_plisio_rate","setting_plisio_currencies","setting_plisio_expire"].includes(session.state)) {
+  if (["setting_plisio_key","setting_plisio_fx_key","setting_plisio_rate","setting_plisio_fx_options","setting_plisio_currencies","setting_plisio_expire"].includes(session.state)) {
     if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");const values={};
     if(session.state==="setting_plisio_key"){if(text.length<12)throw new Error("Secret Key معتبر نیست");values.plisio_api_key="enc:"+await encryptSecret(text,env);try{await telegramApi(env,"deleteMessage",{chat_id:chatId,message_id:message.message_id})}catch(_){}}
-    if(session.state==="setting_plisio_rate"){const p=text.split("|").map(x=>x.trim()),currency=cleanText(p[0],20).toUpperCase(),rate=botParseInteger(p[1]);if(!currency||!Number.isFinite(rate)||rate<=0)throw new Error("قالب صحیح: USD | نرخ تومان");values.plisio_source_currency=currency;values.plisio_toman_per_source_unit=String(rate);}
+    if(session.state==="setting_plisio_fx_key"){if(text.length<8)throw new Error("API Key نرخ ارز معتبر نیست");values.plisio_fx_api_key="enc:"+await encryptSecret(text,env);values.plisio_rate_mode="auto";values.plisio_fx_last_error="";try{await telegramApi(env,"deleteMessage",{chat_id:chatId,message_id:message.message_id})}catch(_){}}
+    if(session.state==="setting_plisio_rate"){const rate=botParseInteger(text.split("|").pop());if(!Number.isFinite(rate)||rate<=0)throw new Error("نرخ تومان معتبر نیست");values.plisio_source_currency="USD";values.plisio_toman_per_source_unit=String(rate);}
+    if(session.state==="setting_plisio_fx_options"){const p=text.split("|").map(x=>x.trim()),minutes=botParseInteger(p[0]),markup=Number(normalizeDigitsForNumber(p[1]||"0"));if(!Number.isFinite(minutes)||minutes<5||minutes>1440)throw new Error("بازه بروزرسانی باید بین ۵ تا ۱۴۴۰ دقیقه باشد");if(!Number.isFinite(markup)||markup<-20||markup>50)throw new Error("درصد حاشیه باید بین منفی ۲۰ تا مثبت ۵۰ باشد");values.plisio_fx_refresh_minutes=String(minutes);values.plisio_fx_markup_percent=String(markup);}
     if(session.state==="setting_plisio_currencies"){values.plisio_allowed_currencies=text==="-"?"":cleanText(text,500).replace(/\s+/g,"").toUpperCase();}
     if(session.state==="setting_plisio_expire"){const minutes=botParseInteger(text.split("|")[0]);if(!Number.isFinite(minutes)||minutes<5||minutes>1440)throw new Error("مدت انقضا باید بین ۵ تا ۱۴۴۰ دقیقه باشد");values.plisio_expire_minutes=String(minutes);}
     await setSettings(env,values);await botClearSession(env,account.user.telegram_id);const fresh=await ensureTelegramBotUser(env,message.from);fresh.public_origin=account.public_origin;await botSendOrEdit(env,{account:fresh,chatId},"admin_plisio");return true;
@@ -12115,7 +12294,7 @@ async function routeApiUnsafe(request, env, path) {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.1.2';
+const BLUEPANEL_CORE_VERSION = '3.1.3';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
@@ -12226,5 +12405,5 @@ export default {
       return new Response('Not found',{status:404});
     } catch(error){console.error('core fetch error',error);return bluePanelCoreJson({success:false,ok:false,role:'bluepanel-core',version:APP_VERSION,error:String(error?.message||error),code:'CORE_RUNTIME_ERROR'},500);}
   },
-  async scheduled(controller,env,ctx){ctx.waitUntil((async()=>{try{await ensureDb(env);await env.PASARGUARD_DB.prepare('DELETE FROM web_sessions WHERE expires_at<=?').bind(nowIso()).run();await env.PASARGUARD_DB.prepare('DELETE FROM web_login_codes WHERE expires_at<=? OR (consumed_at IS NOT NULL AND consumed_at<=?)').bind(nowIso(),new Date(Date.now()-3600000).toISOString()).run();await notifyVersionActivation(env);try{await syncPasarguardManagersForAllUsers(env,250)}catch(_){}await syncUsage(env,100);await reconcileAllAgencyBalanceStates(env,250);await processCentralTrialExpirations(env,100);const s=await getSettings(env);if(s.payment_poll_enabled==='true'&&s.blupal_api_key)await pollPendingPayments(env,30);if(s.auto_delete_pending_invoices==='true')await cleanupStalePendingInvoices(env,{settings:s,limit:200});await automaticUpdateTick(env,{source:'cron'});await automaticPythonHelperTick(env,{source:'cron'});try{await triggerProcessorBusinessJobs(env,'core_cron_fallback')}catch(error){console.error('processor fallback error',error)}await env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_core_cron_at',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(nowIso(),nowIso()).run();}catch(error){console.error('core scheduled error',error)}})());}
+  async scheduled(controller,env,ctx){ctx.waitUntil((async()=>{try{await ensureDb(env);await env.PASARGUARD_DB.prepare('DELETE FROM web_sessions WHERE expires_at<=?').bind(nowIso()).run();await env.PASARGUARD_DB.prepare('DELETE FROM web_login_codes WHERE expires_at<=? OR (consumed_at IS NOT NULL AND consumed_at<=?)').bind(nowIso(),new Date(Date.now()-3600000).toISOString()).run();await notifyVersionActivation(env);try{await syncPasarguardManagersForAllUsers(env,250)}catch(_){}await syncUsage(env,100);await reconcileAllAgencyBalanceStates(env,250);await processCentralTrialExpirations(env,100);const s=await getSettings(env);if(plisioRateMode(s)==='auto'&&String(s.plisio_fx_api_key||'').trim()){try{await refreshCentralPlisioFxRate(env)}catch(error){console.error('fx refresh error',error)}}if(s.payment_poll_enabled==='true'&&s.blupal_api_key)await pollPendingPayments(env,30);if(s.auto_delete_pending_invoices==='true')await cleanupStalePendingInvoices(env,{settings:s,limit:200});await automaticUpdateTick(env,{source:'cron'});await automaticPythonHelperTick(env,{source:'cron'});try{await triggerProcessorBusinessJobs(env,'core_cron_fallback')}catch(error){console.error('processor fallback error',error)}await env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_core_cron_at',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(nowIso(),nowIso()).run();}catch(error){console.error('core scheduled error',error)}})());}
 };

@@ -1,6 +1,6 @@
 {
-  "version": "3.1.2",
-  "release_id": "3.1.2-20260715-report-topics-delivery-fix",
+  "version": "3.1.3",
+  "release_id": "3.1.3-20260715-plisio-auto-usd-toman-rate",
   "architecture": "fully-split-three-worker",
   "files": {
     "core": "core/worker.js",
@@ -8,13 +8,13 @@
     "processor": "processor/worker.js"
   },
   "sha256": {
-    "core": "8178352c9bd37565d892ad50394b15670d4b661d546e4f8448da1ddd7bb16602",
-    "edge": "d3de7eb9fefbdc0b416911b9bebbb4287e38a63c6a76421d6eccfbc17c3f76fe",
-    "processor": "859d7aba7ffa400ce47c22762e221960f02ac126e2f396fc1fa1b3a6e8143da6"
+    "core": "e4cf9b432cb5396b4a26658650ba2d8d2deb803ae6a42e0d93bdda68ebf05cbb",
+    "edge": "f72948b2ddb737d2f91fa5880fdf0d87a35cdde54f1d331d94222bc6a33edd16",
+    "processor": "d62dbfae01564f6afcb822b762d70ffe6a1f9f945f2de307c8b357c261aa813d"
   },
   "roles": {
-    "core": "central bot, finance, licenses, PasarGuard owner integration, central Plisio invoices and callbacks, central APIs, D1 authority and report processor fallback",
-    "edge": "web panels, reseller bots, customer miniapps, reseller Plisio invoices and callbacks, latency-sensitive request handling and immediate topic reports",
+    "core": "central bot, finance, licenses, PasarGuard owner integration, central Plisio invoices/callbacks, automatic USD-to-toman rate service, central APIs, D1 authority and report processor fallback",
+    "edge": "web panels, reseller bots, customer miniapps, reseller Plisio invoices/callbacks using the shared automatic USD-to-toman rate, latency-sensitive handling and immediate topic reports",
     "processor": "report retries, topic repair, daily reports, backups and background jobs"
   },
   "bindings": {
@@ -35,22 +35,25 @@
     ]
   },
   "features": [
-    "fix report topic groups that were created successfully but received no activity reports",
-    "deliver normal central and reseller report events immediately without waiting for Processor Cron",
-    "retain the D1 outbox and retry path when Telegram delivery fails or a topic was deleted",
-    "invoke Processor business jobs from the Core scheduled handler as a fallback",
-    "flush report events queued by Processor jobs in the same run instead of waiting for the next Cron",
-    "add /test_reports and /flush_reports commands to central and reseller report groups",
-    "show pending queue count, last successful delivery and last report error in /reports_status",
-    "preserve Plisio, PasarGuard 5.1 API keys and the three-worker architecture",
+    "fetch USD-to-toman rate automatically for Plisio invoices through the Navasan latest-rate API",
+    "configure the exchange-rate API key securely from the central Telegram bot",
+    "refresh the rate on demand, on invoice creation when stale, and from the Core scheduled handler",
+    "cache the last successful rate and keep using it during temporary provider outages",
+    "fall back to a manually configured central or reseller rate when no safe cached rate is available",
+    "share the central automatic rate with all reseller bots while preserving each reseller manual fallback",
+    "store the exact FX rate and source with every central and reseller Plisio invoice for auditability",
+    "allow configuring refresh interval and rate markup from the central bot",
+    "preserve signed Plisio callbacks, one-time wallet crediting, report topics and PasarGuard 5.1 API support",
     "README files are excluded"
   ],
   "validation": {
     "javascript_syntax": "passed for core, edge and processor",
-    "immediate_delivery_unit_test": "passed for central and reseller message_thread_id routing",
-    "missing_forum_test": "passed; unconfigured destinations are skipped without breaking user operations",
-    "missing_topic_test": "passed; events remain pending for Processor topic recreation and retry",
-    "processor_fallback": "static assertion passed for Core Cron and manual flush paths",
-    "live_telegram_delivery": "not run; no live bot token or report group was supplied"
+    "fx_number_parsing": "passed for Persian, Arabic and comma-separated digits",
+    "navasan_response_parsing": "passed for usd_sell.value in toman and rial conversion modes",
+    "plisio_conversion": "passed for central and reseller source_amount calculations",
+    "rate_fallback": "static assertions passed for fresh cache, stale cache and manual fallback paths",
+    "invoice_audit": "static assertion passed; exact FX rate/source is stored with each invoice",
+    "live_rate_request": "not run; no real Navasan API key was supplied",
+    "live_plisio_invoice": "not run; no live Plisio Secret Key was supplied"
   }
 }
