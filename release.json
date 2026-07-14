@@ -1,6 +1,6 @@
 {
-  "version": "3.0.6",
-  "release_id": "3.0.6-20260714-central-login-payment-count-fix",
+  "version": "3.0.7",
+  "release_id": "3.0.7-20260714-bitpin-central-and-reseller-bots",
   "architecture": "fully-split-three-worker",
   "files": {
     "core": "core/worker.js",
@@ -8,9 +8,9 @@
     "processor": "processor/worker.js"
   },
   "sha256": {
-    "core": "9d86a6633e3fec565f004311f2138d4cfe09dc92cb1ccfcca124468c36ce6f21",
-    "edge": "323042e7b734fa3ca50df5b3a5a149ab5fae3c37c29bc6e163ef99f2007ab115",
-    "processor": "e70cef3aec079fd8cbd153b17613eea1b7ca6413423a495b65411508ec369842"
+    "core": "1db612371074ed262d24b5a1e09a25861e97e137e3b592560e4382452429ce1e",
+    "edge": "34355db621a89f23b533ad6a5ee3a8966e0af966ed5857aa6aca2ef6ed19a7e0",
+    "processor": "a2462a840828789187f7d9cb72048e3d1bc05a47e2dc1386a3c2aaa73b01a757"
   },
   "roles": {
     "core": "central bot, finance, licenses, central APIs, GitHub publishing and D1 authority",
@@ -44,25 +44,22 @@
     "reseller_bot_cache_ttl_seconds": 15
   },
   "fixes": [
-    "move reseller BotFather/runtime synchronization out of the user response path",
-    "batch all initial customer miniapp queries into one Edge-to-Core database call",
-    "batch reseller management dashboard queries into one Edge-to-Core database call",
-    "combine user creation and lookup operations in database batches",
-    "move start-session cleanup and analytics writes to background tasks",
-    "extend safe in-memory caches for settings, reseller bot metadata and join status",
-    "keep request-triggered update checks away from Telegram webhook hot paths",
-    "README files are excluded",
-    "store Bitpin API credentials encrypted with the existing application AES-GCM key",
-    "reject duplicate TXIDs and protect wallet crediting with idempotent ledger references",
-    "require administrator review before wallet credit because aggregate exchange balances cannot identify the depositing user",
-    "add the missing paymentCount element to the central finance view",
-    "guard the payment counter render so an optional UI element cannot break administrator login",
-    "make central login error rendering null-safe"
+    "add Bitpin management menus to the central Telegram bot",
+    "add independent Bitpin API configuration to every reseller bot",
+    "add customer crypto deposit claim flows to central and reseller bots",
+    "reject duplicate TXIDs per wallet scope",
+    "require owner or central administrator review before crediting wallets",
+    "credit each approved deposit exactly once with deterministic ledger IDs and conditional database updates",
+    "include Bitpin status and pending claims in reseller health checks",
+    "include non-secret Bitpin settings in reseller snapshots while excluding API credentials",
+    "retain the central web login null-safety fix",
+    "README files are excluded"
   ],
-  "title": "رفع خطای ورود مدیریت مرکزی و تکمیل شمارنده پرداخت‌ها",
+  "title": "افزودن کامل بیت‌پین به ربات مرکزی و ربات‌های نماینده",
   "notes": [
-    "رفع خطای Cannot set properties of null هنگام ورود به مدیریت مرکزی",
-    "افزودن شمارنده پرداخت‌های بلوپال و واریزهای بیت‌پین در صفحه مالی",
-    "حفظ کامل امکانات اتصال بیت‌پین نسخه 3.0.5"
+    "در ربات مرکزی: مدیریت بیت‌پین، دریافت API Key و Secret، تست اتصال، فعال‌سازی، مشاهده و تأیید واریزها اضافه شد.",
+    "در هر ربات نماینده: تنظیم مستقل بیت‌پین، دریافت API، آدرس و نرخ، تست اتصال و تأیید یا رد واریز مشتری اضافه شد.",
+    "در منوی کیف پول کاربران مرکزی و مشتریان نماینده، گزینه واریز رمزارزی پس از فعال‌سازی نمایش داده می‌شود.",
+    "هر TXID فقط یک‌بار پذیرفته می‌شود و هر درخواست تأییدشده فقط یک‌بار کیف پول را شارژ می‌کند."
   ]
 }

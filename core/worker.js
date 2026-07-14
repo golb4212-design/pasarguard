@@ -1,11 +1,11 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.0.6
+ * Version: 3.0.7
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.0.6";
+const APP_VERSION = "3.0.7";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -655,6 +655,18 @@ CREATE TABLE IF NOT EXISTS reseller_bots (
   blupal_configured_at TEXT,
   blupal_last_verified_at TEXT,
   blupal_last_error TEXT,
+  bitpin_enabled INTEGER NOT NULL DEFAULT 0,
+  bitpin_base_url TEXT NOT NULL DEFAULT 'https://api.bitpin.ir',
+  bitpin_api_key_enc TEXT,
+  bitpin_api_secret_enc TEXT,
+  bitpin_asset TEXT NOT NULL DEFAULT 'USDT',
+  bitpin_network TEXT NOT NULL DEFAULT 'TRC20',
+  bitpin_deposit_address TEXT,
+  bitpin_toman_per_unit INTEGER NOT NULL DEFAULT 100000,
+  bitpin_min_crypto_amount REAL NOT NULL DEFAULT 1,
+  bitpin_configured_at TEXT,
+  bitpin_last_verified_at TEXT,
+  bitpin_last_error TEXT,
   payment_card_enabled INTEGER NOT NULL DEFAULT 1,
   payment_wallet_enabled INTEGER NOT NULL DEFAULT 1,
   payment_method_order TEXT NOT NULL DEFAULT 'card,blupal,wallet',
@@ -872,6 +884,34 @@ CREATE TABLE IF NOT EXISTS sales_wallet_requests (
 );
 CREATE INDEX IF NOT EXISTS idx_sales_wallet_requests_bot ON sales_wallet_requests(bot_id,status,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sales_wallet_requests_customer ON sales_wallet_requests(customer_id,created_at DESC);
+
+CREATE TABLE IF NOT EXISTS sales_bitpin_deposits (
+  id TEXT PRIMARY KEY,
+  bot_id TEXT NOT NULL,
+  customer_id TEXT NOT NULL,
+  asset TEXT NOT NULL,
+  network TEXT NOT NULL,
+  txid TEXT NOT NULL,
+  crypto_amount REAL NOT NULL,
+  rate_toman INTEGER NOT NULL,
+  amount_toman INTEGER NOT NULL,
+  destination_address TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending_review',
+  wallet_balance_snapshot TEXT,
+  provider_payload TEXT,
+  note TEXT,
+  origin TEXT NOT NULL DEFAULT 'bot',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  reviewed_at TEXT,
+  reviewed_by_telegram_id TEXT,
+  credited_at TEXT,
+  FOREIGN KEY(bot_id) REFERENCES reseller_bots(id),
+  FOREIGN KEY(customer_id) REFERENCES sales_customers(id),
+  UNIQUE(bot_id,txid)
+);
+CREATE INDEX IF NOT EXISTS idx_sales_bitpin_deposits_bot ON sales_bitpin_deposits(bot_id,status,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sales_bitpin_deposits_customer ON sales_bitpin_deposits(customer_id,created_at DESC);
 
 CREATE TABLE IF NOT EXISTS sales_payment_invoices (
   id TEXT PRIMARY KEY,
@@ -1423,6 +1463,18 @@ async function ensureDbInternal(env) {
       ["blupal_configured_at", "TEXT"],
       ["blupal_last_verified_at", "TEXT"],
       ["blupal_last_error", "TEXT"],
+      ["bitpin_enabled", "INTEGER NOT NULL DEFAULT 0"],
+      ["bitpin_base_url", "TEXT NOT NULL DEFAULT 'https://api.bitpin.ir'"],
+      ["bitpin_api_key_enc", "TEXT"],
+      ["bitpin_api_secret_enc", "TEXT"],
+      ["bitpin_asset", "TEXT NOT NULL DEFAULT 'USDT'"],
+      ["bitpin_network", "TEXT NOT NULL DEFAULT 'TRC20'"],
+      ["bitpin_deposit_address", "TEXT"],
+      ["bitpin_toman_per_unit", "INTEGER NOT NULL DEFAULT 100000"],
+      ["bitpin_min_crypto_amount", "REAL NOT NULL DEFAULT 1"],
+      ["bitpin_configured_at", "TEXT"],
+      ["bitpin_last_verified_at", "TEXT"],
+      ["bitpin_last_error", "TEXT"],
       ["payment_card_enabled", "INTEGER NOT NULL DEFAULT 1"],
       ["payment_wallet_enabled", "INTEGER NOT NULL DEFAULT 1"],
       ["payment_method_order", "TEXT NOT NULL DEFAULT 'card,blupal,wallet'"],
@@ -4120,6 +4172,77 @@ async function reviewBitpinDeposit(request, env, claimId, decision, providedBody
     "شارژ: " + Number(claim.amount_toman).toLocaleString("fa-IR") + " تومان\n" +
     "موجودی جدید: " + Number(updatedUser?.wallet_balance || 0).toLocaleString("fa-IR") + " تومان");
   return json({ success: true, status: "approved", amount_toman: Number(claim.amount_toman), wallet_balance: Number(updatedUser?.wallet_balance || 0), bitpin_wallet: wallet });
+}
+
+
+async function createBitpinDepositClaimForTelegram(env, user, settings, cryptoAmountRaw, txidRaw, note = "") {
+  if (settings.bitpin_enabled !== "true") throw new Error("واریز رمزارزی بیت‌پین غیرفعال است");
+  const address = cleanText(settings.bitpin_deposit_address, 300).replace(/\s+/g, "");
+  if (!address) throw new Error("آدرس واریز بیت‌پین ثبت نشده است");
+  const cryptoAmount = Number(cryptoAmountRaw);
+  const minCrypto = Math.max(0.00000001, Number(settings.bitpin_min_crypto_amount || 1));
+  if (!Number.isFinite(cryptoAmount) || cryptoAmount < minCrypto || cryptoAmount > 1000000000) throw new Error("مقدار رمزارز معتبر نیست؛ حداقل " + minCrypto + " است");
+  const txid = cleanText(txidRaw, 220).replace(/\s+/g, "").toLowerCase();
+  if (!/^[a-z0-9:_-]{16,220}$/i.test(txid)) throw new Error("شناسه تراکنش (TXID) معتبر نیست");
+  const rate = clampInt(settings.bitpin_toman_per_unit, 1, 1000000000000);
+  const amountToman = Math.floor(cryptoAmount * rate);
+  if (amountToman < Math.max(10000, clampInt(settings.min_recharge, 0))) throw new Error("ارزش واریز از حداقل شارژ کمتر است");
+  let snapshot;
+  try { snapshot = await fetchBitpinWallets(settings, env); await recordBitpinConnectionState(env, true); }
+  catch (error) { await recordBitpinConnectionState(env, false, error.message); throw new Error("استعلام حساب بیت‌پین ناموفق بود: " + error.message); }
+  const asset = cleanText(settings.bitpin_asset || "USDT", 30).toUpperCase();
+  const network = cleanText(settings.bitpin_network || "TRC20", 40).toUpperCase();
+  const selectedWallet = snapshot.wallets.find(row => row.asset === asset) || null;
+  const claimId = id("bpd");
+  const ts = nowIso();
+  try {
+    await env.PASARGUARD_DB.prepare(`INSERT INTO bitpin_deposits(
+      id,user_id,asset,network,txid,crypto_amount,rate_toman,amount_toman,destination_address,status,
+      wallet_balance_snapshot,provider_payload,note,created_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,'pending_review',?,?,?,?,?)`).bind(
+      claimId,user.id,asset,network,txid,cryptoAmount,rate,amountToman,address,
+      selectedWallet ? String(selectedWallet.balance) : "",JSON.stringify({wallets:snapshot.wallets}),cleanText(note,300),ts,ts
+    ).run();
+  } catch (error) {
+    if (/unique|constraint/i.test(String(error?.message || error))) throw new Error("این TXID قبلاً ثبت شده است");
+    throw error;
+  }
+  await audit(env,user.id,"bitpin_deposit_claim_created_bot",{claimId,asset,network,txid,cryptoAmount,rate,amountToman});
+  return {id:claimId,asset,network,txid,crypto_amount:cryptoAmount,rate_toman:rate,amount_toman:amountToman,status:"pending_review",created_at:ts};
+}
+
+async function reviewBitpinDepositFromTelegram(env, adminUser, claimId, decision) {
+  const claim = await env.PASARGUARD_DB.prepare(`SELECT d.*,u.telegram_id,u.username,u.first_name,u.last_name,u.wallet_balance
+    FROM bitpin_deposits d JOIN users u ON u.id=d.user_id WHERE d.id=?`).bind(claimId).first();
+  if (!claim) throw new Error("درخواست بیت‌پین پیدا نشد");
+  if (decision === "reject") {
+    if (claim.credited_at) throw new Error("این درخواست قبلاً شارژ شده است");
+    const ts=nowIso();
+    const result=await env.PASARGUARD_DB.prepare(`UPDATE bitpin_deposits SET status='rejected',reviewed_at=?,reviewed_by=?,updated_at=? WHERE id=? AND status='pending_review' AND credited_at IS NULL`).bind(ts,adminUser.id,ts,claim.id).run();
+    if(!Number(result?.meta?.changes||0)) throw new Error("این درخواست قبلاً بررسی شده است");
+    await audit(env,adminUser.id,"bitpin_deposit_rejected_bot",{claimId:claim.id,txid:claim.txid});
+    await notifyTelegramUser(env,claim.telegram_id,"❌ درخواست واریز رمزارزی شما رد شد.\nTXID: "+claim.txid);
+    return {status:"rejected"};
+  }
+  if (claim.credited_at) return {status:"approved",already_credited:true};
+  if (claim.status !== "pending_review") throw new Error("فقط درخواست در انتظار بررسی قابل تأیید است");
+  const settings=await getSettings(env);
+  const snapshot=await fetchBitpinWallets(settings,env);
+  await recordBitpinConnectionState(env,true);
+  const wallet=snapshot.wallets.find(row=>row.asset===String(claim.asset||"").toUpperCase())||null;
+  const ts=nowIso(),ledgerId="led_bitpin_"+claim.id;
+  const description="شارژ بیت‌پین "+claim.crypto_amount+" "+claim.asset+" · TXID "+claim.txid;
+  const results=await env.PASARGUARD_DB.batch([
+    env.PASARGUARD_DB.prepare(`UPDATE bitpin_deposits SET status='approved',credited_at=?,reviewed_at=?,reviewed_by=?,updated_at=?,provider_payload=?,wallet_balance_snapshot=? WHERE id=? AND status='pending_review' AND credited_at IS NULL`).bind(ts,ts,adminUser.id,ts,JSON.stringify({wallets:snapshot.wallets}),wallet?String(wallet.balance):"",claim.id),
+    env.PASARGUARD_DB.prepare(`UPDATE users SET wallet_balance=wallet_balance+?,updated_at=? WHERE id=? AND EXISTS(SELECT 1 FROM bitpin_deposits WHERE id=? AND status='approved' AND credited_at=?) AND NOT EXISTS(SELECT 1 FROM wallet_ledger WHERE id=?)`).bind(Number(claim.amount_toman),ts,claim.user_id,claim.id,ts,ledgerId),
+    env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO wallet_ledger(id,user_id,type,amount,balance_after,ref_type,ref_id,description,created_at) SELECT ?,id,'recharge',?,wallet_balance,'bitpin',?,?,? FROM users WHERE id=? AND EXISTS(SELECT 1 FROM bitpin_deposits WHERE id=? AND credited_at=?)`).bind(ledgerId,Number(claim.amount_toman),claim.id,description,ts,claim.user_id,claim.id,ts)
+  ]);
+  if(!Number(results?.[0]?.meta?.changes||0)) throw new Error("تأیید انجام نشد یا هم‌زمان بررسی شده است");
+  const updated=await env.PASARGUARD_DB.prepare("SELECT wallet_balance FROM users WHERE id=?").bind(claim.user_id).first();
+  await reconcileUserAgencies(env,claim.user_id);
+  await audit(env,adminUser.id,"bitpin_deposit_approved_bot",{claimId:claim.id,txid:claim.txid,amountToman:claim.amount_toman});
+  await notifyTelegramUser(env,claim.telegram_id,"✅ واریز رمزارزی شما تأیید شد.\nمقدار: "+claim.crypto_amount+" "+claim.asset+"\nشارژ: "+Number(claim.amount_toman).toLocaleString("fa-IR")+" تومان\nموجودی جدید: "+Number(updated?.wallet_balance||0).toLocaleString("fa-IR")+" تومان");
+  return {status:"approved",wallet_balance:Number(updated?.wallet_balance||0)};
 }
 
 function normalizePaymentStatus(value) {
@@ -8455,14 +8578,45 @@ async function botWalletView(env, account) {
     return "• " + botEscape(item.description || "تراکنش کیف پول") + "\n  <b>" + sign + botMoney(item.amount) + "</b> تومان · " + botDate(item.created_at);
   }).join("\n") : "هنوز تراکنشی ثبت نشده است.";
   const min = Math.max(10000, Number(account.settings.min_recharge || 100000));
+  const rows = [
+    [{ text: botMoney(min) + " تومان", callback_data: "bot:charge:" + min }, { text: botMoney(min * 2) + " تومان", callback_data: "bot:charge:" + (min * 2) }],
+    [{ text: botMoney(min * 5) + " تومان", callback_data: "bot:charge:" + (min * 5) }, { text: "✍️ مبلغ دلخواه", callback_data: "bot:charge:custom" }]
+  ];
+  if (account.settings.bitpin_enabled === "true" && cleanText(account.settings.bitpin_deposit_address,300)) rows.push([{ text: "🪙 واریز رمزارزی با بیت‌پین", callback_data: "bot:bitpin" }]);
+  rows.push([{ text: "📊 همه تراکنش‌ها", callback_data: "bot:ledger" }, { text: "🏠 منوی اصلی", callback_data: "bot:home" }]);
   return {
     text: "💳 <b>کیف پول من</b>\n━━━━━━━━━━━━━━\nموجودی قابل استفاده:\n<b>" + botMoney(account.user.wallet_balance) + " تومان</b>\n\nآخرین گردش‌ها:\n" + lines,
-    reply_markup: { inline_keyboard: [
-      [{ text: botMoney(min) + " تومان", callback_data: "bot:charge:" + min }, { text: botMoney(min * 2) + " تومان", callback_data: "bot:charge:" + (min * 2) }],
-      [{ text: botMoney(min * 5) + " تومان", callback_data: "bot:charge:" + (min * 5) }, { text: "✍️ مبلغ دلخواه", callback_data: "bot:charge:custom" }],
-      [{ text: "📊 همه تراکنش‌ها", callback_data: "bot:ledger" }, { text: "🏠 منوی اصلی", callback_data: "bot:home" }]
-    ] }
+    reply_markup: { inline_keyboard: rows }
   };
+}
+
+
+async function botBitpinView(env, account) {
+  const s=await getSettings(env);
+  if(s.bitpin_enabled!=="true") throw new Error("واریز رمزارزی بیت‌پین غیرفعال است");
+  const address=cleanText(s.bitpin_deposit_address,300);
+  if(!address) throw new Error("آدرس واریز بیت‌پین ثبت نشده است");
+  const rows=await env.PASARGUARD_DB.prepare("SELECT id,asset,network,txid,crypto_amount,amount_toman,status,created_at FROM bitpin_deposits WHERE user_id=? ORDER BY created_at DESC LIMIT 5").bind(account.user.id).all();
+  const history=(rows.results||[]).length?(rows.results||[]).map((x,i)=>(i+1)+". <b>"+botEscape(x.crypto_amount+" "+x.asset)+"</b> · "+botMoney(x.amount_toman)+" تومان · "+botEscape(x.status)+"\n<code>"+botEscape(x.txid)+"</code>").join("\n\n"):"هنوز واریزی ثبت نشده است.";
+  return {text:"🪙 <b>واریز رمزارزی با بیت‌پین</b>\n━━━━━━━━━━━━━━\nرمزارز: <b>"+botEscape(s.bitpin_asset||"USDT")+"</b>\nشبکه: <b>"+botEscape(s.bitpin_network||"TRC20")+"</b>\nنرخ هر واحد: <b>"+botMoney(s.bitpin_toman_per_unit)+" تومان</b>\nحداقل مقدار: <b>"+botEscape(s.bitpin_min_crypto_amount||"1")+"</b>\n\nآدرس واریز:\n<code>"+botEscape(address)+"</code>\n\nپس از انتقال، مقدار و TXID را ثبت کنید. شارژ پس از بررسی مدیر انجام می‌شود.\n\n<b>آخرین درخواست‌ها</b>\n"+history,reply_markup:{inline_keyboard:[[{text:"📋 کپی آدرس",copy_text:{text:address}}],[{text:"➕ ثبت واریز جدید",callback_data:"bot:bitpin:new"}],[{text:"↩️ کیف پول",callback_data:"bot:wallet"}]]}};
+}
+
+async function botAdminBitpinView(env, account) {
+  if(!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+  const s=await getSettings(env);
+  const pending=await env.PASARGUARD_DB.prepare("SELECT COUNT(*) AS c FROM bitpin_deposits WHERE status='pending_review'").first();
+  const configured=Boolean(s.bitpin_api_key&&s.bitpin_api_secret&&s.bitpin_deposit_address);
+  return {text:"🪙 <b>مدیریت بیت‌پین مرکزی</b>\n━━━━━━━━━━━━━━\nوضعیت: <b>"+(s.bitpin_enabled==="true"?"🟢 فعال":"🔴 غیرفعال")+"</b>\nاتصال API: <b>"+(configured?"ثبت شده":"ناقص")+"</b>\nرمزارز/شبکه: <b>"+botEscape((s.bitpin_asset||"USDT")+" / "+(s.bitpin_network||"TRC20"))+"</b>\nنرخ: <b>"+botMoney(s.bitpin_toman_per_unit)+" تومان</b>\nحداقل: <b>"+botEscape(s.bitpin_min_crypto_amount||"1")+"</b>\nآدرس: <code>"+botEscape(s.bitpin_deposit_address||"ثبت نشده")+"</code>\nدر انتظار بررسی: <b>"+botMoney(pending?.c||0)+"</b>\n"+(s.bitpin_last_verified_at?"آخرین اتصال موفق: <b>"+botDate(s.bitpin_last_verified_at)+"</b>\n":"")+(s.bitpin_last_error?"⚠️ خطا: <code>"+botEscape(s.bitpin_last_error)+"</code>\n":""),reply_markup:{inline_keyboard:[[{text:"🔑 API Key",callback_data:"bot:admin:bitpin:api"},{text:"🔐 API Secret",callback_data:"bot:admin:bitpin:secret"}],[{text:"🪙 رمزارز و شبکه",callback_data:"bot:admin:bitpin:asset"},{text:"📍 آدرس واریز",callback_data:"bot:admin:bitpin:address"}],[{text:"💱 نرخ و حداقل",callback_data:"bot:admin:bitpin:rate"}],[{text:"🧪 تست اتصال",callback_data:"bot:admin:bitpin:test"},{text:s.bitpin_enabled==="true"?"⏸ غیرفعال‌کردن":"▶️ فعال‌کردن",callback_data:"bot:admin:bitpin:toggle"}],[{text:"📥 واریزهای در انتظار",callback_data:"bot:admin:bitpin:claims"}],[{text:"↩️ تنظیمات مالی",callback_data:"bot:admin:settings:finance"}]]}};
+}
+
+async function botAdminBitpinClaimsView(env, account) {
+  if(!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+  const rows=await env.PASARGUARD_DB.prepare(`SELECT d.*,u.telegram_id,u.first_name,u.username FROM bitpin_deposits d JOIN users u ON u.id=d.user_id ORDER BY CASE WHEN d.status='pending_review' THEN 0 ELSE 1 END,d.created_at DESC LIMIT 12`).all();
+  const items=rows.results||[];
+  const lines=items.length?items.map((x,i)=>(i+1)+". "+(x.status==='pending_review'?"🟠":"▫️")+" <b>"+botEscape(x.first_name||x.username||x.telegram_id)+"</b>\n"+botEscape(x.crypto_amount+" "+x.asset+" · "+botMoney(x.amount_toman)+" تومان")+"\n<code>"+botEscape(x.txid)+"</code> · "+botEscape(x.status)).join("\n\n"):"درخواستی ثبت نشده است.";
+  const buttons=[];items.filter(x=>x.status==='pending_review').slice(0,8).forEach((x,i)=>buttons.push([{text:"✅ تأیید "+(i+1),callback_data:"bot:admin:bitpin:approve:"+x.id},{text:"❌ رد "+(i+1),callback_data:"bot:admin:bitpin:reject:"+x.id}]));
+  buttons.push([{text:"🔄 بروزرسانی",callback_data:"bot:admin:bitpin:claims"},{text:"↩️ بیت‌پین",callback_data:"bot:admin:bitpin"}]);
+  return {text:"📥 <b>واریزهای بیت‌پین مرکزی</b>\n━━━━━━━━━━━━━━\n"+lines,reply_markup:{inline_keyboard:buttons}};
 }
 
 async function botBuyAgencyView(env, account) {
@@ -9122,6 +9276,7 @@ async function botAdminSettingsGroupView(env, account, group) {
         [{ text: "قیمت هر گیگ", callback_data: "bot:setting:price_per_gb" }, { text: "حداقل موجودی پنل", callback_data: "bot:setting:setup_fee" }],
         [{ text: "هزینه ساخت ربات", callback_data: "bot:setting:reseller_bot_setup_fee" }, { text: "تمدید ماهانه", callback_data: "bot:setting:reseller_bot_license_renewal_fee" }],
         [{ text: "بونس شارژ مرکزی", callback_data: "bot:setting:central_recharge_bonus_percent" }],
+        [{ text: "🪙 مدیریت بیت‌پین", callback_data: "bot:admin:bitpin" }],
         [{ text: "حداقل شارژ", callback_data: "bot:setting:min_recharge" }]
       ]
     },
@@ -9248,6 +9403,7 @@ async function botRenderView(env, account, view) {
   if (view === "reports") return botReportsMenuView(account);
   if (view === "assistance") return botAssistanceMenuView(account);
   if (view === "wallet") return botWalletView(env, account);
+  if (view === "bitpin") return botBitpinView(env, account);
   if (view === "trial") return botCentralTrialView(env, account);
   if (view === "agencies") return botAgenciesView(env, account);
   if (view === "buy_agency") return botBuyAgencyView(env, account);
@@ -9280,6 +9436,8 @@ async function botRenderView(env, account, view) {
   if (view === "admin_users") return botAdminUsersView(env, account);
   if (view === "admin_settings") return botAdminSettingsView(env, account);
   if (view === "admin_trial") return botAdminTrialView(env, account);
+  if (view === "admin_bitpin") return botAdminBitpinView(env, account);
+  if (view === "admin_bitpin_claims") return botAdminBitpinClaimsView(env, account);
   if (view === "admin_settings_finance") return botAdminSettingsGroupView(env, account, "finance");
   if (view === "admin_settings_access") return botAdminSettingsGroupView(env, account, "access");
   if (view === "admin_settings_automation") return botAdminSettingsGroupView(env, account, "automation");
@@ -9544,9 +9702,9 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
   }
   const simpleViews = {
     "bot:home": "home", "bot:operations": "operations", "bot:reports": "reports", "bot:assistance": "assistance",
-    "bot:wallet": "wallet", "bot:trial": "trial", "bot:agencies": "agencies", "bot:buy:agency": "buy_agency", "bot:buy:bot": "buy_bot", "bot:sales": "sales_bot",
+    "bot:wallet": "wallet", "bot:bitpin": "bitpin", "bot:trial": "trial", "bot:agencies": "agencies", "bot:buy:agency": "buy_agency", "bot:buy:bot": "buy_bot", "bot:sales": "sales_bot",
     "bot:ledger": "ledger", "bot:invoices": "invoices", "bot:support": "support", "bot:help": "help", "bot:admin": "admin",
-    "bot:admin:central_bot": "admin_central_bot", "bot:admin:trial": "admin_trial", "bot:admin:agency_usage": "admin_agency_usage:0",
+    "bot:admin:central_bot": "admin_central_bot", "bot:admin:trial": "admin_trial", "bot:admin:bitpin": "admin_bitpin", "bot:admin:bitpin:claims": "admin_bitpin_claims", "bot:admin:agency_usage": "admin_agency_usage:0",
     "bot:admin:group:users": "admin_group_users", "bot:admin:group:finance": "admin_group_finance",
     "bot:admin:group:operations": "admin_group_operations", "bot:admin:group:communications": "admin_group_communications",
     "bot:admin:group:system": "admin_group_system", "bot:admin:reseller_ops": "admin_reseller_ops",
@@ -9556,6 +9714,29 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
     await botClearSession(env, account.user.telegram_id);
     await botSendOrEdit(env, { account, chatId, messageId }, simpleViews[data]);
     return;
+  }
+
+
+  if (data === "bot:bitpin:new") {
+    const st=await getSettings(env);if(st.bitpin_enabled!=="true")throw new Error("واریز بیت‌پین غیرفعال است");
+    await botSetSession(env,account.user.telegram_id,"bitpin_claim",{});
+    await botPrompt(env,chatId,"🪙 مقدار رمزارز و TXID را با علامت <code>|</code> ارسال کنید.\nمثال:\n<code>10 | TXID_TRANSACTION</code>\n\nرمزارز: <b>"+botEscape(st.bitpin_asset||"USDT")+"</b> · شبکه: <b>"+botEscape(st.bitpin_network||"TRC20")+"</b>");return;
+  }
+  if (data === "bot:admin:bitpin:api" || data === "bot:admin:bitpin:secret" || data === "bot:admin:bitpin:asset" || data === "bot:admin:bitpin:address" || data === "bot:admin:bitpin:rate") {
+    if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");
+    const map={"bot:admin:bitpin:api":["setting_bitpin_api","🔑 API Key بیت‌پین را ارسال کنید."],"bot:admin:bitpin:secret":["setting_bitpin_secret","🔐 API Secret بیت‌پین را ارسال کنید."],"bot:admin:bitpin:asset":["setting_bitpin_asset","🪙 رمزارز و شبکه را ارسال کنید.\nمثال: <code>USDT | TRC20</code>"],"bot:admin:bitpin:address":["setting_bitpin_address","📍 آدرس واریز را ارسال کنید."],"bot:admin:bitpin:rate":["setting_bitpin_rate","💱 نرخ هر واحد به تومان و حداقل مقدار را ارسال کنید.\nمثال: <code>100000 | 1</code>"]};
+    const item=map[data];await botSetSession(env,account.user.telegram_id,item[0],{});await botPrompt(env,chatId,item[1]);return;
+  }
+  if (data === "bot:admin:bitpin:toggle") {
+    if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");const st=await getSettings(env);const next=st.bitpin_enabled==="true"?"false":"true";
+    if(next==="true"&&(!st.bitpin_api_key||!st.bitpin_api_secret||!st.bitpin_deposit_address))throw new Error("ابتدا API Key، Secret و آدرس واریز را ثبت کنید");
+    await setSettings(env,{bitpin_enabled:next});await audit(env,account.user.id,"central_bitpin_toggled",{enabled:next==="true"});const fresh=await ensureTelegramBotUser(env,callback.from);await botSendOrEdit(env,{account:fresh,chatId,messageId},"admin_bitpin");return;
+  }
+  if (data === "bot:admin:bitpin:test") {
+    if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");const st=await getSettings(env);try{const snap=await fetchBitpinWallets(st,env);await recordBitpinConnectionState(env,true);const asset=String(st.bitpin_asset||"USDT").toUpperCase(),w=snap.wallets.find(x=>x.asset===asset);await botPrompt(env,chatId,"✅ اتصال بیت‌پین برقرار است."+(w?"\nموجودی "+botEscape(asset)+": <b>"+botEscape(w.balance)+"</b>":""),[[{text:"↩️ بیت‌پین",callback_data:"bot:admin:bitpin"}]]);}catch(e){await recordBitpinConnectionState(env,false,e.message);throw e}return;
+  }
+  if (data.startsWith("bot:admin:bitpin:approve:") || data.startsWith("bot:admin:bitpin:reject:")) {
+    if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");const approve=data.includes(":approve:"),claimId=data.split(approve?":approve:":":reject:")[1];await reviewBitpinDepositFromTelegram(env,account.user,claimId,approve?"approve":"reject");await botSendOrEdit(env,{account,chatId,messageId},"admin_bitpin_claims");return;
   }
 
   if (data === "bot:admin:github_zip:start") {
@@ -10314,6 +10495,23 @@ async function botHandleSessionMessage(env, account, message, session, origin, c
     await botClearSession(env, account.user.telegram_id);
     await botPrompt(env, chatId, "⛔ ساخت ربات نمایندگی در حین فرایند توسط مدیریت مرکزی متوقف شد. اطلاعات نیمه‌تمام حذف شد.", [[{ text: "🏠 منوی اصلی", callback_data: "bot:home" }]]);
     return true;
+  }
+
+
+  if (session.state === "bitpin_claim") {
+    const parts=String(text||"").split("|").map(x=>x.trim());if(parts.length<2)throw new Error("قالب صحیح: مقدار | TXID");
+    const claim=await createBitpinDepositClaimForTelegram(env,account.user,await getSettings(env),parts[0],parts.slice(1).join(""));await botClearSession(env,account.user.telegram_id);
+    await notifyAdmins(env,"🪙 <b>درخواست واریز بیت‌پین</b>\nکاربر: <code>"+botEscape(account.user.telegram_id)+"</code>\nمقدار: <b>"+botEscape(claim.crypto_amount+" "+claim.asset)+"</b>\nارزش: <b>"+botMoney(claim.amount_toman)+" تومان</b>\nTXID: <code>"+botEscape(claim.txid)+"</code>");
+    await botPrompt(env,chatId,"✅ درخواست ثبت شد و پس از بررسی مدیر، کیف پول شارژ می‌شود.\nشناسه: <code>"+botEscape(claim.id)+"</code>",[[{text:"🪙 وضعیت واریزها",callback_data:"bot:bitpin"}],[{text:"💳 کیف پول",callback_data:"bot:wallet"}]]);return true;
+  }
+  if (["setting_bitpin_api","setting_bitpin_secret","setting_bitpin_asset","setting_bitpin_address","setting_bitpin_rate"].includes(session.state)) {
+    if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");const values={};
+    if(session.state==="setting_bitpin_api"){if(text.length<8)throw new Error("API Key معتبر نیست");values.bitpin_api_key="enc:"+await encryptSecret(text,env);try{await telegramApi(env,"deleteMessage",{chat_id:chatId,message_id:message.message_id})}catch(_){}}
+    if(session.state==="setting_bitpin_secret"){if(text.length<8)throw new Error("API Secret معتبر نیست");values.bitpin_api_secret="enc:"+await encryptSecret(text,env);try{await telegramApi(env,"deleteMessage",{chat_id:chatId,message_id:message.message_id})}catch(_){}}
+    if(session.state==="setting_bitpin_asset"){const p=text.split("|").map(x=>cleanText(x,40).toUpperCase());if(p.length<2||!p[0]||!p[1])throw new Error("قالب صحیح: USDT | TRC20");values.bitpin_asset=p[0];values.bitpin_network=p[1];}
+    if(session.state==="setting_bitpin_address"){const a=cleanText(text,300).replace(/\s+/g,"");if(a.length<10)throw new Error("آدرس واریز معتبر نیست");values.bitpin_deposit_address=a;}
+    if(session.state==="setting_bitpin_rate"){const p=text.split("|").map(x=>x.trim()),rate=botParseInteger(p[0]),min=Number(p[1]);if(!Number.isFinite(rate)||rate<1||!Number.isFinite(min)||min<=0)throw new Error("قالب صحیح: نرخ تومان | حداقل مقدار");values.bitpin_toman_per_unit=String(rate);values.bitpin_min_crypto_amount=String(min);}
+    await setSettings(env,values);await audit(env,account.user.id,"central_bitpin_setting_saved",{state:session.state});await botClearSession(env,account.user.telegram_id);const fresh=await ensureTelegramBotUser(env,message.from);await botSendOrEdit(env,{account:fresh,chatId},"admin_bitpin");return true;
   }
 
   if (session.state === "setting_github_upload_token") {
@@ -11670,7 +11868,7 @@ async function routeApiUnsafe(request, env, path) {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.0.6';
+const BLUEPANEL_CORE_VERSION = '3.0.7';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
