@@ -1,6 +1,6 @@
 {
-  "version": "3.0.7",
-  "release_id": "3.0.7-20260714-bitpin-central-and-reseller-bots",
+  "version": "3.0.8",
+  "release_id": "3.0.8-20260714-d1-reseller-bitpin-schema-fix",
   "architecture": "fully-split-three-worker",
   "files": {
     "core": "core/worker.js",
@@ -8,9 +8,9 @@
     "processor": "processor/worker.js"
   },
   "sha256": {
-    "core": "1db612371074ed262d24b5a1e09a25861e97e137e3b592560e4382452429ce1e",
-    "edge": "34355db621a89f23b533ad6a5ee3a8966e0af966ed5857aa6aca2ef6ed19a7e0",
-    "processor": "a2462a840828789187f7d9cb72048e3d1bc05a47e2dc1386a3c2aaa73b01a757"
+    "core": "0f5ed544aace18c78053d65602b3263eb72ae60f2125256c58eb1884dbd00a9d",
+    "edge": "e15b18fc18b182eb7194153f0ef1c67e574f5e4acfcad4ac1b19792c68e130c2",
+    "processor": "5996df7dea72d93a138e73cba52638bfda908cd11e4704a7b3e9fcc0d01fde81"
   },
   "roles": {
     "core": "central bot, finance, licenses, central APIs, GitHub publishing and D1 authority",
@@ -44,22 +44,21 @@
     "reseller_bot_cache_ttl_seconds": 15
   },
   "fixes": [
-    "add Bitpin management menus to the central Telegram bot",
-    "add independent Bitpin API configuration to every reseller bot",
-    "add customer crypto deposit claim flows to central and reseller bots",
-    "reject duplicate TXIDs per wallet scope",
-    "require owner or central administrator review before crediting wallets",
-    "credit each approved deposit exactly once with deterministic ledger IDs and conditional database updates",
-    "include Bitpin status and pending claims in reseller health checks",
-    "include non-secret Bitpin settings in reseller snapshots while excluding API credentials",
-    "retain the central web login null-safety fix",
+    "fix D1_ERROR too many columns on sqlite_altertab_reseller_bots",
+    "move reseller Bitpin settings from reseller_bots into reseller_bitpin_configs",
+    "stop all Bitpin ALTER TABLE operations on the already wide reseller_bots table",
+    "hydrate Bitpin configuration transparently in Core, Edge and Processor workers",
+    "write reseller Bitpin API, address, rate and status through atomic UPSERT operations",
+    "restore reseller backups without writing Bitpin fields into reseller_bots",
+    "remain compatible with databases where the failed 3.0.7 migration added one or two legacy Bitpin columns",
+    "retain central and reseller Bitpin menus, TXID review and exactly-once wallet crediting",
     "README files are excluded"
   ],
-  "title": "افزودن کامل بیت‌پین به ربات مرکزی و ربات‌های نماینده",
+  "title": "رفع خطای ورود D1 و جداسازی تنظیمات بیت‌پین نمایندگان",
   "notes": [
-    "در ربات مرکزی: مدیریت بیت‌پین، دریافت API Key و Secret، تست اتصال، فعال‌سازی، مشاهده و تأیید واریزها اضافه شد.",
-    "در هر ربات نماینده: تنظیم مستقل بیت‌پین، دریافت API، آدرس و نرخ، تست اتصال و تأیید یا رد واریز مشتری اضافه شد.",
-    "در منوی کیف پول کاربران مرکزی و مشتریان نماینده، گزینه واریز رمزارزی پس از فعال‌سازی نمایش داده می‌شود.",
-    "هر TXID فقط یک‌بار پذیرفته می‌شود و هر درخواست تأییدشده فقط یک‌بار کیف پول را شارژ می‌کند."
+    "علت خطا محدودیت تعداد ستون‌های D1 بود؛ جدول reseller_bots در نسخه قبلی ۹۸ ستون داشت و افزودن ستون‌های بیت‌پین از سقف ۱۰۰ ستون عبور می‌کرد.",
+    "در این نسخه تنظیمات بیت‌پین هر نماینده در جدول مستقل ذخیره می‌شود و دیگر هیچ ALTER TABLE برای ستون‌های بیت‌پین روی reseller_bots اجرا نمی‌شود.",
+    "اگر اجرای نسخه ۳.۰.۷ چند ستون ناقص ساخته باشد، نسخه جدید آن‌ها را نادیده می‌گیرد و بدون حذف اطلاعات قبلی سامانه بالا می‌آید.",
+    "برای اعمال کامل اصلاح، Core و Edge و Processor هر سه به نسخه ۳.۰.۸ بروزرسانی شوند."
   ]
 }
