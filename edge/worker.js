@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.0.8
+ * Version: 3.0.9
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = "3.0.8";
+const APP_VERSION = "3.0.9";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -34,7 +34,7 @@ const RESELLER_BACKUP_FIELDS = Object.freeze([
   "cashback_enabled","cashback_percent","cashback_min_purchase_toman","cashback_max_toman",
   "notifications_enabled","expiry_reminder_hours","usage_reminder_percent","ticketing_enabled",
   "phone_verification_required","ticket_auto_close_hours","daily_report_enabled","daily_report_hour_utc",
-  "blupal_enabled","blupal_base_url","blupal_card_number","bitpin_enabled","bitpin_base_url","bitpin_asset","bitpin_network","bitpin_deposit_address","bitpin_toman_per_unit","bitpin_min_crypto_amount","miniapp_enabled",
+  "blupal_enabled","blupal_base_url","blupal_card_number","miniapp_enabled",
   "sales_automation_enabled","abandoned_reminder_minutes","winback_days","loyalty_enabled","loyalty_profile",
   "fraud_protection_enabled","order_cooldown_seconds","max_pending_orders","daily_order_limit",
   "daily_wallet_charge_limit_toman","duplicate_receipt_protection","auto_block_risk_score",
@@ -792,7 +792,7 @@ function resellerViewPermission(view) {
     texts: "texts", promos: "promos", tickets: "tickets", ticket: "tickets",
     settings: "settings", settings_identity: "settings", settings_loyalty: "settings",
     settings_support: "settings", settings_automation: "settings",
-    payments: "settings", payment_methods: "settings", campaigns: "campaigns", staff: "owner", audit: "audit", children: "owner",
+    payments: "settings", payment_methods: "settings", plisio: "settings", campaigns: "campaigns", staff: "owner", audit: "audit", children: "owner",
     executive: "reports", automation: "automation", security: "security", health: "health", backups: "backups"
   })[String(view || "home")] || "dashboard";
 }
@@ -815,7 +815,7 @@ function resellerCallbackPermission(data) {
   if (value.startsWith("owner:text")) return "texts";
   if (value.startsWith("owner:plan")) return "plans";
   if (value.startsWith("owner:category") || value.startsWith("owner:location") || value.startsWith("owner:catalog")) return "catalog";
-  if (value.startsWith("owner:payment") || value.startsWith("owner:methods") || value === "owner:payments" || value === "owner:payment_methods") return "settings";
+  if (value.startsWith("owner:payment") || value.startsWith("owner:methods") || value.startsWith("owner:plisio") || value === "owner:payments" || value === "owner:payment_methods") return "settings";
   if (value.startsWith("owner:setting") || value === "owner:card" || value === "owner:panel" || value.startsWith("owner:agency") || value === "owner:toggle") return "settings";
   if (value === "owner:stats") return "stats";
   if (value === "owner:users") return "users";
@@ -1376,63 +1376,75 @@ async function resolveResellerServiceAgency(env, bot) {
   };
 }
 
-
-const RESELLER_BITPIN_DEFAULTS = Object.freeze({
-  bitpin_enabled: 0,
-  bitpin_base_url: "https://api.bitpin.ir",
-  bitpin_api_key_enc: null,
-  bitpin_api_secret_enc: null,
-  bitpin_asset: "USDT",
-  bitpin_network: "TRC20",
-  bitpin_deposit_address: null,
-  bitpin_toman_per_unit: 100000,
-  bitpin_min_crypto_amount: 1,
-  bitpin_configured_at: null,
-  bitpin_last_verified_at: null,
-  bitpin_last_error: null
+const RESELLER_PLISIO_DEFAULTS = Object.freeze({
+  plisio_enabled: 0,
+  plisio_api_key_enc: null,
+  plisio_source_currency: "USD",
+  plisio_toman_per_source_unit: 0,
+  plisio_allowed_currencies: "",
+  plisio_expire_minutes: 60,
+  plisio_configured_at: null,
+  plisio_last_verified_at: null,
+  plisio_last_error: null
 });
 
-async function getResellerBitpinConfig(env, botId) {
-  if (!botId) return { ...RESELLER_BITPIN_DEFAULTS };
+async function getResellerPlisioConfig(env, botId) {
+  if (!botId) return { ...RESELLER_PLISIO_DEFAULTS };
   try {
     const row = await env.PASARGUARD_DB.prepare(`
-      SELECT bitpin_enabled,bitpin_base_url,bitpin_api_key_enc,bitpin_api_secret_enc,
-             bitpin_asset,bitpin_network,bitpin_deposit_address,bitpin_toman_per_unit,
-             bitpin_min_crypto_amount,bitpin_configured_at,bitpin_last_verified_at,bitpin_last_error
-      FROM reseller_bitpin_configs WHERE bot_id=?
+      SELECT plisio_enabled,plisio_api_key_enc,plisio_source_currency,plisio_toman_per_source_unit,
+             plisio_allowed_currencies,plisio_expire_minutes,plisio_configured_at,
+             plisio_last_verified_at,plisio_last_error
+      FROM reseller_plisio_configs WHERE bot_id=?
     `).bind(botId).first();
-    return { ...RESELLER_BITPIN_DEFAULTS, ...(row || {}) };
+    return { ...RESELLER_PLISIO_DEFAULTS, ...(row || {}) };
   } catch (error) {
-    if (/no such table/i.test(String(error?.message || error))) return { ...RESELLER_BITPIN_DEFAULTS };
+    if (/no such table/i.test(String(error?.message || error))) return { ...RESELLER_PLISIO_DEFAULTS };
     throw error;
   }
 }
 
-
-
-const RESELLER_BITPIN_CONFIG_FIELDS = Object.freeze([
-  "bitpin_enabled","bitpin_base_url","bitpin_api_key_enc","bitpin_api_secret_enc",
-  "bitpin_asset","bitpin_network","bitpin_deposit_address","bitpin_toman_per_unit",
-  "bitpin_min_crypto_amount","bitpin_configured_at","bitpin_last_verified_at","bitpin_last_error"
-]);
-
-async function updateResellerBitpinConfig(env, botId, values = {}) {
-  const keys = RESELLER_BITPIN_CONFIG_FIELDS.filter(key => Object.prototype.hasOwnProperty.call(values, key));
-  if (!keys.length) return getResellerBitpinConfig(env, botId);
+async function saveResellerPlisioConfig(env, botId, changes = {}) {
+  const current = await getResellerPlisioConfig(env, botId);
+  const next = { ...current, ...changes };
   const ts = nowIso();
-  const columns = ["bot_id", ...keys, "created_at", "updated_at"];
-  const placeholders = columns.map(() => "?").join(",");
-  const updates = keys.map(key => key + "=excluded." + key).concat(["updated_at=excluded.updated_at"]).join(",");
-  await env.PASARGUARD_DB.prepare(
-    "INSERT INTO reseller_bitpin_configs(" + columns.join(",") + ") VALUES(" + placeholders + ") " +
-    "ON CONFLICT(bot_id) DO UPDATE SET " + updates
-  ).bind(botId, ...keys.map(key => values[key]), ts, ts).run();
-  return getResellerBitpinConfig(env, botId);
+  await env.PASARGUARD_DB.prepare(`
+    INSERT INTO reseller_plisio_configs(
+      bot_id,plisio_enabled,plisio_api_key_enc,plisio_source_currency,plisio_toman_per_source_unit,
+      plisio_allowed_currencies,plisio_expire_minutes,plisio_configured_at,
+      plisio_last_verified_at,plisio_last_error,created_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(bot_id) DO UPDATE SET
+      plisio_enabled=excluded.plisio_enabled,
+      plisio_api_key_enc=excluded.plisio_api_key_enc,
+      plisio_source_currency=excluded.plisio_source_currency,
+      plisio_toman_per_source_unit=excluded.plisio_toman_per_source_unit,
+      plisio_allowed_currencies=excluded.plisio_allowed_currencies,
+      plisio_expire_minutes=excluded.plisio_expire_minutes,
+      plisio_configured_at=excluded.plisio_configured_at,
+      plisio_last_verified_at=excluded.plisio_last_verified_at,
+      plisio_last_error=excluded.plisio_last_error,
+      updated_at=excluded.updated_at
+  `).bind(
+    botId,
+    Number(next.plisio_enabled || 0) === 1 ? 1 : 0,
+    next.plisio_api_key_enc || null,
+    cleanText(next.plisio_source_currency || "USD", 20).toUpperCase() || "USD",
+    clampInt(next.plisio_toman_per_source_unit, 0, 1000000000000),
+    cleanText(next.plisio_allowed_currencies || "", 500).replace(/\s+/g, "").toUpperCase(),
+    Math.max(5, Math.min(1440, clampInt(next.plisio_expire_minutes || 60, 5, 1440))),
+    next.plisio_configured_at || null,
+    next.plisio_last_verified_at || null,
+    cleanText(next.plisio_last_error || "", 800) || null,
+    current.created_at || ts,
+    ts
+  ).run();
+  return getResellerPlisioConfig(env, botId);
 }
 
 async function hydrateResellerBotRelations(env, bot) {
   if (!bot) return null;
-  const [relation, bitpin] = await Promise.all([
+  const [relation, plisio] = await Promise.all([
     env.PASARGUARD_DB.prepare(`
       SELECT a.title AS agency_title,a.panel_username,a.panel_password_enc,a.status AS agency_status,a.remote_manager_id,
              u.telegram_id AS owner_telegram_id,u.username AS owner_username,u.first_name AS owner_first_name,
@@ -1441,9 +1453,9 @@ async function hydrateResellerBotRelations(env, bot) {
       FROM users u LEFT JOIN agencies a ON a.id=?
       WHERE u.id=?
     `).bind(bot.agency_id, bot.user_id).first(),
-    getResellerBitpinConfig(env, bot.id)
+    getResellerPlisioConfig(env, bot.id)
   ]);
-  return { ...bot, ...RESELLER_BITPIN_DEFAULTS, ...(bitpin || {}), ...(relation || {}) };
+  return { ...bot, ...RESELLER_PLISIO_DEFAULTS, ...(plisio || {}), ...(relation || {}) };
 }
 
 async function getResellerBotForUser(env, userId) {
@@ -2957,7 +2969,6 @@ async function salesCustomerWalletView(env, bot, customer) {
   ).join("\n") || "هنوز تراکنشی ثبت نشده است.";
   const keyboard = [];
   const rechargeMethods = resellerPaymentMethodOrder(bot).filter(method => method !== "wallet" && resellerPaymentMethodEnabled(bot, method, "recharge"));
-  if (resellerBitpinConfigured(bot)) rechargeMethods.push("bitpin");
   if (rechargeMethods.length) keyboard.push([{ text: "➕ شارژ کیف پول", callback_data: "sale:wallet:charge" }]);
   else keyboard.push([{ text: "⚠️ روش شارژ فعالی تنظیم نشده", callback_data: "sale:home" }]);
   if (resellerPaymentMethodEnabled(bot, "wallet")) keyboard.push([{ text: "🛒 خرید با موجودی", callback_data: "sale:locations" }]);
@@ -3365,12 +3376,17 @@ async function sendSalesPaymentInstructions(env, bot, customer, order) {
 }
 
 async function sendSalesBlupalInvoiceMessage(env, bot, customer, invoice, title = "پرداخت آنلاین", detail = "") {
-  const text = "💠 <b>" + botEscape(title) + "</b>\n━━━━━━━━━━━━━━\n" +
+  const isPlisio = String(invoice.provider || "").toLowerCase() === "plisio";
+  const providerLabel = isPlisio ? "Plisio" : "بلوپال";
+  const icon = isPlisio ? "🪙" : "💠";
+  const text = icon + " <b>" + botEscape(title) + "</b>\n━━━━━━━━━━━━━━\n" +
     (detail ? botEscape(detail) + "\n" : "") +
     "شماره فاکتور: <code>" + botEscape(invoice.invoice_id || invoice.provider_invoice_id || invoice.id) + "</code>\n" +
     "مبلغ سفارش: <b>" + botMoney(invoice.amount_toman) + " تومان</b>\n" +
-    (Number(invoice.final_amount_rial || 0) ? "مبلغ نهایی بلوپال: <b>" + botMoney(invoice.final_amount_rial) + " ریال</b>\n" : "") +
-    "\nپس از پرداخت، وضعیت از API بلوپال استعلام و عملیات به‌صورت خودکار انجام می‌شود.";
+    (!isPlisio && Number(invoice.final_amount_rial || 0) ? "مبلغ نهایی بلوپال: <b>" + botMoney(invoice.final_amount_rial) + " ریال</b>\n" : "") +
+    "\n" + (isPlisio
+      ? "پس از پرداخت، Callback امضاشده Plisio دریافت و حساب شما فقط یک‌بار شارژ می‌شود."
+      : "پس از پرداخت، وضعیت از API بلوپال استعلام و عملیات به‌صورت خودکار انجام می‌شود.");
   await resellerTelegramApi(env, bot, "sendMessage", {
     chat_id: customer.telegram_id,
     text,
@@ -3378,7 +3394,7 @@ async function sendSalesBlupalInvoiceMessage(env, bot, customer, invoice, title 
     disable_web_page_preview: true,
     protect_content: Number(bot.forward_enabled ?? 1) !== 1,
     reply_markup: { inline_keyboard: [
-      [{ text: "💠 بازکردن صفحه پرداخت", url: invoice.payment_link }],
+      [{ text: icon + " بازکردن صفحه پرداخت " + providerLabel, url: invoice.payment_link }],
       [{ text: "🔄 بررسی وضعیت پرداخت", callback_data: "sale:paystatus:" + invoice.id }],
       [{ text: "📋 کپی شماره فاکتور", copy_text: { text: String(invoice.invoice_id || invoice.provider_invoice_id || invoice.id) } }],
       [{ text: "🏠 منوی اصلی", callback_data: "sale:home" }]
@@ -4287,19 +4303,20 @@ async function salesHandleCustomerCallback(env, bot, callback) {
   }
   if (data === "sale:wallet:charge") {
     const methods = resellerPaymentMethodOrder(bot).filter(method => method !== "wallet" && resellerPaymentMethodEnabled(bot, method, "recharge"));
-    if (resellerBitpinConfigured(bot)) methods.push("bitpin");
+    if (resellerPlisioConfigured(bot) && !methods.includes("plisio")) methods.push("plisio");
     if (!methods.length) throw new Error("هیچ روش فعالی برای شارژ کیف پول تنظیم نشده است");
     if (methods.length === 1) {
       const method = methods[0];
-      if(method==="bitpin"){await salesSessionSet(env,bot.id,customer.telegram_id,"bitpin_claim",{});await resellerTelegramApi(env,bot,"sendMessage",{chat_id:chatId,text:"🪙 مقدار رمزارز و TXID را با علامت | ارسال کنید.\nمثال: <code>10 | TXID_TRANSACTION</code>\n\nرمزارز: <b>"+botEscape(bot.bitpin_asset||"USDT")+"</b> · شبکه: <b>"+botEscape(bot.bitpin_network||"TRC20")+"</b>\nآدرس: <code>"+botEscape(bot.bitpin_deposit_address)+"</code>",parse_mode:"HTML"});return}
       await salesSessionSet(env, bot.id, customer.telegram_id, "wallet_amount", { paymentMethod: method });
-      await resellerTelegramApi(env, bot, "sendMessage", { chat_id: chatId, text: method === "blupal" ? "💠 مبلغ شارژ آنلاین را به تومان ارسال کنید.\nمثال: 100000" : "💰 مبلغ شارژ کارت‌به‌کارت را به تومان ارسال کنید.\nمثال: 100000" });
+      const prompt = method === "plisio" ? "🪙 مبلغ شارژ رمزارزی Plisio را به تومان ارسال کنید.\nمثال: 100000" : method === "blupal" ? "💠 مبلغ شارژ آنلاین را به تومان ارسال کنید.\nمثال: 100000" : "💰 مبلغ شارژ کارت‌به‌کارت را به تومان ارسال کنید.\nمثال: 100000";
+      await resellerTelegramApi(env, bot, "sendMessage", { chat_id: chatId, text: prompt });
       return;
     }
-    const keyboard = methods.map(method => method === "blupal"
-      ? [{ text: "💠 پرداخت آنلاین بلوپال", callback_data: "sale:wallet:online" }]
-      : method === "bitpin" ? [{ text: "🪙 واریز رمزارزی بیت‌پین", callback_data: "sale:wallet:bitpin" }]
-      : [{ text: "💳 کارت‌به‌کارت و رسید", callback_data: "sale:wallet:card" }]);
+    const keyboard = methods.map(method => method === "plisio"
+      ? [{ text: "🪙 پرداخت رمزارزی Plisio", callback_data: "sale:wallet:plisio" }]
+      : method === "blupal"
+        ? [{ text: "💠 پرداخت آنلاین بلوپال", callback_data: "sale:wallet:online" }]
+        : [{ text: "💳 کارت‌به‌کارت و رسید", callback_data: "sale:wallet:card" }]);
     keyboard.push([{ text: "↩️ بازگشت", callback_data: "sale:wallet" }]);
     return resellerTelegramApi(env, bot, "sendMessage", {
       chat_id: chatId,
@@ -4308,13 +4325,14 @@ async function salesHandleCustomerCallback(env, bot, callback) {
       reply_markup: { inline_keyboard: keyboard }
     });
   }
-
-  if (data === "sale:wallet:bitpin") {if(!resellerBitpinConfigured(bot))throw new Error("بیت‌پین فعال نیست");await salesSessionSet(env,bot.id,customer.telegram_id,"bitpin_claim",{});await resellerTelegramApi(env,bot,"sendMessage",{chat_id:chatId,text:"🪙 مقدار رمزارز و TXID را با علامت <code>|</code> ارسال کنید.\nمثال: <code>10 | TXID_TRANSACTION</code>\n\nرمزارز: <b>"+botEscape(bot.bitpin_asset||"USDT")+"</b> · شبکه: <b>"+botEscape(bot.bitpin_network||"TRC20")+"</b>\nآدرس: <code>"+botEscape(bot.bitpin_deposit_address)+"</code>",parse_mode:"HTML"});return}
-  if (data === "sale:wallet:card" || data === "sale:wallet:online") {
-    const method = data.endsWith(":online") ? "blupal" : "card";
-    resellerRequirePaymentMethod(bot, method, "recharge");
+  if (data === "sale:wallet:card" || data === "sale:wallet:online" || data === "sale:wallet:plisio") {
+    const method = data.endsWith(":plisio") ? "plisio" : data.endsWith(":online") ? "blupal" : "card";
+    if (method === "plisio") {
+      if (!resellerPlisioConfigured(bot)) throw new Error("درگاه Plisio این ربات فعال یا کامل تنظیم نشده است");
+    } else resellerRequirePaymentMethod(bot, method, "recharge");
     await salesSessionSet(env, bot.id, customer.telegram_id, "wallet_amount", { paymentMethod: method });
-    await resellerTelegramApi(env, bot, "sendMessage", { chat_id: chatId, text: method === "blupal" ? "💠 مبلغ شارژ آنلاین را به تومان ارسال کنید.\nمثال: 100000" : "💰 مبلغ شارژ کارت‌به‌کارت را به تومان ارسال کنید.\nمثال: 100000" });
+    const prompt = method === "plisio" ? "🪙 مبلغ شارژ رمزارزی Plisio را به تومان ارسال کنید.\nمثال: 100000" : method === "blupal" ? "💠 مبلغ شارژ آنلاین را به تومان ارسال کنید.\nمثال: 100000" : "💰 مبلغ شارژ کارت‌به‌کارت را به تومان ارسال کنید.\nمثال: 100000";
+    await resellerTelegramApi(env, bot, "sendMessage", { chat_id: chatId, text: prompt });
     return;
   }
   if (data.startsWith("sale:loc:")) {
@@ -4360,7 +4378,7 @@ async function salesHandleCustomerCallback(env, bot, callback) {
   }
   if (data.startsWith("sale:paystatus:")) {
     const paymentId = data.slice("sale:paystatus:".length);
-    const payment = await salesBlupalPaymentStatus(env, bot, customer, paymentId);
+    const payment = await salesPaymentStatus(env, bot, customer, paymentId);
     const done = !!payment.processed_at;
     await resellerTelegramApi(env, bot, "answerCallbackQuery", {
       callback_query_id: callback.id,
@@ -4736,18 +4754,12 @@ async function restoreResellerSnapshot(env, bot, account, snapshotId) {
   let payload;
   try { payload = JSON.parse(row.payload_json || "{}"); } catch (_) { throw new Error("محتوای نسخه پشتیبان معتبر نیست"); }
   const settings = payload.settings && typeof payload.settings === "object" ? payload.settings : {};
-  const bitpinKeys = RESELLER_BITPIN_CONFIG_FIELDS.filter(key => Object.prototype.hasOwnProperty.call(settings, key));
-  const keys = RESELLER_BACKUP_FIELDS.filter(key => !RESELLER_BITPIN_CONFIG_FIELDS.includes(key) && Object.prototype.hasOwnProperty.call(settings, key));
+  const keys = RESELLER_BACKUP_FIELDS.filter(key => Object.prototype.hasOwnProperty.call(settings, key));
   if (keys.length) {
     const assignments = keys.map(key => key + "=?").join(",");
     const values = keys.map(key => settings[key]);
     await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET " + assignments + ",updated_at=? WHERE id=?")
       .bind(...values, nowIso(), bot.id).run();
-  }
-  if (bitpinKeys.length) {
-    const bitpinValues = {};
-    for (const key of bitpinKeys) bitpinValues[key] = settings[key];
-    await updateResellerBitpinConfig(env, bot.id, bitpinValues);
   }
   for (const x of Array.isArray(payload.locations) ? payload.locations : []) {
     await env.PASARGUARD_DB.prepare(`INSERT INTO sales_locations(id,bot_id,title,emoji,description,group_ids_json,status,sort_order,created_at,updated_at)
@@ -4779,7 +4791,6 @@ async function restoreResellerSnapshot(env, bot, account, snapshotId) {
 }
 
 async function runResellerHealthCheck(env, bot) {
-  bot = { ...bot, ...(await getResellerBitpinConfig(env, bot?.id)) };
   const details=[];
   let score=100;
   const add=(key,label,status,message,penalty=0)=>{ details.push({key,label,status,message}); if(status!=="ok") score-=penalty; };
@@ -4807,10 +4818,6 @@ async function runResellerHealthCheck(env, bot) {
     if(String(bot.blupal_api_key_enc||"").trim()) add("blupal","بلوپال","ok","API رمزگذاری‌شده و درگاه فعال است");
     else add("blupal","بلوپال","error","درگاه فعال است اما API Key ثبت نشده",18);
   } else add("blupal","بلوپال","idle","غیرفعال",0);
-  if(Number(bot.bitpin_enabled||0)===1){
-    if(String(bot.bitpin_api_key_enc||"").trim()&&String(bot.bitpin_api_secret_enc||"").trim()&&String(bot.bitpin_deposit_address||"").trim()) add("bitpin","بیت‌پین","ok","API و آدرس واریز ثبت شده است");
-    else add("bitpin","بیت‌پین","error","فعال است اما API یا آدرس ناقص است",18);
-  } else add("bitpin","بیت‌پین","idle","غیرفعال",0);
   if(Number(bot.auto_backup_enabled??1)===1){
     const age=bot.last_backup_at ? Date.now()-new Date(bot.last_backup_at).getTime() : Number.POSITIVE_INFINITY;
     if(age>48*3600000) add("backup","پشتیبان‌گیری","warning","بیش از ۴۸ ساعت پشتیبان موفق ثبت نشده",10);
@@ -4819,9 +4826,8 @@ async function runResellerHealthCheck(env, bot) {
   const pending=await env.PASARGUARD_DB.prepare(`SELECT
     (SELECT COUNT(*) FROM sales_orders WHERE bot_id=? AND status='pending_review') AS orders_count,
     (SELECT COUNT(*) FROM sales_payment_invoices WHERE bot_id=? AND status IN ('PENDING','PAID') AND processed_at IS NULL) AS payments_count,
-    (SELECT COUNT(*) FROM sales_bitpin_deposits WHERE bot_id=? AND status='pending_review') AS bitpin_count,
-    (SELECT COUNT(*) FROM sales_tickets WHERE bot_id=? AND status='waiting_owner') AS tickets_count`).bind(bot.id,bot.id,bot.id,bot.id).first();
-  const queue=Number(pending?.orders_count||0)+Number(pending?.payments_count||0)+Number(pending?.bitpin_count||0)+Number(pending?.tickets_count||0);
+    (SELECT COUNT(*) FROM sales_tickets WHERE bot_id=? AND status='waiting_owner') AS tickets_count`).bind(bot.id,bot.id,bot.id).first();
+  const queue=Number(pending?.orders_count||0)+Number(pending?.payments_count||0)+Number(pending?.tickets_count||0);
   if(queue>30) add("queue","صف عملیاتی","warning","تعداد موارد نیازمند رسیدگی: "+queue,8);
   else add("queue","صف عملیاتی","ok","موارد نیازمند رسیدگی: "+queue);
   score=Math.max(0,Math.min(100,Math.round(score)));
@@ -4895,88 +4901,6 @@ async function resellerOwnerExecutiveReportView(env, bot, account) {
     reply_markup:{inline_keyboard:[[{text:"🔄 بروزرسانی گزارش",callback_data:"owner:executive"}],[{text:"↩️ مدیریت ربات",callback_data:"owner:home"}]]}};
 }
 
-
-function normalizeResellerBitpinBaseUrl(value){const raw=String(value||"https://api.bitpin.ir").trim();let u;try{u=new URL(raw)}catch(_){throw new Error("آدرس API بیت‌پین معتبر نیست")}if(u.protocol!=="https:"||u.hostname.toLowerCase()!=="api.bitpin.ir")throw new Error("آدرس API بیت‌پین باید https://api.bitpin.ir باشد");return "https://api.bitpin.ir"}
-function resellerBitpinWalletRows(payload){if(Array.isArray(payload))return payload;for(const k of ["results","wallets","data","items"])if(Array.isArray(payload?.[k]))return payload[k];if(payload?.data&&typeof payload.data==="object")for(const k of ["results","wallets","items"])if(Array.isArray(payload.data[k]))return payload.data[k];return []}
-function resellerBitpinWalletSymbol(r){return cleanText(r?.currency?.code||r?.currency?.symbol||r?.symbol||r?.code||r?.currency_symbol||r?.asset||r?.coin||r?.name,40).toUpperCase()}
-function resellerBitpinWalletBalance(r){for(const v of [r?.available_balance,r?.available,r?.balance,r?.total_balance,r?.total,r?.amount,r?.credit]){const n=Number(v);if(Number.isFinite(n))return n}return 0}
-async function resellerBitpinSecret(env,value){const raw=String(value||"").trim();if(!raw)return "";return decryptSecret(raw,env)}
-async function fetchResellerBitpinWallets(env,bot){const apiKey=await resellerBitpinSecret(env,bot.bitpin_api_key_enc),apiSecret=await resellerBitpinSecret(env,bot.bitpin_api_secret_enc);if(!apiKey||!apiSecret)throw new Error("API Key و Secret بیت‌پین ثبت نشده است");const base=normalizeResellerBitpinBaseUrl(bot.bitpin_base_url);const login=await fetch(base+"/v1/usr/api/login/",{method:"POST",headers:{"content-type":"application/json","accept":"application/json"},body:JSON.stringify({api_key:apiKey,secret_key:apiSecret})});const ld=await login.json().catch(()=>({}));if(!login.ok||!ld?.access)throw new Error(cleanText(ld?.detail||ld?.message||ld?.error||("Bitpin HTTP "+login.status),500));const response=await fetch(base+"/v1/wlt/wallets/",{headers:{"accept":"application/json","Authorization":"Bearer "+ld.access}});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(cleanText(data?.detail||data?.message||data?.error||("Bitpin HTTP "+response.status),500));const wallets=resellerBitpinWalletRows(data).slice(0,250).map(r=>({asset:resellerBitpinWalletSymbol(r),balance:resellerBitpinWalletBalance(r)})).filter(x=>x.asset);return {raw:data,wallets}}
-function resellerBitpinConfigured(bot){return Number(bot?.bitpin_enabled||0)===1&&!!String(bot?.bitpin_api_key_enc||"").trim()&&!!String(bot?.bitpin_api_secret_enc||"").trim()&&!!String(bot?.bitpin_deposit_address||"").trim()}
-async function recordResellerBitpinState(env,botId,ok,message=""){await updateResellerBitpinConfig(env,botId,ok?{bitpin_last_verified_at:nowIso(),bitpin_last_error:null}:{bitpin_last_error:cleanText(message,800)})}
-
-async function resellerOwnerBitpinView(env,bot,account){resellerRequirePermission(account,"settings");const fresh=await getResellerBotById(env,bot.id);const pending=await env.PASARGUARD_DB.prepare("SELECT COUNT(*) AS c FROM sales_bitpin_deposits WHERE bot_id=? AND status='pending_review'").bind(bot.id).first();const configured=!!String(fresh.bitpin_api_key_enc||"").trim()&&!!String(fresh.bitpin_api_secret_enc||"").trim();return {text:"🪙 <b>بیت‌پین ربات نماینده</b>\n━━━━━━━━━━━━━━\nوضعیت: <b>"+(Number(fresh.bitpin_enabled||0)===1?"🟢 فعال":"🔴 غیرفعال")+"</b>\nAPI: <b>"+(configured?"ثبت و رمزگذاری شده":"ناقص")+"</b>\nرمزارز/شبکه: <b>"+botEscape((fresh.bitpin_asset||"USDT")+" / "+(fresh.bitpin_network||"TRC20"))+"</b>\nنرخ: <b>"+botMoney(fresh.bitpin_toman_per_unit||0)+" تومان</b>\nحداقل مقدار: <b>"+botEscape(fresh.bitpin_min_crypto_amount||1)+"</b>\nآدرس: <code>"+botEscape(fresh.bitpin_deposit_address||"ثبت نشده")+"</code>\nدر انتظار: <b>"+botMoney(pending?.c||0)+"</b>\n"+(fresh.bitpin_last_verified_at?"آخرین اتصال: <b>"+botDate(fresh.bitpin_last_verified_at)+"</b>\n":"")+(fresh.bitpin_last_error?"⚠️ خطا: <code>"+botEscape(fresh.bitpin_last_error)+"</code>":""),reply_markup:{inline_keyboard:[[{text:"🔑 API Key",callback_data:"owner:bitpin:api"},{text:"🔐 API Secret",callback_data:"owner:bitpin:secret"}],[{text:"🪙 رمزارز و شبکه",callback_data:"owner:bitpin:asset"},{text:"📍 آدرس",callback_data:"owner:bitpin:address"}],[{text:"💱 نرخ و حداقل",callback_data:"owner:bitpin:rate"}],[{text:"🧪 تست اتصال",callback_data:"owner:bitpin:test"},{text:Number(fresh.bitpin_enabled||0)===1?"⏸ غیرفعال‌کردن":"▶️ فعال‌کردن",callback_data:"owner:bitpin:toggle"}],[{text:"📥 واریزهای در انتظار",callback_data:"owner:bitpin:claims"}],[{text:"↩️ روش‌های پرداخت",callback_data:"owner:payment_methods"}]]}}}
-async function resellerOwnerBitpinClaimsView(env,bot,account){resellerRequirePermission(account,"wallets");const r=await env.PASARGUARD_DB.prepare(`SELECT d.*,c.telegram_id,c.first_name,c.username FROM sales_bitpin_deposits d JOIN sales_customers c ON c.id=d.customer_id WHERE d.bot_id=? ORDER BY CASE WHEN d.status='pending_review' THEN 0 ELSE 1 END,d.created_at DESC LIMIT 12`).bind(bot.id).all();const items=r.results||[];const lines=items.length?items.map((x,i)=>(i+1)+". "+(x.status==='pending_review'?"🟠":"▫️")+" <b>"+botEscape(x.first_name||x.username||x.telegram_id)+"</b>\n"+botEscape(x.crypto_amount+" "+x.asset+" · "+botMoney(x.amount_toman)+" تومان")+"\n<code>"+botEscape(x.txid)+"</code> · "+botEscape(x.status)).join("\n\n"):"درخواستی ثبت نشده است.";const buttons=[];items.filter(x=>x.status==='pending_review').slice(0,8).forEach((x,i)=>buttons.push([{text:"✅ تأیید "+(i+1),callback_data:"owner:bitpin:approve:"+x.id},{text:"❌ رد "+(i+1),callback_data:"owner:bitpin:reject:"+x.id}]));buttons.push([{text:"🔄 بروزرسانی",callback_data:"owner:bitpin:claims"},{text:"↩️ بیت‌پین",callback_data:"owner:bitpin"}]);return {text:"📥 <b>واریزهای بیت‌پین مشتریان</b>\n━━━━━━━━━━━━━━\n"+lines,reply_markup:{inline_keyboard:buttons}}}
-async function createSalesBitpinClaim(env,bot,customer,cryptoRaw,txidRaw){if(!resellerBitpinConfigured(bot))throw new Error("واریز بیت‌پین برای این ربات فعال نیست");const amount=Number(cryptoRaw),min=Math.max(.00000001,Number(bot.bitpin_min_crypto_amount||1));if(!Number.isFinite(amount)||amount<min)throw new Error("حداقل مقدار "+min+" است");const txid=cleanText(txidRaw,220).replace(/\s+/g,"").toLowerCase();if(!/^[a-z0-9:_-]{16,220}$/i.test(txid))throw new Error("TXID معتبر نیست");const rate=Math.max(1,Number(bot.bitpin_toman_per_unit||0)),amountToman=Math.floor(amount*rate);if(amountToman<10000)throw new Error("ارزش واریز کمتر از ۱۰٬۰۰۰ تومان است");let snapshot;try{snapshot=await fetchResellerBitpinWallets(env,bot);await recordResellerBitpinState(env,bot.id,true)}catch(e){await recordResellerBitpinState(env,bot.id,false,e.message);throw new Error("استعلام بیت‌پین ناموفق بود: "+e.message)}const asset=cleanText(bot.bitpin_asset||"USDT",30).toUpperCase(),network=cleanText(bot.bitpin_network||"TRC20",40).toUpperCase(),wallet=snapshot.wallets.find(x=>x.asset===asset)||null,claimId=id("sbpd"),ts=nowIso();try{await env.PASARGUARD_DB.prepare(`INSERT INTO sales_bitpin_deposits(id,bot_id,customer_id,asset,network,txid,crypto_amount,rate_toman,amount_toman,destination_address,status,wallet_balance_snapshot,provider_payload,origin,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,'pending_review',?,?, 'bot',?,?)`).bind(claimId,bot.id,customer.id,asset,network,txid,amount,rate,amountToman,cleanText(bot.bitpin_deposit_address,300),wallet?String(wallet.balance):"",JSON.stringify({wallets:snapshot.wallets}),ts,ts).run()}catch(e){if(/unique|constraint/i.test(String(e?.message||e)))throw new Error("این TXID قبلاً ثبت شده است");throw e}await salesEvent(env,bot.id,customer.id,"bitpin_claim_created",{claimId,txid,amount,asset,amountToman});return {id:claimId,asset,network,txid,crypto_amount:amount,amount_toman:amountToman}}
-async function reviewSalesBitpinClaim(env, bot, account, claimId, decision) {
-  const claim = await env.PASARGUARD_DB.prepare(`
-    SELECT d.*,c.telegram_id
-    FROM sales_bitpin_deposits d
-    JOIN sales_customers c ON c.id=d.customer_id
-    WHERE d.id=? AND d.bot_id=?
-  `).bind(claimId, bot.id).first();
-  if (!claim) throw new Error("درخواست پیدا نشد");
-
-  if (decision === "reject") {
-    const ts = nowIso();
-    const result = await env.PASARGUARD_DB.prepare(`
-      UPDATE sales_bitpin_deposits
-      SET status='rejected',reviewed_at=?,reviewed_by_telegram_id=?,updated_at=?
-      WHERE id=? AND bot_id=? AND status='pending_review' AND credited_at IS NULL
-    `).bind(ts, String(account.user.telegram_id), ts, claim.id, bot.id).run();
-    if (!Number(result?.meta?.changes || 0)) throw new Error("قبلاً بررسی شده است");
-    await resellerTelegramApi(env, bot, "sendMessage", {
-      chat_id: claim.telegram_id,
-      text: "❌ واریز رمزارزی شما تأیید نشد.\nTXID: <code>" + botEscape(claim.txid) + "</code>",
-      parse_mode: "HTML"
-    });
-    return { status: "rejected" };
-  }
-
-  const snapshot = await fetchResellerBitpinWallets(env, bot);
-  await recordResellerBitpinState(env, bot.id, true);
-  const wallet = snapshot.wallets.find(item => item.asset === String(claim.asset).toUpperCase()) || null;
-  const ts = nowIso();
-  const ledgerId = "cled_bitpin_" + claim.id;
-  const description = "شارژ بیت‌پین " + claim.crypto_amount + " " + claim.asset + " · TXID " + claim.txid;
-  const amountToman = Number(claim.amount_toman);
-  if (!Number.isSafeInteger(amountToman) || amountToman <= 0) throw new Error("مبلغ شارژ معتبر نیست");
-
-  const results = await env.PASARGUARD_DB.batch([
-    env.PASARGUARD_DB.prepare(`
-      UPDATE sales_bitpin_deposits
-      SET status='approved',credited_at=?,reviewed_at=?,reviewed_by_telegram_id=?,updated_at=?,provider_payload=?,wallet_balance_snapshot=?
-      WHERE id=? AND bot_id=? AND status='pending_review' AND credited_at IS NULL
-    `).bind(ts, ts, String(account.user.telegram_id), ts, JSON.stringify({ wallets: snapshot.wallets }), wallet ? String(wallet.balance) : "", claim.id, bot.id),
-    env.PASARGUARD_DB.prepare(`
-      UPDATE sales_customers
-      SET wallet_balance=wallet_balance+?,updated_at=?
-      WHERE id=? AND bot_id=?
-        AND EXISTS(SELECT 1 FROM sales_bitpin_deposits WHERE id=? AND bot_id=? AND status='approved' AND credited_at=?)
-        AND NOT EXISTS(SELECT 1 FROM sales_customer_ledger WHERE id=?)
-    `).bind(amountToman, ts, claim.customer_id, bot.id, claim.id, bot.id, ts, ledgerId),
-    env.PASARGUARD_DB.prepare(`
-      INSERT OR IGNORE INTO sales_customer_ledger(id,bot_id,customer_id,type,amount,balance_after,ref_type,ref_id,description,created_at)
-      SELECT ?,?,?, 'recharge',?,wallet_balance,'bitpin',?,?,?
-      FROM sales_customers
-      WHERE id=? AND bot_id=?
-        AND EXISTS(SELECT 1 FROM sales_bitpin_deposits WHERE id=? AND bot_id=? AND status='approved' AND credited_at=?)
-    `).bind(ledgerId, bot.id, claim.customer_id, amountToman, claim.id, cleanText(description, 500), ts, claim.customer_id, bot.id, claim.id, bot.id, ts)
-  ]);
-
-  if (!Number(results?.[0]?.meta?.changes || 0)) throw new Error("قبلاً بررسی شده است");
-  if (!Number(results?.[1]?.meta?.changes || 0)) throw new Error("شارژ کیف پول انجام نشد");
-  const fresh = await env.PASARGUARD_DB.prepare("SELECT wallet_balance FROM sales_customers WHERE id=? AND bot_id=?").bind(claim.customer_id, bot.id).first();
-  const balance = Number(fresh?.wallet_balance || 0);
-  await resellerTelegramApi(env, bot, "sendMessage", {
-    chat_id: claim.telegram_id,
-    text: "✅ <b>واریز رمزارزی تأیید شد</b>\nمقدار: <b>" + botEscape(claim.crypto_amount + " " + claim.asset) + "</b>\nشارژ: <b>" + botMoney(amountToman) + " تومان</b>\nموجودی جدید: <b>" + botMoney(balance) + " تومان</b>",
-    parse_mode: "HTML"
-  });
-  await salesEvent(env, bot.id, claim.customer_id, "bitpin_claim_approved", { claimId: claim.id, amountToman });
-  return { status: "approved", wallet_balance: balance };
-}
-
 async function resellerOwnerPaymentsView(env, bot, account) {
   resellerRequirePermission(account, "settings");
   await ensureResellerBlupalWebhookToken(env, bot);
@@ -5009,6 +4933,41 @@ async function resellerOwnerPaymentsView(env, bot, account) {
   ] } };
 }
 
+async function resellerOwnerPlisioView(env, bot, account) {
+  resellerRequirePermission(account, "settings");
+  const fresh = await getResellerBotById(env, bot.id);
+  const origin = resellerBotOrigin(account.settings || await getSettings(env));
+  const urls = resellerPlisioUrls(origin, fresh);
+  const configured = !!String(fresh.plisio_api_key_enc || "").trim();
+  const enabled = Number(fresh.plisio_enabled || 0) === 1;
+  const ready = configured && Number(fresh.plisio_toman_per_source_unit || 0) > 0;
+  const pending = await env.PASARGUARD_DB.prepare("SELECT COUNT(*) AS c FROM sales_payment_invoices WHERE bot_id=? AND provider='plisio' AND status IN ('PENDING','PAID') AND processed_at IS NULL")
+    .bind(fresh.id).first();
+  const last = await env.PASARGUARD_DB.prepare("SELECT provider_invoice_id,status,amount_toman,processed_at,updated_at,error_message FROM sales_payment_invoices WHERE bot_id=? AND provider='plisio' ORDER BY created_at DESC LIMIT 1")
+    .bind(fresh.id).first();
+  const text = "🪙 <b>پرداخت رمزارزی Plisio</b>\n━━━━━━━━━━━━━━\n" +
+    "وضعیت درگاه: <b>" + (enabled && ready ? "🟢 فعال" : enabled ? "🟠 تنظیمات ناقص" : "🔴 غیرفعال") + "</b>\n" +
+    "Secret Key: <b>" + (configured ? "ثبت و رمزگذاری شده" : "ثبت نشده") + "</b>\n" +
+    "ارز مبنا: <b>" + botEscape(fresh.plisio_source_currency || "USD") + "</b>\n" +
+    "نرخ هر واحد ارز مبنا: <b>" + botMoney(fresh.plisio_toman_per_source_unit || 0) + " تومان</b>\n" +
+    "رمزارزهای مجاز: <code>" + botEscape(fresh.plisio_allowed_currencies || "تنظیمات پیش‌فرض حساب Plisio") + "</code>\n" +
+    "انقضای فاکتور: <b>" + botMoney(fresh.plisio_expire_minutes || 60) + " دقیقه</b>\n" +
+    "فاکتور در انتظار Callback: <b>" + botMoney(pending?.c || 0) + "</b>\n" +
+    (fresh.plisio_last_verified_at ? "آخرین Callback/بررسی موفق: <b>" + botDate(fresh.plisio_last_verified_at) + "</b>\n" : "") +
+    (fresh.plisio_last_error ? "\n⚠️ آخرین خطا:\n<code>" + botEscape(fresh.plisio_last_error) + "</code>\n" : "") +
+    "\n<b>Callback URL</b>\n<code>" + botEscape(urls.callback_url) + "</code>\n\n" +
+    "Plisio در این نسخه برای شارژ خودکار کیف پول کاربران فعال است. وضعیت نهایی فقط از Callback امضاشده دریافت می‌شود و نیازی به IP ثابت Worker ندارد." +
+    (last ? "\n\nآخرین فاکتور: <code>" + botEscape(last.provider_invoice_id) + "</code> · <b>" + botEscape(last.status) + "</b> · " + botMoney(last.amount_toman) + " تومان" : "");
+  return { text, reply_markup: { inline_keyboard: [
+    [{ text: "📋 کپی Callback URL", copy_text: { text: urls.callback_url } }],
+    [{ text: configured ? "🔑 تغییر Secret Key" : "🔑 ثبت Secret Key", callback_data: "owner:plisio:key" }],
+    [{ text: "💱 ارز مبنا و نرخ", callback_data: "owner:plisio:rate" }, { text: "🪙 رمزارزهای مجاز", callback_data: "owner:plisio:currencies" }],
+    [{ text: "⏱ زمان انقضا", callback_data: "owner:plisio:expire" }, { text: "🧪 بررسی تنظیمات", callback_data: "owner:plisio:test" }],
+    [{ text: enabled ? "⏸ غیرفعال‌کردن Plisio" : "▶️ فعال‌کردن Plisio", callback_data: "owner:plisio:toggle" }],
+    [{ text: "↩️ روش‌های پرداخت", callback_data: "owner:payment_methods" }]
+  ] } };
+}
+
 async function resellerOwnerPaymentMethodsView(env, bot, account) {
   resellerRequirePermission(account, "settings");
   const fresh = await getResellerBotById(env, bot.id);
@@ -5017,17 +4976,12 @@ async function resellerOwnerPaymentMethodsView(env, bot, account) {
   const cardEnabled = Number(fresh.payment_card_enabled ?? 1) === 1;
   const walletEnabled = Number(fresh.payment_wallet_enabled ?? 1) === 1;
   const blupalEnabled = Number(fresh.blupal_enabled || 0) === 1;
-  const bitpinEnabled = Number(fresh.bitpin_enabled || 0) === 1;
   const cardReady = salesCardConfigured(fresh);
   const blupalReady = !!String(fresh.blupal_api_key_enc || "").trim();
-  const bitpinReady = !!String(fresh.bitpin_api_key_enc || "").trim() && !!String(fresh.bitpin_api_secret_enc || "").trim() && !!String(fresh.bitpin_deposit_address || "").trim();
+  const plisioEnabled = Number(fresh.plisio_enabled || 0) === 1;
+  const plisioReady = !!String(fresh.plisio_api_key_enc || "").trim() && Number(fresh.plisio_toman_per_source_unit || 0) > 0;
   const methodLine = order.map((method, index) => (index + 1) + "️⃣ " + SALES_PAYMENT_METHOD_LABELS[method]).join("  ←  ");
-  const activeCount = [
-    resellerPaymentMethodEnabled(fresh, "card"),
-    resellerPaymentMethodEnabled(fresh, "blupal"),
-    Number(fresh.bitpin_enabled || 0) === 1 && bitpinReady,
-    resellerPaymentMethodEnabled(fresh, "wallet")
-  ].filter(Boolean).length;
+  const activeCount = [resellerPaymentMethodEnabled(fresh, "card"), resellerPaymentMethodEnabled(fresh, "blupal"), resellerPaymentMethodEnabled(fresh, "wallet"), resellerPlisioConfigured(fresh)].filter(Boolean).length;
   const text = [
     "💳 <b>مدیریت روش‌های پرداخت</b>",
     "━━━━━━━━━━━━━━",
@@ -5035,7 +4989,7 @@ async function resellerOwnerPaymentMethodsView(env, bot, account) {
     "",
     "💳 کارت‌به‌کارت: <b>" + (cardEnabled ? (cardReady ? "🟢 فعال" : "🟠 اطلاعات کارت ناقص") : "🔴 غیرفعال") + "</b>",
     "💠 بلوپال: <b>" + (blupalEnabled ? (blupalReady ? "🟢 فعال" : "🟠 API ناقص") : "🔴 غیرفعال") + "</b>",
-    "🪙 بیت‌پین برای شارژ: <b>" + (bitpinEnabled ? (bitpinReady ? "🟢 فعال" : "🟠 تنظیمات ناقص") : "🔴 غیرفعال") + "</b>",
+    "🪙 Plisio برای شارژ کیف پول: <b>" + (plisioEnabled ? (plisioReady ? "🟢 فعال" : "🟠 تنظیمات ناقص") : "🔴 غیرفعال") + "</b>",
     "⚡ کیف پول: <b>" + (walletEnabled ? "🟢 فعال" : "🔴 غیرفعال") + "</b>",
     "",
     "↕️ ترتیب نمایش:",
@@ -5043,14 +4997,14 @@ async function resellerOwnerPaymentMethodsView(env, bot, account) {
     "",
     "⭐ روش پیش‌فرض: <b>" + (SALES_PAYMENT_METHOD_LABELS[defaultMethod] || "تعیین نشده") + "</b>",
     "",
-    "این تنظیمات هم‌زمان در خرید، تمدید، افزایش حجم و شارژ کیف پول ربات و مینی‌اپ اعمال می‌شوند."
+    "کارت، بلوپال و کیف پول در خرید و تمدید استفاده می‌شوند؛ Plisio در این نسخه برای شارژ خودکار کیف پول ربات و مینی‌اپ فعال است."
   ].join("\n");
   return {
     text,
     reply_markup: { inline_keyboard: [
       [{ text: cardEnabled ? "⏸ کارت‌به‌کارت" : "▶️ کارت‌به‌کارت", callback_data: "owner:methods:card" }, { text: walletEnabled ? "⏸ کیف پول" : "▶️ کیف پول", callback_data: "owner:methods:wallet" }],
       [{ text: blupalEnabled ? "⏸ بلوپال" : "▶️ بلوپال", callback_data: "owner:methods:blupal" }, { text: "⚙️ تنظیم بلوپال", callback_data: "owner:payments" }],
-      [{ text: bitpinEnabled ? "⏸ بیت‌پین" : "▶️ بیت‌پین", callback_data: "owner:methods:bitpin" }, { text: "🪙 تنظیم بیت‌پین", callback_data: "owner:bitpin" }],
+      [{ text: plisioEnabled ? "⏸ Plisio" : "▶️ Plisio", callback_data: "owner:plisio:toggle" }, { text: "⚙️ تنظیم Plisio", callback_data: "owner:plisio" }],
       [{ text: "🏦 اطلاعات کارت", callback_data: "owner:card" }],
       [{ text: "↕️ تغییر ترتیب نمایش", callback_data: "owner:methods:order" }],
       [{ text: "⭐ تغییر روش پیش‌فرض", callback_data: "owner:methods:default" }],
@@ -5143,8 +5097,7 @@ async function resellerOwnerRender(env, bot, account, view = "home", extra = {})
   else if (view === "settings_automation") rendered = await botSalesSettingsGroupView(env, account, "automation");
   else if (view === "payments") rendered = await resellerOwnerPaymentsView(env, bot, account);
   else if (view === "payment_methods") rendered = await resellerOwnerPaymentMethodsView(env, bot, account);
-  else if (view === "bitpin") rendered = await resellerOwnerBitpinView(env, bot, account);
-  else if (view === "bitpin_claims") rendered = await resellerOwnerBitpinClaimsView(env, bot, account);
+  else if (view === "plisio") rendered = await resellerOwnerPlisioView(env, bot, account);
   else if (view === "campaigns") rendered = await resellerOwnerCampaignsView(env, bot, account);
   else if (view === "staff") rendered = await resellerOwnerStaffView(env, bot, account);
   else if (view === "audit") rendered = await resellerOwnerAuditView(env, bot, account);
@@ -5264,7 +5217,7 @@ async function resellerOwnerHandleCallback(env, bot, callback) {
     "owner:tickets": "tickets", "owner:settings": "settings",
     "owner:settings:identity": "settings_identity", "owner:settings:loyalty": "settings_loyalty",
     "owner:settings:support": "settings_support", "owner:settings:automation": "settings_automation",
-    "owner:payments": "payments", "owner:payment_methods": "payment_methods", "owner:bitpin": "bitpin", "owner:bitpin:claims": "bitpin_claims", "owner:campaigns": "campaigns", "owner:staff": "staff", "owner:audit": "audit",
+    "owner:payments": "payments", "owner:payment_methods": "payment_methods", "owner:plisio": "plisio", "owner:campaigns": "campaigns", "owner:staff": "staff", "owner:audit": "audit",
     "owner:executive": "executive", "owner:automation": "automation", "owner:security": "security", "owner:health": "health", "owner:backups": "backups", "owner:children": "children"
   };
   resellerRequirePermission(account, resellerCallbackPermission(data));
@@ -5366,10 +5319,35 @@ async function resellerOwnerHandleCallback(env, bot, callback) {
     await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET blupal_enabled=CASE WHEN COALESCE(blupal_enabled,0)=1 THEN 0 ELSE 1 END,updated_at=? WHERE id=?").bind(nowIso(),bot.id).run();
     return resellerOwnerSendOrEdit(env,await getResellerBotById(env,bot.id),target,"payment_methods");
   }
-
-  if (data === "owner:methods:bitpin") {
-    const fresh=await getResellerBotById(env,bot.id);if(Number(fresh.bitpin_enabled||0)!==1&&(!String(fresh.bitpin_api_key_enc||"").trim()||!String(fresh.bitpin_api_secret_enc||"").trim()||!String(fresh.bitpin_deposit_address||"").trim()))throw new Error("ابتدا تنظیمات بیت‌پین را کامل کنید");
-    await updateResellerBitpinConfig(env,bot.id,{bitpin_enabled:Number(fresh.bitpin_enabled||0)===1?0:1});return resellerOwnerSendOrEdit(env,await getResellerBotById(env,bot.id),target,"payment_methods");
+  if (data === "owner:plisio:key") {
+    await salesSessionSet(env, bot.id, account.user.telegram_id, "owner_plisio_key", {});
+    return resellerOwnerPrompt(env, bot, chatId, "🔑 Secret Key فروشگاه Plisio را ارسال کنید.\nپیام پس از ذخیره حذف و کلید به‌صورت رمزگذاری‌شده نگهداری می‌شود.");
+  }
+  if (data === "owner:plisio:rate") {
+    await salesSessionSet(env, bot.id, account.user.telegram_id, "owner_plisio_rate", {});
+    return resellerOwnerPrompt(env, bot, chatId, "💱 ارز مبنا و نرخ هر واحد به تومان را با | ارسال کنید.\nمثال: <code>USD | 100000</code>");
+  }
+  if (data === "owner:plisio:currencies") {
+    await salesSessionSet(env, bot.id, account.user.telegram_id, "owner_plisio_currencies", {});
+    return resellerOwnerPrompt(env, bot, chatId, "🪙 شناسه رمزارزهای مجاز Plisio را با کاما ارسال کنید.\nبرای استفاده از تنظیمات پیش‌فرض حساب Plisio، <code>-</code> بفرستید.");
+  }
+  if (data === "owner:plisio:expire") {
+    await salesSessionSet(env, bot.id, account.user.telegram_id, "owner_plisio_expire", {});
+    return resellerOwnerPrompt(env, bot, chatId, "⏱ زمان انقضای فاکتور را به دقیقه ارسال کنید؛ عددی بین ۵ تا ۱۴۴۰.");
+  }
+  if (data === "owner:plisio:test") {
+    const fresh = await getResellerBotById(env, bot.id);
+    await testResellerPlisioConfig(env, fresh);
+    try { await resellerTelegramApi(env, bot, "answerCallbackQuery", { callback_query_id: callback.id, text: "✅ کلید رمزگشایی شد و تنظیمات محلی معتبر است", show_alert: false }); } catch (_) {}
+    return resellerOwnerSendOrEdit(env, await getResellerBotById(env, bot.id), target, "plisio");
+  }
+  if (data === "owner:plisio:toggle") {
+    const fresh = await getResellerBotById(env, bot.id);
+    const next = Number(fresh.plisio_enabled || 0) === 1 ? 0 : 1;
+    if (next === 1 && (!String(fresh.plisio_api_key_enc || "").trim() || Number(fresh.plisio_toman_per_source_unit || 0) <= 0)) throw new Error("ابتدا Secret Key و نرخ تبدیل Plisio را ثبت کنید");
+    await saveResellerPlisioConfig(env, bot.id, { plisio_enabled: next });
+    await resellerAudit(env, bot, account, "plisio_toggled", { enabled: next === 1 });
+    return resellerOwnerSendOrEdit(env, await getResellerBotById(env, bot.id), target, data === "owner:plisio:toggle" ? "plisio" : "payment_methods");
   }
   if (data === "owner:methods:order") {
     const fresh=await getResellerBotById(env,bot.id),orders=["card,blupal,wallet","card,wallet,blupal","blupal,card,wallet","blupal,wallet,card","wallet,card,blupal","wallet,blupal,card"],current=resellerPaymentMethodOrder(fresh).join(","),idx=orders.indexOf(current),next=orders[(idx+1+orders.length)%orders.length];
@@ -5642,13 +5620,6 @@ async function resellerOwnerHandleCallback(env, bot, callback) {
     await salesSessionSet(env, bot.id, account.user.telegram_id, "owner_text_edit", { key });
     return resellerOwnerPrompt(env, bot, chatId, "✏️ متن جدید «<b>" + botEscape(SALES_TEXT_LABELS[key]) + "</b>» را ارسال کنید. برای بازگشت به متن پیش‌فرض <code>-</code> بفرستید.");
   }
-
-  if (["owner:bitpin:api","owner:bitpin:secret","owner:bitpin:asset","owner:bitpin:address","owner:bitpin:rate"].includes(data)) {
-    const map={"owner:bitpin:api":["owner_bitpin_api","🔑 API Key بیت‌پین را ارسال کنید."],"owner:bitpin:secret":["owner_bitpin_secret","🔐 API Secret بیت‌پین را ارسال کنید."],"owner:bitpin:asset":["owner_bitpin_asset","🪙 رمزارز و شبکه را ارسال کنید.\nمثال: <code>USDT | TRC20</code>"],"owner:bitpin:address":["owner_bitpin_address","📍 آدرس واریز را ارسال کنید."],"owner:bitpin:rate":["owner_bitpin_rate","💱 نرخ هر واحد به تومان و حداقل مقدار را ارسال کنید.\nمثال: <code>100000 | 1</code>"]};const item=map[data];await salesSessionSet(env,bot.id,account.user.telegram_id,item[0],{});return resellerOwnerPrompt(env,bot,chatId,item[1]);
-  }
-  if (data === "owner:bitpin:toggle") {const fresh=await getResellerBotById(env,bot.id);if(Number(fresh.bitpin_enabled||0)!==1&&(!String(fresh.bitpin_api_key_enc||"").trim()||!String(fresh.bitpin_api_secret_enc||"").trim()||!String(fresh.bitpin_deposit_address||"").trim()))throw new Error("ابتدا API Key، Secret و آدرس را ثبت کنید");await updateResellerBitpinConfig(env,bot.id,{bitpin_enabled:Number(fresh.bitpin_enabled||0)===1?0:1});return resellerOwnerSendOrEdit(env,await getResellerBotById(env,bot.id),target,"bitpin")}
-  if (data === "owner:bitpin:test") {try{const fresh=await getResellerBotById(env,bot.id),snap=await fetchResellerBitpinWallets(env,fresh),asset=String(fresh.bitpin_asset||"USDT").toUpperCase(),w=snap.wallets.find(x=>x.asset===asset);await recordResellerBitpinState(env,bot.id,true);try{await resellerTelegramApi(env,bot,"answerCallbackQuery",{callback_query_id:callback.id,text:w?("اتصال برقرار · "+asset+": "+w.balance):"اتصال برقرار",show_alert:true})}catch(_){}}catch(e){await recordResellerBitpinState(env,bot.id,false,e.message);throw e}return resellerOwnerSendOrEdit(env,await getResellerBotById(env,bot.id),target,"bitpin")}
-  if (data.startsWith("owner:bitpin:approve:") || data.startsWith("owner:bitpin:reject:")) {const approve=data.includes(":approve:"),claimId=data.split(approve?":approve:":":reject:")[1];await reviewSalesBitpinClaim(env,bot,account,claimId,approve?"approve":"reject");return resellerOwnerSendOrEdit(env,await getResellerBotById(env,bot.id),target,"bitpin_claims")}
   if (data === "owner:payment:api") {
     await salesSessionSet(env, bot.id, account.user.telegram_id, "owner_blupal_api", {});
     return resellerOwnerPrompt(env, bot, chatId, "🔑 API Key دریافتی از <b>@bluPalBot</b> را ارسال کنید.\n\nبرای دریافت کلید ابتدا وارد ربات رسمی بلوپال شوید: https://t.me/bluPalBot\n\nکلید به‌صورت رمزگذاری‌شده ذخیره می‌شود و در هیچ پیام یا صفحه‌ای نمایش داده نخواهد شد.");
@@ -6114,15 +6085,37 @@ async function resellerOwnerHandleSession(env, bot, account, message, session) {
     else await env.PASARGUARD_DB.prepare("INSERT INTO reseller_bot_texts(bot_id,text_key,text_value,updated_at) VALUES(?,?,?,?) ON CONFLICT(bot_id,text_key) DO UPDATE SET text_value=excluded.text_value,updated_at=excluded.updated_at").bind(bot.id, session.data.key, value, nowIso()).run();
     return done("texts", "✅ متن ربات ذخیره شد.");
   }
-
-  if (["owner_bitpin_api","owner_bitpin_secret","owner_bitpin_asset","owner_bitpin_address","owner_bitpin_rate"].includes(session.state)) {
-    const vals=[];let sql="";
-    if(session.state==="owner_bitpin_api"){if(text.length<8)throw new Error("API Key معتبر نیست");vals.push(await encryptSecret(text,env));sql="bitpin_api_key_enc=?";try{await resellerTelegramApi(env,bot,"deleteMessage",{chat_id:message.chat.id,message_id:message.message_id})}catch(_){}}
-    if(session.state==="owner_bitpin_secret"){if(text.length<8)throw new Error("API Secret معتبر نیست");vals.push(await encryptSecret(text,env));sql="bitpin_api_secret_enc=?";try{await resellerTelegramApi(env,bot,"deleteMessage",{chat_id:message.chat.id,message_id:message.message_id})}catch(_){}}
-    if(session.state==="owner_bitpin_asset"){const p=text.split("|").map(x=>cleanText(x,40).toUpperCase());if(p.length<2||!p[0]||!p[1])throw new Error("قالب صحیح: USDT | TRC20");vals.push(p[0],p[1]);sql="bitpin_asset=?,bitpin_network=?"}
-    if(session.state==="owner_bitpin_address"){const a=cleanText(text,300).replace(/\s+/g,"");if(a.length<10)throw new Error("آدرس معتبر نیست");vals.push(a);sql="bitpin_deposit_address=?"}
-    if(session.state==="owner_bitpin_rate"){const p=text.split("|").map(x=>x.trim()),rate=botParseInteger(p[0]),min=Number(p[1]);if(!Number.isFinite(rate)||rate<1||!Number.isFinite(min)||min<=0)throw new Error("قالب صحیح: نرخ | حداقل");vals.push(rate,min);sql="bitpin_toman_per_unit=?,bitpin_min_crypto_amount=?"}
-    const keys=sql.split(",").map(x=>x.split("=")[0].trim()),changes={};keys.forEach((key,i)=>{changes[key]=vals[i]});changes.bitpin_configured_at=nowIso();await updateResellerBitpinConfig(env,bot.id,changes);await resellerAudit(env,bot,account,"bitpin_setting_saved",{state:session.state});return done("bitpin","✅ تنظیمات بیت‌پین ذخیره شد.");
+  if (session.state === "owner_plisio_key") {
+    const secret = String(text || "").trim();
+    if (secret.length < 12 || secret.length > 1000) throw new Error("Secret Key Plisio معتبر نیست");
+    const encrypted = await encryptSecret(secret, env);
+    await saveResellerPlisioConfig(env, bot.id, {
+      plisio_api_key_enc: encrypted,
+      plisio_configured_at: nowIso(),
+      plisio_last_error: null
+    });
+    try { await resellerTelegramApi(env, bot, "deleteMessage", { chat_id: chatId, message_id: message.message_id }); } catch (_) {}
+    await resellerAudit(env, bot, account, "plisio_secret_saved", {});
+    return done("plisio", "✅ Secret Key Plisio رمزگذاری و ذخیره شد.");
+  }
+  if (session.state === "owner_plisio_rate") {
+    const parts = String(text || "").split("|").map(x => x.trim());
+    const currency = cleanText(parts[0], 20).toUpperCase();
+    const rate = botParseInteger(parts[1]);
+    if (!currency || !Number.isFinite(rate) || rate <= 0) throw new Error("قالب صحیح: USD | نرخ هر واحد به تومان");
+    await saveResellerPlisioConfig(env, bot.id, { plisio_source_currency: currency, plisio_toman_per_source_unit: rate });
+    return done("plisio", "✅ ارز مبنا و نرخ تبدیل Plisio ذخیره شد.");
+  }
+  if (session.state === "owner_plisio_currencies") {
+    const value = String(text || "").trim() === "-" ? "" : cleanText(text, 500).replace(/\s+/g, "").toUpperCase();
+    await saveResellerPlisioConfig(env, bot.id, { plisio_allowed_currencies: value });
+    return done("plisio", value ? "✅ رمزارزهای مجاز ذخیره شدند." : "✅ انتخاب رمزارز به تنظیمات حساب Plisio واگذار شد.");
+  }
+  if (session.state === "owner_plisio_expire") {
+    const minutes = botParseInteger(text);
+    if (!Number.isFinite(minutes) || minutes < 5 || minutes > 1440) throw new Error("مدت انقضا باید بین ۵ تا ۱۴۴۰ دقیقه باشد");
+    await saveResellerPlisioConfig(env, bot.id, { plisio_expire_minutes: minutes });
+    return done("plisio", "✅ زمان انقضای فاکتور ذخیره شد.");
   }
   if (session.state === "owner_blupal_api") {
     const apiKey = String(text || "").trim();
@@ -6443,12 +6436,6 @@ async function resellerSalesWebhook(request, env, botId, ctx = null) {
       return json({ ok: true });
     }
     const session = await salesSessionGet(env, bot.id, customer.telegram_id);
-
-    if (session?.state === "bitpin_claim") {
-      const parts=String(text||"").split("|").map(x=>x.trim());if(parts.length<2)throw new Error("قالب صحیح: مقدار | TXID");const claim=await createSalesBitpinClaim(env,bot,customer,parts[0],parts.slice(1).join(""));await salesSessionClear(env,bot.id,customer.telegram_id);
-      await resellerTelegramApi(env,bot,"sendMessage",{chat_id:message.chat.id,text:"✅ درخواست واریز رمزارزی ثبت شد و پس از بررسی نماینده، کیف پول شارژ می‌شود.\nشناسه: <code>"+botEscape(claim.id)+"</code>",parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:"💳 کیف پول",callback_data:"sale:wallet"}]]}});
-      if(bot.owner_telegram_id)await resellerTelegramApi(env,bot,"sendMessage",{chat_id:bot.owner_telegram_id,text:"🪙 <b>واریز بیت‌پین مشتری</b>\nکاربر: <code>"+botEscape(customer.telegram_id)+"</code>\nمقدار: <b>"+botEscape(claim.crypto_amount+" "+claim.asset)+"</b>\nارزش: <b>"+botMoney(claim.amount_toman)+" تومان</b>\nTXID: <code>"+botEscape(claim.txid)+"</code>",parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:"✅ تأیید",callback_data:"owner:bitpin:approve:"+claim.id},{text:"❌ رد",callback_data:"owner:bitpin:reject:"+claim.id}],[{text:"📥 همه واریزها",callback_data:"owner:bitpin:claims"}]]}});return json({ok:true});
-    }
     if (session?.state === "promo_code") {
       const result = await salesActivatePromoCode(env, bot, customer, text);
       await salesSessionClear(env, bot.id, customer.telegram_id);
@@ -6463,13 +6450,21 @@ async function resellerSalesWebhook(request, env, botId, ctx = null) {
     if (session?.state === "wallet_amount") {
       const amount = botParseInteger(text);
       if (!Number.isFinite(amount) || amount < 10000 || amount > 1000000000000) throw new Error("مبلغ شارژ معتبر و حداقل ۱۰٬۰۰۰ تومان ارسال کنید");
-      const method = session.data?.paymentMethod === "blupal" ? "blupal" : "card";
-      resellerRequirePaymentMethod(bot, method, "recharge");
-      if (method === "blupal") {
-        const created = await createSalesBlupalWalletCharge(env, bot, customer, amount);
+      const requestedMethod = String(session.data?.paymentMethod || "card").toLowerCase();
+      const method = requestedMethod === "plisio" ? "plisio" : requestedMethod === "blupal" ? "blupal" : "card";
+      if (method === "plisio") {
+        if (!resellerPlisioConfigured(bot)) throw new Error("درگاه Plisio این ربات فعال یا کامل تنظیم نشده است");
+        const created = await createSalesPlisioWalletCharge(env, bot, customer, amount, resellerBotOrigin(await getSettings(env)));
         await salesSessionClear(env, bot.id, customer.telegram_id);
-        await sendSalesBlupalInvoiceMessage(env, bot, customer, created.invoice, "شارژ آنلاین کیف پول", created.bonusAmount > 0 ? ("بونس پس از پرداخت: " + botMoney(created.bonusAmount) + " تومان") : "");
-      } else await salesWalletChargeInstructions(env, bot, customer, amount);
+        await sendSalesBlupalInvoiceMessage(env, bot, customer, created.invoice, "شارژ رمزارزی کیف پول", created.bonusAmount > 0 ? ("بونس پس از پرداخت: " + botMoney(created.bonusAmount) + " تومان") : "");
+      } else {
+        resellerRequirePaymentMethod(bot, method, "recharge");
+        if (method === "blupal") {
+          const created = await createSalesBlupalWalletCharge(env, bot, customer, amount);
+          await salesSessionClear(env, bot.id, customer.telegram_id);
+          await sendSalesBlupalInvoiceMessage(env, bot, customer, created.invoice, "شارژ آنلاین کیف پول", created.bonusAmount > 0 ? ("بونس پس از پرداخت: " + botMoney(created.bonusAmount) + " تومان") : "");
+        } else await salesWalletChargeInstructions(env, bot, customer, amount);
+      }
       return json({ ok: true });
     }
     if (session?.state === "awaiting_receipt") { await registerSalesReceipt(env, bot, customer, message, session); return json({ ok: true }); }
@@ -6645,11 +6640,10 @@ async function resellerOwnerGroupView(env, bot, account, group) {
     finance: {
       title: "💳 مالی و پرداخت",
       body: "تمام امور دریافت وجه، شارژ کیف پول و تنظیم درگاه در این واحد قرار دارد.",
-      chart: ["💳 درخواست‌های شارژ", "🪙 بیت‌پین", "💳 مدیریت روش‌های پرداخت"],
+      chart: ["💳 درخواست‌های شارژ", "💳 مدیریت روش‌های پرداخت"],
       rows: [
         can("wallets") ? [{ text: "💳 درخواست‌های شارژ", callback_data: "owner:wallets" }] : [],
-        can("settings") ? [{ text: "💳 مدیریت روش‌های پرداخت", callback_data: "owner:payment_methods" }] : [],
-        can("settings") ? [{ text: "🪙 مدیریت بیت‌پین", callback_data: "owner:bitpin" }] : []
+        can("settings") ? [{ text: "💳 مدیریت روش‌های پرداخت", callback_data: "owner:payment_methods" }] : []
       ]
     },
     communications: {
@@ -6991,6 +6985,115 @@ async function botSalesSettingsGroupView(env,account,group){
   return {text:d.title+"\n━━━━━━━━━━━━━━\n"+d.summary+"\n\n"+d.lines.join("\n"),reply_markup:{inline_keyboard:d.rows}};
 }
 
+function normalizePlisioStatus(value) {
+  const status = String(value || "new").trim().toLowerCase();
+  if (status === "completed") return "PAID";
+  if (status === "expired") return "EXPIRED";
+  if (status === "cancelled" || status === "cancelled duplicate") return "CANCELED";
+  if (status === "error" || status === "mismatch") return "FAILED";
+  return "PENDING";
+}
+
+function resellerPlisioConfigured(bot) {
+  return Number(bot?.plisio_enabled || 0) === 1 &&
+    !!String(bot?.plisio_api_key_enc || "").trim() &&
+    Number(bot?.plisio_toman_per_source_unit || 0) > 0;
+}
+
+async function resellerPlisioApiKey(env, bot) {
+  const encrypted = String(bot?.plisio_api_key_enc || "").trim();
+  if (!encrypted) throw new Error("Secret Key درگاه Plisio برای این ربات ثبت نشده است");
+  try {
+    const value = await decryptSecret(encrypted, env);
+    if (!value) throw new Error("empty");
+    return value;
+  } catch (_) {
+    throw new Error("Secret Key درگاه Plisio قابل بازیابی نیست؛ آن را دوباره ثبت کنید");
+  }
+}
+
+function resellerPlisioSourceAmount(amountToman, bot) {
+  const rate = Number(bot?.plisio_toman_per_source_unit || 0);
+  if (!Number.isFinite(rate) || rate <= 0) throw new Error("نرخ تبدیل تومان به ارز مبنا در تنظیمات Plisio ثبت نشده است");
+  const value = Number((Number(amountToman || 0) / rate).toFixed(2));
+  if (!Number.isFinite(value) || value < 0.01) throw new Error("مبلغ فاکتور پس از تبدیل کمتر از حد مجاز Plisio است");
+  return value;
+}
+
+function resellerPlisioUrls(origin, bot) {
+  const base = String(origin || "").replace(/\/+$/, "");
+  const botId = encodeURIComponent(bot.id);
+  return {
+    callback_url: base + "/sales-payments/" + botId + "/plisio/callback?json=true",
+    return_url: base + "/sales-payments/" + botId + "/plisio/return",
+    miniapp_url: base + "/sales-app/" + botId
+  };
+}
+
+async function resellerPlisioRequest(env, bot, path, params = {}) {
+  if (path !== "/invoices/new") throw new Error("مسیر Plisio مجاز نیست");
+  const secret = await resellerPlisioApiKey(env, bot);
+  const url = new URL("https://api.plisio.net/api/v1" + path);
+  for (const [key, value] of Object.entries(params || {})) {
+    if (value !== undefined && value !== null && String(value) !== "") url.searchParams.set(key, String(value));
+  }
+  url.searchParams.set("api_key", secret);
+  const response = await fetch(url.toString(), { method: "GET", headers: { accept: "application/json" } });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.status !== "success") {
+    const message = cleanText(data?.data?.message || data?.message || data?.error || ("Plisio HTTP " + response.status), 700);
+    const error = new Error(message || "خطای ناشناخته Plisio");
+    error.code = "PLISIO_ERROR";
+    error.status = response.status;
+    throw error;
+  }
+  return data.data || {};
+}
+
+function resellerPlisioOperationData(payload) {
+  const data = payload?.data && typeof payload.data === "object" ? payload.data : (payload || {});
+  const params = data?.params && typeof data.params === "object" ? data.params : {};
+  return {
+    txn_id: cleanText(data.txn_id || data.id || payload?.txn_id, 160),
+    order_number: cleanText(data.order_number || params.order_number || payload?.order_number, 160),
+    status: String(data.status || payload?.status || "new"),
+    source_amount: Number(data.source_amount ?? params.source_amount ?? payload?.source_amount),
+    source_currency: cleanText(data.source_currency || params.source_currency || payload?.source_currency, 20).toUpperCase(),
+    currency: cleanText(data.currency || data.psys_cid || payload?.currency, 40).toUpperCase(),
+    finished_at_utc: data.finished_at_utc || payload?.finished_at_utc || null,
+    raw: payload
+  };
+}
+
+async function resellerHmacSha1Hex(secret, text) {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(String(secret)), { name: "HMAC", hash: "SHA-1" }, false, ["sign"]);
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(String(text)));
+  return bytesToHex(signature);
+}
+
+async function verifyResellerPlisioCallback(payload, secret) {
+  if (!payload || typeof payload !== "object" || !payload.verify_hash) return false;
+  const ordered = { ...payload };
+  const supplied = String(ordered.verify_hash || "").toLowerCase();
+  delete ordered.verify_hash;
+  const expected = await resellerHmacSha1Hex(secret, JSON.stringify(ordered));
+  return constantTimeTextEqual(expected, supplied);
+}
+
+async function recordResellerPlisioState(env, botId, ok, message = "") {
+  return saveResellerPlisioConfig(env, botId, ok
+    ? { plisio_last_verified_at: nowIso(), plisio_last_error: null }
+    : { plisio_last_error: cleanText(message, 800) });
+}
+
+async function testResellerPlisioConfig(env, bot) {
+  const secret = await resellerPlisioApiKey(env, bot);
+  if (String(secret).length < 12) throw new Error("Secret Key معتبر نیست");
+  if (Number(bot.plisio_toman_per_source_unit || 0) <= 0) throw new Error("نرخ تبدیل ثبت نشده است");
+  await recordResellerPlisioState(env, bot.id, true);
+  return { configured: true, source_currency: bot.plisio_source_currency || "USD" };
+}
+
 function resellerBlupalConfigured(bot) {
   return Number(bot?.blupal_enabled || 0) === 1 && !!String(bot?.blupal_api_key_enc || "").trim();
 }
@@ -7307,6 +7410,238 @@ async function salesBlupalPaymentStatus(env, bot, customer, paymentId) {
   return await env.PASARGUARD_DB.prepare("SELECT * FROM sales_payment_invoices WHERE id=?").bind(payment.id).first();
 }
 
+async function createSalesPlisioInvoice(env, bot, customer, targetType, targetId, amountToman, origin) {
+  if (!resellerPlisioConfigured(bot)) throw new Error("درگاه Plisio این ربات هنوز کامل تنظیم نشده است");
+  const safeTargetType = targetType === "wallet" ? "wallet" : "order";
+  if (safeTargetType !== "wallet") throw new Error("Plisio در این نسخه برای شارژ کیف پول فعال است");
+  const safeAmountToman = clampInt(amountToman, 0, 1000000000000);
+  if (safeAmountToman < 10000) throw new Error("حداقل مبلغ شارژ ۱۰٬۰۰۰ تومان است");
+  const invoiceId = id("spli");
+  const sourceAmount = resellerPlisioSourceAmount(safeAmountToman, bot);
+  const sourceCurrency = cleanText(bot.plisio_source_currency || "USD", 20).toUpperCase() || "USD";
+  const urls = resellerPlisioUrls(origin, bot);
+  const params = {
+    source_currency: sourceCurrency,
+    source_amount: sourceAmount.toFixed(2),
+    order_number: invoiceId,
+    order_name: "BluePanel wallet recharge",
+    description: "Wallet recharge " + safeAmountToman + " toman",
+    callback_url: urls.callback_url,
+    success_invoice_url: urls.return_url + "?status=success",
+    fail_invoice_url: urls.return_url + "?status=failed",
+    expire_min: Math.max(5, Math.min(1440, Number(bot.plisio_expire_minutes || 60)))
+  };
+  const allowed = cleanText(bot.plisio_allowed_currencies || "", 500).replace(/\s+/g, "").toUpperCase();
+  if (allowed) params.allowed_psys_cids = allowed;
+  let provider;
+  try {
+    provider = await resellerPlisioRequest(env, bot, "/invoices/new", params);
+  } catch (error) {
+    await recordResellerPlisioState(env, bot.id, false, error.message).catch(() => null);
+    throw new Error("ساخت فاکتور Plisio ناموفق بود: " + error.message);
+  }
+  const providerInvoiceId = cleanText(provider.txn_id || provider.id, 160);
+  const paymentLink = cleanText(provider.invoice_url || provider.url, 1000);
+  if (!providerInvoiceId || !paymentLink) throw new Error("پاسخ Plisio ناقص است");
+  const ts = nowIso();
+  const amountRial = safeAmountToman * 10;
+  await env.PASARGUARD_DB.prepare(`
+    INSERT INTO sales_payment_invoices(
+      id,bot_id,customer_id,provider,provider_invoice_id,target_type,target_id,
+      amount_rial,amount_toman,final_amount_rial,status,payment_link,card_number,provider_payload,created_at,updated_at
+    ) VALUES(?,?,?,'plisio',?,?,?,?,?,?,?,?,NULL,?,?,?)
+  `).bind(
+    invoiceId, bot.id, customer.id, providerInvoiceId, safeTargetType, targetId,
+    amountRial, safeAmountToman, amountRial, normalizePlisioStatus(provider.status), paymentLink,
+    JSON.stringify({ request: params, response: provider }), ts, ts
+  ).run();
+  await recordResellerPlisioState(env, bot.id, true).catch(() => null);
+  await salesEvent(env, bot.id, customer.id, "plisio_invoice_created", {
+    invoiceId, providerInvoiceId, targetType: safeTargetType, targetId,
+    amountToman: safeAmountToman, sourceAmount, sourceCurrency
+  });
+  return {
+    id: invoiceId,
+    provider: "plisio",
+    invoice_id: providerInvoiceId,
+    provider_invoice_id: providerInvoiceId,
+    target_type: safeTargetType,
+    target_id: targetId,
+    amount_toman: safeAmountToman,
+    amount_rial: amountRial,
+    final_amount_rial: amountRial,
+    source_amount: sourceAmount,
+    source_currency: sourceCurrency,
+    status: normalizePlisioStatus(provider.status),
+    payment_link: paymentLink
+  };
+}
+
+async function createSalesPlisioWalletCharge(env, bot, customer, amount, origin) {
+  salesRequireVerifiedPhone(bot, customer);
+  const safeAmount = clampInt(amount, 0, 1000000000000);
+  if (safeAmount < 10000) throw new Error("حداقل مبلغ شارژ ۱۰٬۰۰۰ تومان است");
+  await enforceSalesSecurity(env, bot, customer, "wallet_charge", safeAmount);
+  const requestId = id("wreq");
+  const ts = nowIso();
+  await env.PASARGUARD_DB.prepare(`
+    INSERT INTO sales_wallet_requests(id,bot_id,customer_id,amount_toman,status,origin,created_at,updated_at)
+    VALUES(?,?,?,?,'payment_pending',?,?,?)
+  `).bind(requestId, bot.id, customer.id, safeAmount, origin === "miniapp" ? "miniapp" : "bot", ts, ts).run();
+  try {
+    const invoice = await createSalesPlisioInvoice(env, bot, customer, "wallet", requestId, safeAmount, origin);
+    const bonusPercent = Math.max(0, Math.min(100, Number(bot.recharge_bonus_percent || 0)));
+    const bonusAmount = Math.floor(safeAmount * bonusPercent / 100);
+    return { requestId, amountToman: safeAmount, bonusPercent, bonusAmount, invoice };
+  } catch (error) {
+    await env.PASARGUARD_DB.prepare("UPDATE sales_wallet_requests SET status='rejected',updated_at=? WHERE id=?")
+      .bind(nowIso(), requestId).run();
+    throw error;
+  }
+}
+
+function uniqueProcessedAtToken() {
+  const suffix = String(crypto.getRandomValues(new Uint32Array(1))[0]).padStart(10, "0").slice(0, 6);
+  return nowIso().replace("Z", suffix + "Z");
+}
+
+async function finalizeSalesPlisioWallet(env, bot, payment) {
+  const requestRow = await env.PASARGUARD_DB.prepare("SELECT * FROM sales_wallet_requests WHERE id=? AND bot_id=? AND customer_id=?")
+    .bind(payment.target_id, bot.id, payment.customer_id).first();
+  if (!requestRow) throw new Error("درخواست شارژ مرتبط پیدا نشد");
+  if (requestRow.status === "approved" || payment.processed_at) return { already_processed: true };
+  const bonusPercent = Math.max(0, Math.min(100, Number(bot.recharge_bonus_percent || 0)));
+  const baseAmount = Number(payment.amount_toman || 0);
+  const bonusAmount = Math.floor(baseAmount * bonusPercent / 100);
+  const creditedAmount = baseAmount + bonusAmount;
+  const token = uniqueProcessedAtToken();
+  const ledgerId = "cled_plisio_" + String(payment.id).replace(/[^a-zA-Z0-9_]/g, "");
+  const results = await env.PASARGUARD_DB.batch([
+    env.PASARGUARD_DB.prepare(`
+      UPDATE sales_payment_invoices SET processed_at=?,updated_at=?,error_message=NULL
+      WHERE id=? AND processed_at IS NULL AND status='PAID'
+    `).bind(token, token, payment.id),
+    env.PASARGUARD_DB.prepare(`
+      UPDATE sales_wallet_requests SET status='approved',bonus_toman=?,reviewed_at=?,updated_at=?
+      WHERE id=? AND EXISTS(SELECT 1 FROM sales_payment_invoices WHERE id=? AND processed_at=?)
+    `).bind(bonusAmount, token, token, requestRow.id, payment.id, token),
+    env.PASARGUARD_DB.prepare(`
+      UPDATE sales_customers SET wallet_balance=wallet_balance+?,updated_at=?
+      WHERE id=? AND bot_id=? AND EXISTS(SELECT 1 FROM sales_payment_invoices WHERE id=? AND processed_at=?)
+    `).bind(creditedAmount, token, payment.customer_id, bot.id, payment.id, token),
+    env.PASARGUARD_DB.prepare(`
+      INSERT OR IGNORE INTO sales_customer_ledger(id,bot_id,customer_id,type,amount,balance_after,ref_type,ref_id,description,created_at)
+      SELECT ?,?,?, 'recharge', ?, wallet_balance, 'plisio', ?, ?, ?
+      FROM sales_customers WHERE id=? AND bot_id=? AND EXISTS(SELECT 1 FROM sales_payment_invoices WHERE id=? AND processed_at=?)
+    `).bind(
+      ledgerId, bot.id, payment.customer_id, creditedAmount, payment.id,
+      bonusAmount > 0 ? ("شارژ رمزارزی Plisio + بونس " + bonusPercent + "٪") : "شارژ رمزارزی Plisio",
+      token, payment.customer_id, bot.id, payment.id, token
+    )
+  ]);
+  const processed = Number(results?.[0]?.meta?.changes || 0) > 0;
+  if (processed) {
+    const customer = await env.PASARGUARD_DB.prepare("SELECT * FROM sales_customers WHERE id=?").bind(payment.customer_id).first();
+    if (customer) {
+      await createSalesNotification(env, bot, customer, null, "payment_success", "شارژ رمزارزی موفق", "مبلغ " + botMoney(creditedAmount) + " تومان به کیف پول شما اضافه شد.", "plisio_wallet:" + payment.id, { sendBot: false });
+      try {
+        await resellerTelegramApi(env, bot, "sendMessage", {
+          chat_id: customer.telegram_id,
+          text: "✅ پرداخت رمزارزی Plisio تأیید شد.\nمبلغ افزوده‌شده: <b>" + botMoney(creditedAmount) + " تومان</b>",
+          parse_mode: "HTML"
+        });
+      } catch (_) {}
+    }
+    await salesEvent(env, bot.id, payment.customer_id, "plisio_wallet_credited", { paymentId: payment.id, baseAmount, bonusAmount, creditedAmount });
+    await queueReportEvent(env, bot.id, "payments", "شارژ خودکار Plisio تأیید شد",
+      "مشتری: <code>" + botEscape(customer?.telegram_id || payment.customer_id) + "</code>\n" +
+      "مبلغ: <b>" + botMoney(baseAmount) + " تومان</b>" +
+      (bonusAmount > 0 ? "\nبونس: <b>" + botMoney(bonusAmount) + " تومان</b>" : "") +
+      "\nفاکتور: <code>" + botEscape(payment.provider_invoice_id) + "</code>",
+      "plisio-wallet:" + payment.id).catch(() => null);
+  }
+  return { processed, bonusAmount, creditedAmount };
+}
+
+async function applyVerifiedSalesPlisioPayment(env, bot, payment, payload) {
+  const operation = resellerPlisioOperationData(payload);
+  if (operation.order_number && operation.order_number !== String(payment.id)) throw new Error("شماره سفارش Plisio تطبیق ندارد");
+  if (!operation.order_number && operation.txn_id !== String(payment.provider_invoice_id)) throw new Error("شناسه فاکتور Plisio تطبیق ندارد");
+  let stored = {};
+  try { stored = JSON.parse(payment.provider_payload || "{}"); } catch (_) {}
+  const expectedSourceAmount = Number(stored?.request?.source_amount);
+  const expectedSourceCurrency = cleanText(stored?.request?.source_currency || "", 20).toUpperCase();
+  if (Number.isFinite(expectedSourceAmount) && Number.isFinite(operation.source_amount) && Math.abs(expectedSourceAmount - operation.source_amount) > 0.011) {
+    throw new Error("مبلغ Callback با فاکتور داخلی تطبیق ندارد");
+  }
+  if (expectedSourceCurrency && operation.source_currency && expectedSourceCurrency !== operation.source_currency) {
+    throw new Error("ارز مبنای Callback با فاکتور داخلی تطبیق ندارد");
+  }
+  const status = normalizePlisioStatus(operation.status);
+  const ts = nowIso();
+  if (status !== "PAID") {
+    await env.PASARGUARD_DB.prepare("UPDATE sales_payment_invoices SET status=?,provider_payload=?,updated_at=? WHERE id=? AND processed_at IS NULL")
+      .bind(status, JSON.stringify({ ...(stored || {}), callback: payload }), ts, payment.id).run();
+    if (["EXPIRED", "CANCELED", "FAILED"].includes(status)) {
+      await env.PASARGUARD_DB.prepare("UPDATE sales_wallet_requests SET status='rejected',updated_at=? WHERE id=? AND status='payment_pending'")
+        .bind(ts, payment.target_id).run();
+    }
+    return { status, processed: false };
+  }
+  await env.PASARGUARD_DB.prepare("UPDATE sales_payment_invoices SET status='PAID',paid_at=?,provider_payload=?,updated_at=? WHERE id=?")
+    .bind(cleanText(operation.finished_at_utc, 100) || ts, JSON.stringify({ ...(stored || {}), callback: payload }), ts, payment.id).run();
+  await recordResellerPlisioState(env, bot.id, true).catch(() => null);
+  const fresh = await env.PASARGUARD_DB.prepare("SELECT * FROM sales_payment_invoices WHERE id=?").bind(payment.id).first();
+  if (fresh.processed_at) return { status: "PAID", processed: true };
+  return finalizeSalesPlisioWallet(env, bot, fresh);
+}
+
+async function salesPaymentStatus(env, bot, customer, paymentId) {
+  const payment = await env.PASARGUARD_DB.prepare("SELECT * FROM sales_payment_invoices WHERE id=? AND bot_id=? AND customer_id=?")
+    .bind(paymentId, bot.id, customer.id).first();
+  if (!payment) throw new Error("فاکتور آنلاین پیدا نشد");
+  if (String(payment.provider || "").toLowerCase() === "plisio") return payment;
+  return salesBlupalPaymentStatus(env, bot, customer, paymentId);
+}
+
+async function resellerPlisioCallback(request, env, botId) {
+  await ensureDb(env);
+  const bot = await getResellerBotById(env, botId);
+  if (!bot) return fail("Not found", 404, "NOT_FOUND");
+  let payload;
+  try { payload = await parseBody(request); } catch (_) { return fail("Invalid callback payload", 400, "INVALID_CALLBACK"); }
+  let secret;
+  try { secret = await resellerPlisioApiKey(env, bot); } catch (error) { return fail(error.message, 503, "PLISIO_NOT_CONFIGURED"); }
+  if (!(await verifyResellerPlisioCallback(payload, secret))) {
+    await recordResellerPlisioState(env, bot.id, false, "امضای Callback نامعتبر بود").catch(() => null);
+    return fail("Invalid callback signature", 422, "INVALID_SIGNATURE");
+  }
+  const operation = resellerPlisioOperationData(payload);
+  if (!operation.txn_id && !operation.order_number) return fail("Invalid callback payload", 400, "INVALID_CALLBACK");
+  let payment = null;
+  if (operation.txn_id) payment = await env.PASARGUARD_DB.prepare("SELECT * FROM sales_payment_invoices WHERE bot_id=? AND provider='plisio' AND provider_invoice_id=?")
+    .bind(bot.id, operation.txn_id).first();
+  if (!payment && operation.order_number) payment = await env.PASARGUARD_DB.prepare("SELECT * FROM sales_payment_invoices WHERE bot_id=? AND provider='plisio' AND id=?")
+    .bind(bot.id, operation.order_number).first();
+  if (!payment) return fail("Invoice not found", 404, "NOT_FOUND");
+  try {
+    await applyVerifiedSalesPlisioPayment(env, bot, payment, payload);
+    return json({ received: true });
+  } catch (error) {
+    await recordResellerPlisioState(env, bot.id, false, error.message).catch(() => null);
+    await env.PASARGUARD_DB.prepare("UPDATE sales_payment_invoices SET error_message=?,updated_at=? WHERE id=?")
+      .bind(cleanText(error.message, 800), nowIso(), payment.id).run();
+    return fail("Callback processing failed", 500, "CALLBACK_FAILED");
+  }
+}
+
+function resellerPlisioReturnPage(bot, origin, url) {
+  const urls = resellerPlisioUrls(origin, bot);
+  const deepLink = "https://t.me/" + String(bot.bot_username || "").replace(/^@/, "") + "?startapp=payment";
+  const ok = String(url?.searchParams?.get("status") || "").toLowerCase() === "success";
+  return `<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="theme-color" content="#f4f7ff"><title>بازگشت از Plisio</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:20px;background:radial-gradient(circle at 90% 0,#536dfe22,transparent 38%),linear-gradient(180deg,#f8faff,#eef4ff);color:#18233a;font-family:Tahoma,Arial}.card{width:min(100%,480px);border-radius:28px;padding:28px;background:#fffffff2;box-shadow:0 24px 70px #40508025;text-align:center}.icon{width:72px;height:72px;display:grid;place-items:center;margin:auto;border-radius:24px;background:#35d39a22;font-size:36px}.muted{color:#6d7890;line-height:1.9;font-size:13px}.btn{display:block;text-decoration:none;margin-top:12px;border-radius:16px;padding:14px;background:linear-gradient(135deg,#4e8cff,#765eff);color:#fff;font-weight:900}.secondary{background:#eef2ff;color:#425073}</style></head><body><main class="card"><div class="icon">${ok ? "✅" : "↩️"}</div><h1>بازگشت از پرداخت Plisio</h1><p class="muted">وضعیت نهایی فقط از Callback امضاشده Plisio دریافت می‌شود. برای مشاهده موجودی جدید به مینی‌اپ ${String(bot.brand_name || "فروشگاه").replace(/[<>&]/g, "")} برگردید.</p><a class="btn" href="${deepLink}">بازکردن مینی‌اپ در تلگرام</a><a class="btn secondary" href="${urls.miniapp_url}#wallet">مشاهده وضعیت پرداخت</a></main></body></html>`;
+}
+
 async function resellerBlupalWebhook(request, env, ctx, botId) {
   await ensureDb(env);
   const bot = await getResellerBotById(env, botId);
@@ -7376,7 +7711,7 @@ async function salesMiniAppBootstrap(request, env, botId, ctx = null) {
       env.PASARGUARD_DB.prepare("SELECT text_key,text_value FROM reseller_bot_texts WHERE bot_id=?").bind(bot.id),
       env.PASARGUARD_DB.prepare("SELECT id,order_id,type,title,message,status,created_at,read_at FROM sales_notifications WHERE bot_id=? AND customer_id=? ORDER BY created_at DESC LIMIT 40").bind(bot.id,customer.id),
       env.PASARGUARD_DB.prepare("SELECT id,public_code,category,priority,subject,status,last_message_at,created_at,updated_at,closed_at FROM sales_tickets WHERE bot_id=? AND customer_id=? ORDER BY last_message_at DESC LIMIT 50").bind(bot.id,customer.id),
-      env.PASARGUARD_DB.prepare("SELECT id,provider_invoice_id,target_type,target_id,amount_toman,final_amount_rial,status,payment_link,card_number,paid_at,processed_at,error_message,created_at,updated_at FROM sales_payment_invoices WHERE bot_id=? AND customer_id=? ORDER BY created_at DESC LIMIT 30").bind(bot.id,customer.id)
+      env.PASARGUARD_DB.prepare("SELECT id,provider,provider_invoice_id,target_type,target_id,amount_toman,final_amount_rial,status,payment_link,card_number,paid_at,processed_at,error_message,created_at,updated_at FROM sales_payment_invoices WHERE bot_id=? AND customer_id=? ORDER BY created_at DESC LIMIT 30").bind(bot.id,customer.id)
     ]);
     const batchRows = index => bootstrapBatch[index] || { results: [] };
     const categories = batchRows(0);
@@ -7432,7 +7767,9 @@ async function salesMiniAppBootstrap(request, env, botId, ctx = null) {
         payment_methods_order: resellerPaymentMethodOrder(bot),
         payment_default_method: resellerPaymentDefaultMethod(bot, "order"),
         blupal_enabled: resellerPaymentMethodEnabled(bot, "blupal"),
+        plisio_enabled: resellerPlisioConfigured(bot),
         online_payment_label: "پرداخت آنلاین بلوپال",
+        plisio_payment_label: "پرداخت رمزارزی Plisio",
         bot_version: APP_VERSION
       },
       customer: {
@@ -7482,7 +7819,7 @@ async function salesMiniAppAction(request, env, botId, ctx = null) {
       return json({ success: true, message: "همه اعلان‌ها خوانده شدند." });
     }
     if (action === "payment_status") {
-      const payment = await salesBlupalPaymentStatus(env, bot, customer, cleanText(body.payment_id, 100));
+      const payment = await salesPaymentStatus(env, bot, customer, cleanText(body.payment_id, 100));
       const order = payment.target_type === "order" ? await env.PASARGUARD_DB.prepare("SELECT id,status,remote_username,subscription_url,order_type,cashback_toman FROM sales_orders WHERE id=? AND bot_id=? AND customer_id=?").bind(payment.target_id,bot.id,customer.id).first() : null;
       const wallet = payment.target_type === "wallet" ? await env.PASARGUARD_DB.prepare("SELECT id,status,bonus_toman FROM sales_wallet_requests WHERE id=? AND bot_id=? AND customer_id=?").bind(payment.target_id,bot.id,customer.id).first() : null;
       return json({ success: true, payment, order, wallet, message: payment.processed_at ? "پرداخت با موفقیت پردازش شد." : "وضعیت فاکتور بروزرسانی شد." });
@@ -7586,6 +7923,11 @@ async function salesMiniAppAction(request, env, botId, ctx = null) {
       const amount = clampInt(body.amount, 0, 1000000000000);
       if (amount < 10000) throw new Error("حداقل مبلغ شارژ ۱۰٬۰۰۰ تومان است");
       const walletPaymentMethod = String(body.payment_method || resellerPaymentDefaultMethod(bot, "recharge") || "card").toLowerCase();
+      if (walletPaymentMethod === "plisio") {
+        if (!resellerPlisioConfigured(bot)) throw new Error("درگاه Plisio این ربات فعال یا کامل تنظیم نشده است");
+        const requestRow = await createSalesPlisioWalletCharge(env, bot, customer, amount, new URL(request.url).origin);
+        return json({ success: true, message: "فاکتور رمزارزی Plisio ساخته شد.", online_payment: requestRow.invoice, bonus_percent: requestRow.bonusPercent, bonus_toman: requestRow.bonusAmount });
+      }
       resellerRequirePaymentMethod(bot, walletPaymentMethod, "recharge");
       if (walletPaymentMethod === "blupal") {
         const requestRow = await createSalesBlupalWalletCharge(env, bot, customer, amount);
@@ -7676,7 +8018,7 @@ body:after{content:"";position:fixed;z-index:-1;width:190px;height:190px;left:-7
 <div id="planStep" style="display:none"><button id="planBackBtn" class="btn ghost full miniBack" onclick="backToCategories()">→ بازگشت به دسته‌بندی‌ها</button><div class="sectionTitle"><span id="shopTitle">پلن‌های فروش</span><small id="planCount"></small></div><div id="plans" class="planGrid"></div></div>
 </section>
 <section id="services" class="page"><div class="hero"><h1>🧭 مرکز سرویس‌های من</h1><p>حجم، مصرف، انقضا و وضعیت سرویس را ببینید؛ تمدید، افزایش حجم و تعویض لینک نیز از همین بخش انجام می‌شود.</p></div><div class="sectionTitle"><span>سرویس‌ها</span><small>اطلاعات مشترک با پنل</small></div><div id="serviceList"></div></section>
-<section id="wallet" class="page"><div class="hero"><h1>💳 کیف پول</h1><p>فقط روش‌های فعال‌شده توسط نماینده نمایش داده می‌شوند.</p><div class="price" id="walletBalance">۰ تومان</div></div><div class="card"><h3>افزایش موجودی</h3><input id="chargeAmount" class="input" inputmode="numeric" type="number" min="10000" placeholder="مبلغ به تومان"><div class="paymentMethods two" id="walletPaymentMethods"><button class="paymentMethod" id="chargeCardBtn"><b>💳</b>کارت‌به‌کارت</button><button class="paymentMethod online" id="chargeOnlineBtn"><b>💠</b>پرداخت آنلاین</button></div><div id="onlineWalletHint" class="muted" style="margin-top:9px"></div></div><div class="sectionTitle"><span>پرداخت‌های آنلاین</span><small>استعلام خودکار</small></div><div id="onlinePayments"></div><div class="sectionTitle"><span>درخواست‌های شارژ</span><small>وضعیت بررسی</small></div><div id="walletRequests"></div><div class="sectionTitle"><span>گردش حساب</span><small>آخرین تراکنش‌ها</small></div><div id="ledger"></div></section>
+<section id="wallet" class="page"><div class="hero"><h1>💳 کیف پول</h1><p>فقط روش‌های فعال‌شده توسط نماینده نمایش داده می‌شوند.</p><div class="price" id="walletBalance">۰ تومان</div></div><div class="card"><h3>افزایش موجودی</h3><input id="chargeAmount" class="input" inputmode="numeric" type="number" min="10000" placeholder="مبلغ به تومان"><div class="paymentMethods two" id="walletPaymentMethods"><button class="paymentMethod" id="chargeCardBtn"><b>💳</b>کارت‌به‌کارت</button><button class="paymentMethod online" id="chargeOnlineBtn"><b>💠</b>پرداخت آنلاین</button><button class="paymentMethod online" id="chargePlisioBtn"><b>🪙</b>Plisio رمزارزی</button></div><div id="onlineWalletHint" class="muted" style="margin-top:9px"></div></div><div class="sectionTitle"><span>پرداخت‌های آنلاین</span><small>استعلام خودکار</small></div><div id="onlinePayments"></div><div class="sectionTitle"><span>درخواست‌های شارژ</span><small>وضعیت بررسی</small></div><div id="walletRequests"></div><div class="sectionTitle"><span>گردش حساب</span><small>آخرین تراکنش‌ها</small></div><div id="ledger"></div></section>
 <section id="offers" class="page"><button class="btn secondary full miniBack" onclick="nav('home')">↩️ بازگشت به خانه</button><div class="hero"><h1>🎟 تخفیف و هدیه</h1><p>کد تخفیف یا هدیه نماینده را وارد کنید. کد تخفیف روی خرید بعدی و کد هدیه روی موجودی اعمال می‌شود.</p></div><div id="activePromoCard"></div><div class="card"><h3>فعال‌سازی کد</h3><input id="promoCode" class="input offerCode" maxlength="32" autocomplete="off" placeholder="EXAMPLE20"><button class="btn full" onclick="redeemPromo()">فعال‌سازی</button></div></section>
 <section id="notifications" class="page"><button class="btn secondary full miniBack" onclick="nav('home')">↩️ بازگشت به خانه</button><div class="hero"><h1>🔔 مرکز اعلان‌ها</h1><p>هشدارهای مصرف و انقضا، کش‌بک و رویدادهای مهم حساب در این بخش نگهداری می‌شوند.</p></div><button class="btn secondary full" style="margin:12px 0" onclick="markNotificationsRead()">✅ علامت‌گذاری همه به‌عنوان خوانده‌شده</button><div id="notificationList"></div></section>
 <section id="support" class="page"><button class="btn secondary full miniBack" onclick="nav('home')">↩️ بازگشت به خانه</button><div class="hero"><h1>🎫 مرکز پشتیبانی</h1><p>تیکت جدید ثبت کنید، پاسخ نماینده را ببینید و گفت‌وگو را بدون ارسال پیام‌های پراکنده در ربات ادامه دهید.</p></div><div id="phoneSupport"></div><div id="ticketCreateCard" class="card"><h3>➕ ثبت تیکت جدید</h3><div class="ticketForm"><select id="ticketCategory" class="input select"><option value="technical">🛠 مشکل فنی</option><option value="sales">🛒 خرید و فروش</option><option value="financial">💳 مالی و پرداخت</option><option value="account">👤 حساب کاربری</option><option value="other">📌 سایر</option></select><select id="ticketPriority" class="input select"><option value="normal">اولویت عادی</option><option value="low">اولویت کم</option><option value="high">اولویت مهم</option><option value="urgent">اولویت فوری</option></select><input id="ticketSubject" class="input" maxlength="140" placeholder="موضوع تیکت"><textarea id="ticketMessage" class="input" rows="5" maxlength="3000" placeholder="شرح کامل درخواست"></textarea><button class="btn full" onclick="createTicket()">ثبت تیکت</button></div></div><div class="sectionTitle"><span>تیکت‌های من</span><small id="ticketCount">۰ تیکت</small></div><div id="ticketList"></div></section>
@@ -7761,7 +8103,7 @@ function orderCard(x){var h='<article class="card"><div class="row"><h3>'+(x.ord
 function orderCards(list){return list.length?list.map(orderCard).join(""):'<div class="empty"><div class="emptyIcon">📦</div>هنوز سفارشی ثبت نشده است.</div>'}
 function renderServices(){var services=state.services||[];el("serviceList").innerHTML=services.length?services.map(function(x){var limit=Number(x.remote_data_limit||0),used=Number(x.remote_used_traffic||0),remaining=limit>0?Math.max(0,limit-used):0,pct=limit>0?Math.max(0,Math.min(100,Math.round(used*100/limit))):0,status=String(x.remote_status||"active").toLowerCase(),link=x.subscription_url||"",loc=(x.location_emoji||"🌍")+" "+(x.location_title||"عمومی");return'<article class="card serviceCard"><div class="serviceHead"><div><h3>'+esc(x.plan_title||"سرویس")+'</h3><div class="muted">'+esc(loc)+' · <code>'+esc(x.remote_username)+'</code></div></div><span class="status serviceStatus '+esc(status)+'">'+esc(serviceStatusLabel(status))+'</span></div><div class="serviceMeta"><div><span>حجم کل</span><b>'+(limit>0?gb(limit):"نامحدود")+'</b></div><div><span>مصرف‌شده</span><b>'+gb(used)+'</b></div><div><span>باقی‌مانده</span><b>'+(limit>0?gb(remaining):"نامحدود")+'</b></div><div><span>تاریخ انقضا</span><b>'+esc(faDate(x.remote_expire))+'</b></div></div>'+(limit>0?'<div class="usageTrack"><div class="usageFill" style="width:'+pct+'%"></div></div><div class="muted">'+num(pct)+'٪ مصرف شده</div>':'<div class="muted">حجم این سرویس نامحدود است.</div>')+'<div class="syncLine">آخرین همگام‌سازی: '+esc(timeAgo(x.remote_last_synced_at))+'</div>'+(link?'<div class="serviceLink">'+esc(link)+'</div>':'')+'<div class="serviceActions">'+(link?'<button class="btn secondary" onclick="showQr(\''+encodeURIComponent(link)+'\')">🔗 لینک و QR</button>':'<button class="btn secondary" disabled>لینک موجود نیست</button>')+'<button class="btn secondary" onclick="refreshService(\''+x.id+'\')">🔄 بروزرسانی</button><button class="btn" onclick="selectRenew(\''+x.id+'\')">♻️ تمدید</button><button class="btn" onclick="selectVolume(\''+x.id+'\')">➕ افزایش حجم</button><button class="btn danger wide" onclick="confirmRevokeService(\''+x.id+'\')">🔐 تعویض لینک اشتراک</button></div></article>'}).join(""):'<div class="empty"><div class="emptyIcon">🧭</div>هنوز سرویس تحویل‌شده‌ای ندارید.</div>'}
 function renderWalletRequests(){var list=state.wallet_requests||[];el("walletRequests").innerHTML=list.length?list.map(function(x){var pay=paymentForTarget("wallet",x.id);return'<div class="card"><div class="row"><b>'+money(x.amount_toman)+'</b><span class="status '+esc(x.status)+'">'+esc(statusLabel(x.status))+'</span></div>'+(Number(x.bonus_toman)>0?'<div class="muted">بونس: '+money(x.bonus_toman)+'</div>':"")+(x.origin==="miniapp"&&x.status==="awaiting_receipt"?'<button class="btn full resumeWalletBtn" style="margin-top:9px" data-id="'+esc(x.id)+'">💳 ادامه پرداخت و ثبت رسید</button>':"")+(pay&&x.status==="payment_pending"?'<button class="btn online full resumeOnlineBtn" style="margin-top:9px" data-id="'+esc(pay.id)+'">💠 ادامه پرداخت آنلاین</button>':"")+'</div>'}).join(""):'<div class="empty">درخواست شارژی ثبت نشده است.</div>'}
-function renderOnlinePayments(){var list=(state.payment_invoices||[]).filter(function(p){return !p.processed_at||String(p.status).toUpperCase()==="PAID"}).slice(0,8);el("onlinePayments").innerHTML=list.length?list.map(function(p){var done=!!p.processed_at,status=String(p.status||"PENDING").toUpperCase();return'<article class="card onlinePaymentCard"><div class="row"><div><b>💠 '+(p.target_type==="wallet"?"شارژ کیف پول":"پرداخت سفارش")+'</b><div class="muted"><code>'+esc(p.provider_invoice_id||p.id)+'</code></div></div><span class="status '+(done?"approved":"payment_pending")+'">'+esc(done?"پردازش شد":paymentStatusLabel(status))+'</span></div><div class="muted">مبلغ: '+money(p.amount_toman)+' · '+esc(timeAgo(p.updated_at))+'</div>'+(!done&&["PENDING","PAID"].includes(status)?'<div class="paymentProgress"></div><button class="btn online full resumeOnlineBtn" data-id="'+esc(p.id)+'">ادامه پرداخت / استعلام</button>':"")+(p.error_message?'<div class="muted" style="color:var(--danger);margin-top:8px">'+esc(p.error_message)+'</div>':"")+'</article>'}).join(""):'<div class="empty"><div class="emptyIcon">💠</div>پرداخت آنلاین فعالی ندارید.</div>'}
+function renderOnlinePayments(){var list=(state.payment_invoices||[]).filter(function(p){return !p.processed_at||String(p.status).toUpperCase()==="PAID"}).slice(0,8);el("onlinePayments").innerHTML=list.length?list.map(function(p){var done=!!p.processed_at,status=String(p.status||"PENDING").toUpperCase();var icon=String(p.provider||"").toLowerCase()==="plisio"?"🪙":"💠";return'<article class="card onlinePaymentCard"><div class="row"><div><b>'+icon+' '+(p.target_type==="wallet"?"شارژ کیف پول":"پرداخت سفارش")+'</b><div class="muted"><code>'+esc(p.provider_invoice_id||p.id)+'</code></div></div><span class="status '+(done?"approved":"payment_pending")+'">'+esc(done?"پردازش شد":paymentStatusLabel(status))+'</span></div><div class="muted">مبلغ: '+money(p.amount_toman)+' · '+esc(timeAgo(p.updated_at))+'</div>'+(!done&&["PENDING","PAID"].includes(status)?'<div class="paymentProgress"></div><button class="btn online full resumeOnlineBtn" data-id="'+esc(p.id)+'">ادامه پرداخت / استعلام</button>':"")+(p.error_message?'<div class="muted" style="color:var(--danger);margin-top:8px">'+esc(p.error_message)+'</div>':"")+'</article>'}).join(""):'<div class="empty"><div class="emptyIcon">💠</div>پرداخت آنلاین فعالی ندارید.</div>'}
 function bindResumeButtons(){document.querySelectorAll(".resumeOrderBtn").forEach(function(btn){btn.onclick=function(){resumeOrderPayment(btn.dataset.id)}});document.querySelectorAll(".resumeWalletBtn").forEach(function(btn){btn.onclick=function(){resumeWalletPayment(btn.dataset.id)}});document.querySelectorAll(".resumeOnlineBtn").forEach(function(btn){btn.onclick=function(){openOnlinePayment(btn.dataset.id)}})}
 function renderNotifications(){var list=state.notifications||[];el("notificationList").innerHTML=list.length?list.map(function(n){return'<article class="card noticeCard '+(n.status==="unread"?"unread":"")+'"><div class="row"><h3>'+notificationIcon(n.type)+' '+esc(n.title)+'</h3><span class="badge">'+(n.status==="unread"?"جدید":"خوانده‌شده")+'</span></div><div class="muted">'+esc(n.message)+'</div><div class="noticeMeta"><span>'+esc(timeAgo(n.created_at))+'</span><span>'+esc(n.type||"notification")+'</span></div></article>'}).join(""):'<div class="empty"><div class="emptyIcon">🔕</div>هنوز اعلانی ندارید.</div>'}
 function phoneCardHtml(compact){var b=state.bot,c=state.customer,verified=!!c.phone_verified;if(verified)return compact?"":'<div class="phoneBanner ok"><strong>✅ شماره موبایل تأیید شده</strong><div class="muted">'+esc(c.phone_number||"شماره متعلق به حساب تلگرام")+'</div></div>';if(!b.phone_verification_required&&compact)return"";return'<div class="phoneBanner"><strong>📱 '+(b.phone_verification_required?"تأیید شماره الزامی است":"تأیید شماره موبایل")+'</strong><div class="muted">'+(b.phone_verification_required?"برای خرید، شارژ، تست رایگان و ثبت تیکت باید شماره متعلق به همین حساب تلگرام تأیید شود.":"با تأیید شماره، پیگیری حساب و پشتیبانی امن‌تر می‌شود.")+'</div><button class="btn full" style="margin-top:9px" onclick="verifyPhone()">ارسال و تأیید شماره من</button></div>'}
@@ -7770,7 +8112,7 @@ function renderTickets(){var b=state.bot,list=state.tickets||[];el("ticketCount"
 function render(){var b=state.bot,c=state.customer,o=state.orders||[],promo=c.active_promo;if(!isTelegram&&!document.getElementById("webLogoutBtn")){var top=document.querySelector(".appbar");if(top){var x=document.createElement("button");x.id="webLogoutBtn";x.className="btn secondary logoutWeb";x.textContent="خروج";x.onclick=webLogout;top.appendChild(x)}}el("brand").textContent=b.brand_name;el("hello").textContent="سلام "+(c.first_name||c.username||"کاربر");el("version").textContent="نسخه "+(b.bot_version||state.version);el("homeBalance").textContent=money(c.wallet_balance);el("walletBalance").textContent=money(c.wallet_balance);el("homeServices").textContent=num((state.services||[]).length);el("homeOrders").innerHTML=orderCards(o.slice(0,4));el("trialQuick").innerHTML=b.trial_enabled?'<button class="btn ok full" onclick="trial()">🎁 دریافت تست رایگان '+gb(b.trial_data_limit_bytes)+" / "+num(b.trial_duration_hours||24)+' ساعت</button>':"";
 var promoHtml=promo?'<div class="promoBanner"><strong>🎟 کد فعال: '+esc(promo.code)+'</strong><div class="muted">'+esc(promo.description||"این تخفیف روی خرید بعدی اعمال می‌شود.")+'</div></div>':"";
 el("activePromoBanner").innerHTML=promoHtml;var cashbackHtml=b.cashback_enabled?'<div class="cashbackBanner"><strong>💸 کش‌بک خرید '+num(b.cashback_percent)+'٪</strong><div class="muted">'+(Number(b.cashback_min_purchase_toman)>0?'حداقل خرید '+money(b.cashback_min_purchase_toman)+' · ':'')+(Number(b.cashback_max_toman)>0?'سقف هر سفارش '+money(b.cashback_max_toman):'بدون سقف پاداش')+'</div></div>':"";el("cashbackBanner").innerHTML=cashbackHtml;el("notificationQuickText").textContent=Number(state.unread_notifications||0)>0?num(state.unread_notifications)+" اعلان جدید":"هشدارها و پاداش‌ها";el("activePromoCard").innerHTML=promoHtml||'<div class="card"><h3>کد فعالی ندارید</h3><div class="muted">کد تخفیف یا هدیه‌ای که از نماینده دریافت کرده‌اید وارد کنید.</div></div>';
-renderShop();renderServices();renderWalletRequests();renderOnlinePayments();renderNotifications();renderPhone();renderTickets();el("chargeCardBtn").style.display=b.payment_card_enabled?"block":"none";el("chargeOnlineBtn").style.display=b.blupal_enabled?"block":"none";var walletMethodsBox=el("walletPaymentMethods"),walletMethodNodes={card:el("chargeCardBtn"),blupal:el("chargeOnlineBtn")};(b.payment_methods_order||["card","blupal"]).forEach(function(method){if(walletMethodNodes[method])walletMethodsBox.appendChild(walletMethodNodes[method])});var rechargeMethods=[];if(b.payment_card_enabled)rechargeMethods.push("کارت‌به‌کارت");if(b.blupal_enabled)rechargeMethods.push("بلوپال");walletMethodsBox.className="paymentMethods "+(rechargeMethods.length===1?"one":"two");el("onlineWalletHint").textContent=rechargeMethods.length?("روش‌های فعال شارژ: "+rechargeMethods.join(" و ")):"در حال حاضر روشی برای شارژ کیف پول فعال نیست.";el("ledger").innerHTML=(state.ledger||[]).length?(state.ledger||[]).map(function(x){return'<div class="card"><div class="row"><b>'+(Number(x.amount)>=0?"+":"")+money(x.amount)+'</b><span class="badge">مانده '+money(x.balance_after)+'</span></div><div class="muted">'+esc(x.description||"تراکنش")+"</div></div>"}).join(""):'<div class="empty">تراکنشی ثبت نشده است.</div>';
+renderShop();renderServices();renderWalletRequests();renderOnlinePayments();renderNotifications();renderPhone();renderTickets();el("chargeCardBtn").style.display=b.payment_card_enabled?"block":"none";el("chargeOnlineBtn").style.display=b.blupal_enabled?"block":"none";el("chargePlisioBtn").style.display=b.plisio_enabled?"block":"none";var walletMethodsBox=el("walletPaymentMethods"),walletMethodNodes={card:el("chargeCardBtn"),blupal:el("chargeOnlineBtn"),plisio:el("chargePlisioBtn")};(b.payment_methods_order||["card","blupal"]).forEach(function(method){if(walletMethodNodes[method])walletMethodsBox.appendChild(walletMethodNodes[method])});if(walletMethodNodes.plisio)walletMethodsBox.appendChild(walletMethodNodes.plisio);var rechargeMethods=[];if(b.payment_card_enabled)rechargeMethods.push("کارت‌به‌کارت");if(b.blupal_enabled)rechargeMethods.push("بلوپال");if(b.plisio_enabled)rechargeMethods.push("Plisio");walletMethodsBox.className="paymentMethods "+(rechargeMethods.length===1?"one":rechargeMethods.length===2?"two":"three");el("onlineWalletHint").textContent=rechargeMethods.length?("روش‌های فعال شارژ: "+rechargeMethods.join(" و ")):"در حال حاضر روشی برای شارژ کیف پول فعال نیست.";el("ledger").innerHTML=(state.ledger||[]).length?(state.ledger||[]).map(function(x){return'<div class="card"><div class="row"><b>'+(Number(x.amount)>=0?"+":"")+money(x.amount)+'</b><span class="badge">مانده '+money(x.balance_after)+'</span></div><div class="muted">'+esc(x.description||"تراکنش")+"</div></div>"}).join(""):'<div class="empty">تراکنشی ثبت نشده است.</div>';
 var loyaltyLabels={bronze:"برنزی",silver:"نقره‌ای",gold:"طلایی",vip:"VIP"},loyaltyIcons={bronze:"🥉",silver:"🥈",gold:"🥇",vip:"💎"},loyaltyLabel=loyaltyLabels[c.loyalty_level]||"برنزی";
 el("loyaltyBanner").innerHTML=b.loyalty_enabled?'<div class="cashbackBanner"><strong>'+ (loyaltyIcons[c.loyalty_level]||"🥉") +' باشگاه مشتریان · '+esc(loyaltyLabel)+'</strong><div class="muted">مجموع خرید: '+money(c.lifetime_spend_toman||0)+(Number(c.loyalty_discount_percent||0)>0?' · تخفیف خودکار '+num(c.loyalty_discount_percent)+'٪':' · با خرید بیشتر سطح شما ارتقا می‌یابد')+'</div></div>':'';
 el("accountCard").innerHTML='<div class="card"><div class="row"><h3>👤 حساب کاربری</h3><span class="badge">'+esc(c.customer_type||"retail")+'</span></div><div>نام: <b>'+esc(c.first_name||c.username||"کاربر")+'</b></div><div class="muted">شناسه: '+esc(c.telegram_id)+'</div><div style="margin-top:8px">موجودی: <b>'+money(c.wallet_balance)+'</b></div><div class="muted" style="margin-top:8px">'+(loyaltyIcons[c.loyalty_level]||"🥉")+' سطح باشگاه: <b>'+esc(loyaltyLabel)+'</b> · مجموع خرید: <b>'+money(c.lifetime_spend_toman||0)+'</b></div>'+(Number(c.discount_percent||0)>0?'<div class="priceSave">تخفیف کاربر عمده: '+num(c.discount_percent)+'٪</div>':"")+(Number(c.loyalty_discount_percent||0)>0?'<div class="priceSave">تخفیف باشگاه: '+num(c.loyalty_discount_percent)+'٪</div>':"")+(b.fraud_protection_enabled?'<div class="securityPill">🛡️ حفاظت خرید و کنترل ضدتقلب فعال است</div>':"")+'</div>';
@@ -7804,7 +8146,7 @@ window.closeModal=function(){el("modal").classList.remove("show");pendingPayment
 function onlinePaymentById(id){return(state&&state.payment_invoices||[]).find(function(p){return String(p.id)===String(id)})}
 window.openOnlinePayment=function(id){var p=onlinePaymentById(id);if(!p)return toast("فاکتور آنلاین پیدا نشد");showOnlinePayment(p)};
 window.launchOnlinePayment=function(){if(!pendingOnlinePayment||!pendingOnlinePayment.payment_link)return toast("لینک پرداخت موجود نیست");var url=pendingOnlinePayment.payment_link;if(tg&&tg.openLink)tg.openLink(url,{try_instant_view:false});else location.href=url};
-function showOnlinePayment(p){pendingOnlinePayment=p;if(onlinePollTimer)clearInterval(onlinePollTimer);var finalRial=Number(p.final_amount_rial||0),card=p.card_number?'<div class="paymentLine"><span>کارت مقصد بلوپال</span><b><code>'+esc(p.card_number)+'</code></b></div>':"";openModal("💠 پرداخت آنلاین بلوپال",'<div class="providerBanner"><div><strong>پرداخت امن و خودکار</strong><small>بعد از پرداخت، وضعیت از API استعلام و سفارش یا کیف پول بدون ارسال پیام اضافی بروزرسانی می‌شود.</small></div><div class="providerLogo">💠</div></div><div class="paymentBox"><div class="paymentLine"><span>شماره فاکتور</span><b><code>'+esc(p.provider_invoice_id||p.invoice_id||p.id)+'</code></b></div><div class="paymentLine"><span>مبلغ سفارش</span><b>'+money(p.amount_toman)+'</b></div>'+(finalRial?'<div class="paymentLine"><span>مبلغ نهایی بلوپال</span><b>'+num(finalRial)+' ریال</b></div>':"")+card+'</div><div id="onlinePaymentState" class="onlineState">در انتظار پرداخت و تأیید بلوپال</div><div class="onlineActions"><button class="btn online full" onclick="launchOnlinePayment()">بازکردن صفحه پرداخت</button><button id="checkOnlineBtn" class="btn secondary full" onclick="checkOnlinePayment(pendingOnlinePayment.id)">🔄 بررسی وضعیت پرداخت</button></div>');onlinePollTimer=setInterval(function(){checkOnlinePayment(p.id,true)},5000)}
+function showOnlinePayment(p){pendingOnlinePayment=p;if(onlinePollTimer)clearInterval(onlinePollTimer);var isPlisio=String(p.provider||"").toLowerCase()==="plisio",provider=isPlisio?"Plisio":"بلوپال",icon=isPlisio?"🪙":"💠",finalRial=Number(p.final_amount_rial||0),card=!isPlisio&&p.card_number?'<div class="paymentLine"><span>کارت مقصد بلوپال</span><b><code>'+esc(p.card_number)+'</code></b></div>':"",help=isPlisio?"بعد از پرداخت، Callback امضاشده Plisio حساب را بدون تأیید دستی شارژ می‌کند.":"بعد از پرداخت، وضعیت از API استعلام و سفارش یا کیف پول بدون ارسال پیام اضافی بروزرسانی می‌شود.";openModal(icon+" پرداخت آنلاین "+provider,'<div class="providerBanner"><div><strong>پرداخت امن و خودکار</strong><small>'+help+'</small></div><div class="providerLogo">'+icon+'</div></div><div class="paymentBox"><div class="paymentLine"><span>شماره فاکتور</span><b><code>'+esc(p.provider_invoice_id||p.invoice_id||p.id)+'</code></b></div><div class="paymentLine"><span>مبلغ سفارش</span><b>'+money(p.amount_toman)+'</b></div>'+(!isPlisio&&finalRial?'<div class="paymentLine"><span>مبلغ نهایی بلوپال</span><b>'+num(finalRial)+' ریال</b></div>':"")+card+'</div><div id="onlinePaymentState" class="onlineState">در انتظار پرداخت و تأیید '+provider+'</div><div class="onlineActions"><button class="btn online full" onclick="launchOnlinePayment()">بازکردن صفحه پرداخت</button><button id="checkOnlineBtn" class="btn secondary full" onclick="checkOnlinePayment(pendingOnlinePayment.id)">🔄 بررسی وضعیت پرداخت</button></div>');onlinePollTimer=setInterval(function(){checkOnlinePayment(p.id,true)},5000)}
 window.checkOnlinePayment=async function(id,silent){var btn=el("checkOnlineBtn");if(btn&&!silent)btn.disabled=true;try{var d=await api("action",{action:"payment_status",payment_id:id}),p=d.payment||{};pendingOnlinePayment=Object.assign({},pendingOnlinePayment||{},p);var stateEl=el("onlinePaymentState");if(p.processed_at){if(stateEl){stateEl.className="onlineState paid";stateEl.textContent="پرداخت تأیید و با موفقیت پردازش شد"}if(onlinePollTimer){clearInterval(onlinePollTimer);onlinePollTimer=null}await refresh(false);setTimeout(function(){closeModal();nav(p.target_type==="wallet"?"wallet":"services")},900);if(!silent)toast("پرداخت با موفقیت انجام شد")}else{var terminal=["EXPIRED","CANCELED","FAILED"].includes(String(p.status||"").toUpperCase());if(stateEl){stateEl.className="onlineState";stateEl.textContent=paymentStatusLabel(p.status)+" — بروزرسانی "+timeAgo(p.updated_at)}if(terminal&&onlinePollTimer){clearInterval(onlinePollTimer);onlinePollTimer=null}if(!silent)toast(d.message||"وضعیت بروزرسانی شد")}}catch(e){if(!silent)toast(e.message)}finally{if(btn)btn.disabled=false}};
 window.showQr=function(x){var value=decodeURIComponent(x);openModal("QR Code اشتراک",'<img class="qr" src="https://api.qrserver.com/v1/create-qr-code/?size=420x420&data='+encodeURIComponent(value)+'"><div class="serviceLink">'+esc(value)+'</div><button class="btn full" onclick="copyValue(\''+encodeURIComponent(value)+'\')">📋 کپی لینک واقعی</button>')};
 function showDelivery(d){var link=d.subscription_url||"",extra=d.duration_hours?'<div class="muted">اعتبار: '+num(d.duration_hours)+' ساعت · حجم: '+gb(d.data_limit_bytes)+'</div>':"",cashback=Number(d.cashback_toman||0)>0?'<div class="promoBanner"><strong>💸 کش‌بک خرید</strong><div class="muted">'+money(d.cashback_toman)+' به کیف پول شما اضافه شد.</div></div>':"";openModal(d.order_type==="trial"?"تست رایگان آماده شد":(d.order_type==="renewal"?"تمدید انجام شد":d.order_type==="volume"?"افزایش حجم انجام شد":"سرویس آماده شد"),'<div class="paymentBox"><div class="paymentLine"><span>نام کاربری</span><b><code>'+esc(d.username||"")+'</code></b></div></div>'+extra+cashback+(link?'<img class="qr" src="https://api.qrserver.com/v1/create-qr-code/?size=420x420&data='+encodeURIComponent(link)+'"><div class="serviceLink">'+esc(link)+'</div><button class="btn full" onclick="copyValue(\''+encodeURIComponent(link)+'\')">📋 کپی لینک واقعی</button>':""))}
@@ -7815,7 +8157,7 @@ window.submitReceipt=async function(){if(!pendingPayment)return;var input=el("re
 function readFile(file){return new Promise(function(resolve,reject){var reader=new FileReader();reader.onload=function(){resolve(String(reader.result||""))};reader.onerror=function(){reject(new Error("خواندن فایل رسید ناموفق بود"))};reader.readAsDataURL(file)})}
 window.trial=async function(){try{var d=await api("action",{action:"trial"});if(d.delivery)showDelivery(d.delivery);toast(d.message);await refresh()}catch(e){toast(e.message)}};
 async function startWalletCharge(method){try{var amount=Number(el("chargeAmount").value||0),d=await api("action",{action:"wallet_charge",amount:amount,payment_method:method});if(d.online_payment)showOnlinePayment(d.online_payment);else if(d.payment)showPayment(d.payment);toast(d.message)}catch(e){toast(e.message)}}
-el("chargeCardBtn").onclick=function(){startWalletCharge("card")};el("chargeOnlineBtn").onclick=function(){startWalletCharge("blupal")};
+el("chargeCardBtn").onclick=function(){startWalletCharge("card")};el("chargeOnlineBtn").onclick=function(){startWalletCharge("blupal")};el("chargePlisioBtn").onclick=function(){startWalletCharge("plisio")};
 function showWebLogin(message){el("app").style.display="none";el("nav").style.display="none";var msg=message?'<div class="webLoginNote" style="color:var(--danger)">'+esc(message)+'</div>':'';el("loading").style.display="grid";el("loading").innerHTML='<div class="webLogin"><div class="webLoginLogo">BP</div><h2>ورود به نسخه وب</h2><div class="muted">نام کاربری تلگرام یا Telegram ID خود را وارد کنید تا کد ورود توسط همین ربات برایتان ارسال شود.</div>'+msg+'<div id="webLoginStep1" class="webLoginStep"><input id="webIdentifier" class="input ltr" autocomplete="username" placeholder="@username یا Telegram ID"><button id="requestWebCode" class="btn full">دریافت کد ورود</button></div><div id="webLoginStep2" class="webLoginStep" style="display:none"><input id="webCode" class="input ltr" inputmode="numeric" maxlength="6" placeholder="کد ۶ رقمی"><button id="verifyWebCode" class="btn full">ورود امن</button><button id="changeWebIdentifier" class="btn secondary full" style="margin-top:8px">تغییر شناسه</button></div><div class="webLoginNote">برای دریافت کد باید قبلاً یک‌بار ربات را Start کرده باشید. نشست وب با کوکی امن و HttpOnly نگهداری می‌شود.</div></div>';
   el("requestWebCode").onclick=async function(){var idn=el("webIdentifier").value.trim(),btn=this;if(!idn)return toast("شناسه را وارد کنید");btn.disabled=true;try{var r=await fetch("/sales-auth/"+encodeURIComponent(BOT_ID)+"/request-code",{method:"POST",credentials:"same-origin",headers:{"content-type":"application/json"},body:JSON.stringify({identifier:idn})}),d=await r.json();if(!r.ok||d.success===false)throw Object.assign(new Error(d.error||"ارسال کد ناموفق بود"),{code:d.code});el("webLoginStep1").style.display="none";el("webLoginStep2").style.display="block";el("webCode").focus();toast(d.message)}catch(e){toast(e.message)}finally{btn.disabled=false}};
   el("verifyWebCode").onclick=async function(){var idn=el("webIdentifier").value.trim(),code=el("webCode").value.trim(),btn=this;if(code.length!==6)return toast("کد ۶ رقمی را وارد کنید");btn.disabled=true;try{var r=await fetch("/sales-auth/"+encodeURIComponent(BOT_ID)+"/verify-code",{method:"POST",credentials:"same-origin",headers:{"content-type":"application/json"},body:JSON.stringify({identifier:idn,code:code})}),d=await r.json();if(!r.ok||d.success===false)throw new Error(d.error||"ورود ناموفق بود");el("loading").innerHTML='<div><div class="spinner"></div><div class="muted">در حال ورود…</div></div>';await refresh(true)}catch(e){toast(e.message)}finally{btn.disabled=false}};
@@ -8742,12 +9084,12 @@ const CENTRAL_CONTROL_HTML = String.raw`<!doctype html>
 <section id="page-users" class="page"><div class="filters"><input id="userSearch" class="input" placeholder="نام، نام کاربری یا Telegram ID"><select id="userStatus" class="input"><option value="">همه کاربران</option><option value="active">فعال</option><option value="disabled">غیرفعال</option></select></div><div class="card"><div class="cardHeader"><div><h3>کاربران و موجودی</h3><div class="sub">انتخاب کاربر، افزایش یا کاهش موجودی و کنترل وضعیت حساب</div></div><span id="userCount" class="badge">--</span></div><div id="userList" class="list"></div></div></section>
 <section id="page-agencies" class="page"><div class="filters"><input id="agencySearch" class="input" placeholder="نام پنل، کاربر یا شناسه"><select id="agencyStatus" class="input"><option value="">همه وضعیت‌ها</option><option value="active">فعال</option><option value="stopped">متوقف</option></select><button class="btn secondary" data-act="sync-usage">همگام‌سازی مصرف</button></div><div class="card"><div class="cardHeader"><div><h3>مدیریت پنل‌های نمایندگی</h3><div class="sub">فعال یا متوقف‌کردن واقعی پنل در PasarGuard و Worker</div></div><span id="agencyCount" class="badge">--</span></div><div id="agencyList" class="list"></div></div></section>
 <section id="page-bots" class="page"><div class="filters"><input id="botSearch" class="input" placeholder="برند، ربات یا مالک"><select id="botStatus" class="input"><option value="">همه وضعیت‌ها</option><option value="active">فعال</option><option value="paused">متوقف</option><option value="paused_admin">قفل مرکزی</option></select><button class="btn secondary" data-act="reseller-health-all">پایش همه</button></div><div class="card"><div class="cardHeader"><div><h3>مدیریت ربات‌های نمایندگان</h3><div class="sub">توقف مرکزی با قفل مدیریتی؛ نماینده امکان دورزدن آن را ندارد.</div></div><span id="botCount" class="badge">--</span></div><div id="botList" class="list"></div></div></section>
-<section id="page-finance" class="page"><div class="hero"><div class="heroTop"><div><h2>مالی و پرداخت‌ها</h2><p>کیف پول، شارژ بلوپال، درآمد مصرف و فروش نمایندگان.</p></div></div><div class="metrics"><div class="metric"><span>مجموع کیف پول</span><b id="fWallet">--</b></div><div class="metric"><span>کل شارژ موفق</span><b id="fRecharge">--</b></div><div class="metric"><span>درآمد مصرف</span><b id="fUsage">--</b></div><div class="metric"><span>فروش نمایندگان</span><b id="fSales">--</b></div></div></div><div class="filters"><input id="paymentSearch" class="input" placeholder="کاربر یا فاکتور"><select id="paymentStatus" class="input"><option value="">همه پرداخت‌ها</option><option value="PENDING">معلق</option><option value="PAID">پرداخت‌شده</option><option value="FAILED">ناموفق</option><option value="pending_review">واریز رمزارزی در انتظار بررسی</option><option value="approved">واریز رمزارزی تأییدشده</option><option value="rejected">واریز رمزارزی ردشده</option></select><button class="btn secondary" data-act="sync-payments">استعلام همه</button><button class="btn danger" data-act="cleanup-payments">حذف معلق‌های قدیمی</button></div><div class="card"><div class="cardHeader"><div><h3>تراکنش‌ها و واریزهای رمزارزی</h3><div class="sub">نتایج فیلترشده بلوپال و بیت‌پین</div></div><span id="paymentCount" class="badge">--</span></div><div id="paymentList" class="list"></div></div></section>
+<section id="page-finance" class="page"><div class="hero"><div class="heroTop"><div><h2>مالی و پرداخت‌ها</h2><p>کیف پول، شارژ بلوپال، درآمد مصرف و فروش نمایندگان.</p></div></div><div class="metrics"><div class="metric"><span>مجموع کیف پول</span><b id="fWallet">--</b></div><div class="metric"><span>کل شارژ موفق</span><b id="fRecharge">--</b></div><div class="metric"><span>درآمد مصرف</span><b id="fUsage">--</b></div><div class="metric"><span>فروش نمایندگان</span><b id="fSales">--</b></div></div></div><div class="filters"><input id="paymentSearch" class="input" placeholder="کاربر یا فاکتور"><select id="paymentStatus" class="input"><option value="">همه پرداخت‌ها</option><option value="PENDING">معلق</option><option value="PAID">پرداخت‌شده</option><option value="FAILED">ناموفق</option></select><button class="btn secondary" data-act="sync-payments">استعلام همه</button><button class="btn danger" data-act="cleanup-payments">حذف معلق‌های قدیمی</button></div><div class="card"><div id="paymentList" class="list"></div></div></section>
 <section id="page-channels" class="page"><div class="grid"><form id="channelsForm" class="card"><div class="cardHeader"><div><h3>قفل جوین اجباری ربات مرکزی</h3><div class="sub">کانال عمومی یا خصوصی و بررسی عضویت کاربران</div></div><button type="button" class="btn secondary small" data-act="channel-add">افزودن</button></div><div class="switchRow"><div><b>فعال‌بودن قفل عضویت</b><small>ادمین‌ها از این بررسی مستثنا هستند</small></div><label class="switch"><input id="joinEnabled" type="checkbox"><span class="slider"></span></label></div><div class="notice">برای کانال خصوصی Chat ID و لینک دعوت را ثبت کنید. ربات مرکزی باید مدیر کانال باشد.</div><div id="channelsList" style="margin-top:12px"></div><button class="btn" type="submit">ذخیره کانال‌ها</button></form><form id="releaseForm" class="card"><div class="cardHeader"><div><h3>کانال رسمی آپدیت‌ها</h3><div class="sub">ارسال لینک هنگام تحویل پنل و انتشار اطلاعیه نسخه</div></div></div><div class="switchRow"><div><b>ارسال کانال آپدیت</b><small>لینک برای نمایندگان جدید ارسال شود</small></div><label class="switch"><input id="releaseEnabled" type="checkbox"><span class="slider"></span></label></div><div class="field"><label>Chat ID یا @username</label><input id="releaseChat" class="input ltr"></div><div class="field"><label>عنوان کانال</label><input id="releaseTitle" class="input"></div><div class="field"><label>لینک عمومی یا دعوت خصوصی</label><input id="releaseUrl" class="input ltr"></div><div class="itemActions"><button class="btn" type="submit">ذخیره کانال</button><button type="button" class="btn secondary" data-act="release-test">پیام آزمایشی</button><button type="button" class="btn ok" data-act="release-publish">انتشار نسخه</button></div><div id="releaseState" class="sub"></div></form></div></section>
 <section id="page-settings" class="page"><div class="grid"><form id="salesForm" class="card"><div class="cardHeader"><div><h3>سیاست فروش و تعرفه‌ها</h3><div class="sub">با تغییر هر کلید، وضعیت فوراً ذخیره و روی ربات، وب، API و فرایندهای نیمه‌تمام اعمال می‌شود.</div></div></div><div class="switchRow"><div><b>فروش پنل نمایندگی</b><small>خرید پنل در ربات و وب</small></div><label class="switch"><input id="setAgencySales" type="checkbox"><span class="slider"></span></label></div><div class="switchRow"><div><b>فروش ربات نمایندگی</b><small>خرید ربات در ربات و API</small></div><label class="switch"><input id="setBotSales" type="checkbox"><span class="slider"></span></label></div><div class="formGrid"><div class="field"><label>قیمت مرکزی هر گیگ</label><input id="setPrice" class="input ltr" type="number" min="0"></div><div class="field"><label>حداقل موجودی ساخت پنل</label><input id="setSetup" class="input ltr" type="number" min="0"></div><div class="field"><label>ساخت ربات فروشگاهی</label><input id="setStoreBotSetup" class="input ltr" type="number" min="0"></div><div class="field"><label>تمدید ربات فروشگاهی</label><input id="setStoreLicense" class="input ltr" type="number" min="0"></div><div class="field"><label>ساخت ربات مستر</label><input id="setMasterBotSetup" class="input ltr" type="number" min="0"></div><div class="field"><label>تمدید ربات مستر</label><input id="setMasterLicense" class="input ltr" type="number" min="0"></div><div class="field"><label>حداقل اختلاف قیمت هر گیگ مستر</label><input id="setMasterMarkup" class="input ltr" type="number" min="1"></div><div class="field"><label>حداقل شارژ</label><input id="setMinRecharge" class="input ltr" type="number" min="10000"></div></div><div class="notice" style="margin-top:12px">ربات فروشگاهی نقش <b>نماینده فروش</b> می‌گیرد. ربات مستر نقش <b>مستر نمایندگی</b> می‌گیرد. نماینده ساخته‌شده توسط مستر هیچ پنل PasarGuard دریافت نمی‌کند.</div><div class="formGrid" style="margin-top:12px"><div class="field"><label>Role ID نماینده فروش</label><input id="setSalesRoleId" class="input ltr" inputmode="numeric"></div><div class="field"><label>نام Role نماینده فروش</label><input id="setSalesRoleName" class="input"></div><div class="field"><label>Role ID مستر نمایندگی</label><input id="setMasterRoleId" class="input ltr" inputmode="numeric"></div><div class="field"><label>نام Role مستر نمایندگی</label><input id="setMasterRoleName" class="input"></div></div><div class="row"><button class="btn" type="submit">ذخیره سیاست فروش</button><button class="btn secondary" type="button" data-act="sync-reseller-roles">همگام‌سازی نقش پنل‌ها</button></div></form><form id="serviceForm" class="card"><div class="cardHeader"><div><h3>خدمات مرکزی</h3><div class="sub">برند، پشتیبانی، تست رایگان و پاداش شارژ</div></div></div><div class="formGrid"><div class="field"><label>نام برند</label><input id="setBrand" class="input"></div><div class="field"><label>آیدی پشتیبانی</label><input id="setSupport" class="input ltr"></div><div class="field"><label>حجم تست مگابایت</label><input id="setTrialMb" class="input ltr" type="number" min="1"></div><div class="field"><label>مدت تست ساعت</label><input id="setTrialHours" class="input ltr" type="number" min="1"></div><div class="field"><label>درصد پاداش شارژ</label><input id="setRechargeBonus" class="input ltr" type="number" min="0" max="100"></div></div><div class="switchRow"><div><b>تست رایگان مرکزی</b><small>ساخت یک تست برای هر حساب</small></div><label class="switch"><input id="setTrialEnabled" type="checkbox"><span class="slider"></span></label></div><button class="btn" type="submit">ذخیره خدمات مرکزی</button></form></div><div class="card" style="margin-top:12px"><div class="cardHeader"><div><h3>تنظیمات زیرساخت و محرمانه</h3><div class="sub">PasarGuard، BluePal، GitHub، Cloudflare و توکن‌ها در بخش پیشرفته.</div></div><a id="advancedLink" class="btn secondary" style="text-decoration:none">بازکردن تنظیمات پیشرفته</a></div></div></section>
 <section id="page-system" class="page"><div class="grid"><div class="card"><div class="cardHeader"><div><h3>سلامت سرویس‌ها</h3><div class="sub">دیتابیس، ربات مرکزی، PasarGuard، BluePal و Helper</div></div></div><div id="healthGrid" class="statusGrid"></div></div><div class="card"><div class="cardHeader"><div><h3>ربات مرکزی و بروزرسانی</h3><div class="sub">Webhook، منو، Python Helper و نصب نسخه جدید</div></div></div><div class="quick"><button data-act="configure-bot"><b>🤖 ترمیم ربات مرکزی</b><span>Webhook و دستورات</span></button><button data-act="python-provision"><b>🐍 نصب Python Helper</b><span>Worker کمکی و Binding</span></button><button data-act="update-check"><b>🔎 بررسی بروزرسانی</b><span>مقایسه GitHub</span></button><button data-act="update-deploy"><b>🚀 نصب بروزرسانی</b><span>Deploy نسخه جدید</span></button></div></div></div><div class="card" style="margin-top:12px"><div class="cardHeader"><div><h3>کلاستر سه‌Worker و تقسیم بار کامل</h3><div class="sub">Core برای داده و مالی، Edge برای ورودی نمایندگان، Processor برای صف و پردازش سنگین</div></div><div style="display:flex;gap:6px"><span id="edgeWorkerBadge" class="badge disabled">Worker 2 قطع</span><span id="processorWorkerBadge" class="badge disabled">Worker 3 قطع</span></div></div><form id="edgeWorkerForm"><div class="notice"><b>کدها تفکیک شده‌اند: Worker مرکزی از core/worker.js، Worker دوم از edge/worker.js و Worker سوم از processor/worker.js استفاده می‌کند.</b><br><b>Worker مرکزی:</b> <span class="ltr">EDGE_WORKER</span> ← Worker دوم · <span class="ltr">PROCESSOR_WORKER</span> ← Worker سوم<br><b>Worker دوم:</b> <span class="ltr">CORE_WORKER</span> ← مرکزی · <span class="ltr">PROCESSOR_WORKER</span> ← سوم<br><b>Worker سوم:</b> <span class="ltr">CORE_WORKER</span> ← مرکزی · <span class="ltr">EDGE_WORKER</span> ← دوم<br><b>دیتابیس‌ها:</b> <span class="ltr">PASARGUARD_DB</span> · <span class="ltr">EDGE_DB</span> · <span class="ltr">PROCESSOR_DB</span></div><div class="grid"><div id="edgeWorkerStatus" class="notice">در حال بررسی Worker دوم…</div><div id="processorWorkerStatus" class="notice">در حال بررسی Worker سوم…</div></div><div class="itemActions"><button class="btn" type="submit">فعال‌سازی و بررسی هر سه Worker</button><button class="btn secondary" type="button" data-act="edge-test">تست اتصال کامل</button><button class="btn secondary" type="button" data-act="cluster-diagnose">تشخیص عمیق اتصال</button><button class="btn secondary" type="button" data-act="edge-reconfigure">تثبیت مجدد Webhookها</button><button class="btn secondary" type="button" data-act="edge-update">بروزرسانی Worker دوم و سوم</button><button class="btn danger" type="button" data-act="edge-disconnect">غیرفعال‌کردن تقسیم بار</button></div></form></div><div class="grid" style="margin-top:12px"><div class="card"><div class="cardHeader"><div><h3>سلامت نمایندگان</h3><div class="sub">پایش گروهی و پشتیبان‌گیری همه ربات‌ها</div></div></div><div id="resellerHealthSummary" class="notice"></div><div class="itemActions"><button class="btn secondary" data-act="reseller-health-all">پایش همه نمایندگان</button><button class="btn secondary" data-act="reseller-backup-all">پشتیبان‌گیری گروهی</button></div></div><div class="card"><div class="cardHeader"><div><h3>نگهداری مالی</h3><div class="sub">استعلام، پاک‌سازی و همگام‌سازی</div></div></div><div class="quick"><button data-act="sync-usage"><b>همگام‌سازی مصرف</b><span>پنل‌های دستی و مرکزی</span></button><button data-act="sync-payments"><b>استعلام پرداخت</b><span>فاکتورهای معلق</span></button><button data-act="cleanup-payments"><b>پاک‌سازی فاکتور</b><span>معلق‌های منقضی</span></button><a id="customerAppLink"><b>مینی‌اپ مشتریان</b><span>مشاهده نسخه عمومی</span></a></div></div></div><div class="card" style="margin-top:12px"><div class="cardHeader"><div><h3>گزارش فعالیت مدیریت</h3><div class="sub">آخرین عملیات امنیتی و مدیریتی سامانه</div></div></div><div id="auditList" class="list"></div></div></section>
 </main></div><div id="modal" class="modal"><div class="modalCard"><div class="modalHead"><h3 id="modalTitle"></h3><button id="modalClose" class="close">×</button></div><div id="modalBody"></div></div></div><div id="toast" class="toast"></div>
-<script>(function(){var state=null;function el(x){return document.getElementById(x)}function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]})}function num(v){return Number(v||0).toLocaleString("fa-IR")}function money(v){return num(v)+" تومان"}function gb(v){return(Number(v||0)/1073741824).toLocaleString("fa-IR",{maximumFractionDigits:2})+" گیگ"}function date(v){if(!v)return"—";var d=new Date(v);return isNaN(d)?String(v):d.toLocaleString("fa-IR")}function name(x){return[x.first_name,x.last_name].filter(Boolean).join(" ")||x.username||x.telegram_id||"کاربر"}function label(v){var m={active:"فعال",paused:"متوقف توسط نماینده",paused_admin:"قفل توقف مرکزی",suspended_balance:"تعلیق موجودی",disabled:"غیرفعال",remote_missing:"حذف از پنل",error:"خطای اتصال",pending_review:"در انتظار بررسی",approved:"تأییدشده",rejected:"ردشده",PENDING:"معلق",PAID:"پرداخت‌شده",FAILED:"ناموفق",CANCELED:"لغوشده",EXPIRED:"منقضی"};return m[String(v)]||String(v||"نامشخص")}function badge(v){return'<span class="badge '+esc(v)+'">'+esc(label(v))+'</span>'}function empty(t){return'<div class="empty">'+esc(t)+'</div>'}function toast(t){var x=el("toast");x.textContent=t;x.classList.add("show");clearTimeout(x._t);x._t=setTimeout(function(){x.classList.remove("show")},3200)}function openModal(t,h){el("modalTitle").textContent=t;el("modalBody").innerHTML=h;el("modal").classList.add("show")}function closeModal(){el("modal").classList.remove("show");el("modalBody").innerHTML=""}el("modalClose").onclick=closeModal;el("modal").onclick=function(e){if(e.target===this)closeModal()};async function api(path,opt){opt=opt||{};opt.credentials="same-origin";opt.cache="no-store";opt.redirect="manual";opt.headers=Object.assign({"content-type":"application/json","accept":"application/json","x-bluepanel-client-version":"3.0.8"},opt.headers||{});var target=path+(path.indexOf("?")>=0?"&":"?")+"_bpv=3.0.8&_t="+Date.now(),r=await fetch(target,opt),raw=await r.text(),d;try{d=JSON.parse(raw)}catch(_){var clean=String(raw||"").replace(/<[^>]*>/g," ").replace(/\s+/g," ").trim().slice(0,240),ct=String(r.headers.get("content-type")||"");var er=new Error("پاسخ ورود JSON نیست (HTTP "+r.status+"، "+(ct||"بدون content-type")+")"+(clean?": "+clean:""));er.code="AUTH_RESPONSE_NOT_JSON";throw er};if(!r.ok||d.success===false){var e=new Error(d.error||("عملیات ناموفق بود (HTTP "+r.status+")"));e.code=d.code;e.details=d;throw e}return d}async function action(body,question){if(question&&!confirm(question))return;try{var d=await api("/api/admin/control/action",{method:"POST",body:JSON.stringify(body)});toast(d.message||"انجام شد");closeModal();await load();return d}catch(e){toast(e.message);throw e}}function showLogin(msg){var app=el("app"),login=el("login"),errorBox=el("loginError");if(app)app.style.display="none";if(login)login.style.display="grid";if(errorBox)errorBox.textContent=msg||""}function showApp(){el("login").style.display="none";el("app").style.display="grid"}function page(n){document.querySelectorAll(".navBtn").forEach(function(b){b.classList.toggle("active",b.dataset.page===n)});document.querySelectorAll(".page").forEach(function(p){p.classList.remove("active")});var p=el("page-"+n);if(p)p.classList.add("active");var names={overview:["داشبورد مرکزی","کنترل کامل ربات مرکزی و نمایندگان"],users:["کاربران و موجودی","انتخاب کاربر و مدیریت کیف پول"],agencies:["پنل‌های نمایندگی","مدیریت وضعیت و مصرف پنل‌ها"],bots:["ربات‌های نمایندگان","فروش، لایسنس و قفل مرکزی"],finance:["مالی و پرداخت‌ها","فاکتورها و گردش مالی"],channels:["کانال‌ها و اطلاع‌رسانی","جوین اجباری و کانال رسمی آپدیت"],settings:["تعرفه و سیاست فروش","قیمت‌ها، تست و دسترسی خرید"],system:["سلامت و بروزرسانی","پایش، پشتیبان و نگهداری"]};el("pageTitle").textContent=names[n][0];el("pageSub").textContent=names[n][1];el("sidebar").classList.remove("open");try{history.replaceState(null,"","#"+n)}catch(_){}window.scrollTo(0,0)}function agencyCard(x){return'<div class="item"><div class="itemTop"><div><div class="title">'+esc(x.title)+' · <span class="ltr">'+esc(x.panel_username)+'</span></div><div class="meta">مالک: '+esc(name(x))+' · موجودی '+money(x.wallet_balance)+' · مصرف '+gb(x.last_usage_bytes)+' · نسخه '+esc(x.runtime_version||"—")+'</div></div>'+badge(x.status)+'</div><div class="itemActions"><button class="btn '+(x.status==="active"?"danger":"ok")+' small" data-act="agency-toggle" data-id="'+esc(x.id)+'">'+(x.status==="active"?"توقف پنل":"فعال‌سازی پنل")+'</button>'+(x.bot_id?'<button class="btn secondary small" data-page="bots">ربات متصل @'+esc(x.bot_username||"")+'</button>':"")+'</div></div>'}function botCard(x){var expired=x.license&&x.license.expired,locked=x.status==="paused_admin",child=!!x.parent_bot_id||String(x.purchase_source||"")==="master",master=String(x.license_type||"store")==="master"&&!child,type=child?"نماینده زیرمجموعه":master?"مستر نمایندگی":"ربات فروشگاهی",access=child?"فقط ربات و داشبورد مستقل":"پنل مستقل PasarGuard",parent=child?(" · مستر: @"+esc(x.parent_bot_username||"نامشخص")):"",usage=child?(" · نرخ "+money(x.upstream_price_per_gb)+"/GB · مصرف "+gb(x.upstream_last_usage_bytes)+" · بدهی "+money(x.upstream_unpaid_toman)):"";return'<div class="item"><div class="itemTop"><div><div class="title">'+esc(x.brand_name||x.bot_name||"ربات")+' · @'+esc(x.bot_username||"")+'</div><div class="meta">نوع: <b>'+esc(type)+'</b> · دسترسی: '+esc(access)+parent+'<br>مالک: '+esc(name(x))+' · پنل سرویس: '+esc(x.agency_title)+' · مشتری '+num(x.customers_count)+' · فروش '+money(x.total_sales)+usage+' · اعتبار '+date(x.license_expires_at)+(expired?' · منقضی':'')+'</div></div>'+badge(x.status)+'</div><div class="itemActions"><button class="btn '+(x.status==="active"?"danger":"ok")+' small" data-act="bot-toggle" data-id="'+esc(x.id)+'">'+(x.status==="active"?"قفل و توقف فروش":locked?"رفع قفل مرکزی":"فعال‌کردن فروش")+'</button><a class="btn secondary small" href="'+esc(x.management_url)+'" target="_blank" style="text-decoration:none">ورود مدیریت</a>'+(x.customer_url?'<a class="btn secondary small" href="'+esc(x.customer_url)+'" target="_blank" style="text-decoration:none">مشاهده ربات</a>':"")+'</div></div>'}function userCard(x){return'<div class="item"><div class="itemTop"><div><div class="title">'+esc(name(x))+' · '+(x.username?'@'+esc(x.username):esc(x.telegram_id))+'</div><div class="meta">موجودی '+money(x.wallet_balance)+' · پنل '+num(x.agencies_count)+' · ربات '+num(x.bots_count)+' · '+date(x.updated_at)+'</div></div>'+badge(x.status)+'</div><div class="itemActions"><button class="btn secondary small" data-act="balance" data-id="'+esc(x.id)+'">مدیریت موجودی</button><button class="btn '+(x.status==="active"?"danger":"ok")+' small" data-act="user-toggle" data-id="'+esc(x.id)+'">'+(x.status==="active"?"غیرفعال‌کردن":"فعال‌کردن")+'</button></div></div>'}function paymentCard(x){return'<div class="item"><div class="itemTop"><div><div class="title">'+esc(name(x))+' · '+money(x.amount_toman)+'</div><div class="meta">فاکتور '+esc(x.provider_invoice_id||x.id)+' · '+date(x.created_at)+(x.credited_at?' · شارژ شد '+date(x.credited_at):'')+'</div></div>'+badge(x.status)+'</div></div>'}function channelRow(x){x=x||{};return'<div class="channelRow"><input class="input chId ltr" placeholder="@channel یا Chat ID" value="'+esc(x.chat_id||"")+'"><input class="input chTitle" placeholder="عنوان" value="'+esc(x.title||"")+'"><input class="input chUrl ltr" placeholder="لینک عمومی یا دعوت" value="'+esc(x.url||"")+'"><button type="button" class="btn danger small" data-act="channel-remove">حذف</button></div>'}function addChannel(x){el("channelsList").insertAdjacentHTML("beforeend",channelRow(x))}function renderChannels(){var c=state.configuration||{};el("joinEnabled").checked=!!c.central_join_enabled;el("channelsList").innerHTML="";(c.central_join_channels||[]).forEach(addChannel);if(!(c.central_join_channels||[]).length)addChannel({});el("releaseEnabled").checked=!!c.release_channel_enabled;el("releaseChat").value=c.release_channel_chat_id||"";el("releaseTitle").value=c.release_channel_title||"";el("releaseUrl").value=c.release_channel_url||"";el("releaseState").textContent="آخرین انتشار: "+(c.release_last_announced_version||"—")+" · "+date(c.release_last_announcement_at)+(c.release_last_announcement_error?" · خطا: "+c.release_last_announcement_error:"")}function renderSalesQuick(){var a=state.sales.agency_enabled,b=state.sales.reseller_bot_enabled;el("salesQuick").innerHTML='<div class="switchRow"><div><b>فروش پنل نمایندگی</b><small>'+(a?'خرید و ساخت پنل باز است':'همه مسیرهای خرید پنل بسته است')+'</small></div><span class="badge '+(a?'active':'paused')+'">'+(a?'باز':'بسته')+'</span></div><div class="switchRow"><div><b>فروش ربات نمایندگی</b><small>'+(b?'خرید و ساخت ربات باز است':'همه مسیرهای خرید ربات بسته است')+'</small></div><span class="badge '+(b?'active':'paused')+'">'+(b?'باز':'بسته')+'</span></div><button class="btn secondary" style="width:100%;margin-top:8px" data-page="settings">تغییر سیاست فروش</button>'}function renderAgencies(){var q=el("agencySearch").value.toLowerCase(),f=el("agencyStatus").value,rows=(state.agencies||[]).filter(function(x){var ok=!q||[x.title,x.panel_username,x.username,x.telegram_id,x.first_name,x.last_name].join(" ").toLowerCase().includes(q);var sf=!f||(f==="active"?x.status==="active":x.status!=="active");return ok&&sf});el("agencyCount").textContent=num(rows.length);el("agencyList").innerHTML=rows.length?rows.map(agencyCard).join(""):empty("پنلی مطابق فیلتر پیدا نشد")}function renderBots(){var q=el("botSearch").value.toLowerCase(),f=el("botStatus").value,rows=(state.bots||[]).filter(function(x){return(!q||[x.brand_name,x.bot_username,x.agency_title,x.username,x.telegram_id,x.first_name,x.last_name].join(" ").toLowerCase().includes(q))&&(!f||x.status===f)});el("botCount").textContent=num(rows.length);el("botList").innerHTML=rows.length?rows.map(botCard).join(""):empty("رباتی مطابق فیلتر پیدا نشد")}function renderUsers(){var q=el("userSearch").value.toLowerCase(),f=el("userStatus").value,rows=(state.users||[]).filter(function(x){return(!q||[x.username,x.telegram_id,x.first_name,x.last_name].join(" ").toLowerCase().includes(q))&&(!f||x.status===f)});el("userCount").textContent=num(rows.length);el("userList").innerHTML=rows.length?rows.map(userCard).join(""):empty("کاربری مطابق فیلتر پیدا نشد")}function bitpinControlCard(x){return'<div class="item"><div class="itemTop"><div><div class="title">واریز بیت‌پین · '+esc(name(x))+' · '+esc(x.crypto_amount)+' '+esc(x.asset)+'</div><div class="meta">'+money(x.amount_toman)+' · '+esc(x.network)+' · TXID '+esc(x.txid)+' · '+date(x.created_at)+'</div></div>'+badge(x.status)+'</div>'+(x.status==='pending_review'?'<div class="itemActions"><button class="btn ok small" data-act="bitpin-approve" data-id="'+esc(x.id)+'">تأیید و شارژ</button><button class="btn danger small" data-act="bitpin-reject" data-id="'+esc(x.id)+'">رد</button></div>':'')+'</div>'}function renderPayments(){var q=el("paymentSearch").value.toLowerCase(),f=el("paymentStatus").value,rows=(state.payments||[]).filter(function(x){var ok=!q||[x.provider_invoice_id,x.telegram_id,x.username,x.first_name,x.last_name].join(" ").toLowerCase().includes(q);return ok&&(!f||x.status===f)}),crypto=(state.bitpin_deposits||[]).filter(function(x){var ok=!q||[x.txid,x.telegram_id,x.username,x.first_name,x.last_name,x.asset,x.network].join(" ").toLowerCase().includes(q);return ok&&(!f||x.status===f)});var paymentCountEl=el("paymentCount");if(paymentCountEl)paymentCountEl.textContent=num(rows.length+crypto.length);el("paymentList").innerHTML=(rows.length||crypto.length)?rows.map(paymentCard).join("")+crypto.map(bitpinControlCard).join(""):empty("پرداختی مطابق فیلتر پیدا نشد")}function renderHealth(){var h=state.health||{},items=[["دیتابیس",h.database],["ربات مرکزی",h.central_bot],["PasarGuard",h.pasarguard],["بلوپال",h.blupal],["ورکر دوم",h.edge_worker],["آپدیت خودکار",h.auto_update],["Python Helper",h.python_helper]];el("healthGrid").innerHTML=items.map(function(x){return'<div class="statusBox"><b><span class="dot '+(x[1]?'ok':'')+'"></span>'+x[0]+'</b><span>'+(x[1]?'متصل و آماده':'نیازمند بررسی')+'</span></div>'}).join("");el("resellerHealthSummary").textContent="پایش سالم: "+num(h.reseller_healthy_count)+" · بررسی بحرانی: "+num(h.reseller_critical_checks)+" · پشتیبان‌ها: "+num(h.reseller_backups_count)+" · آخرین پایش: "+date(h.reseller_last_health_at);el("auditList").innerHTML=(state.audit_logs||[]).slice(0,100).map(function(x){return'<div class="item"><div class="title">'+esc(x.action)+'</div><div class="meta">'+esc(name(x))+' · '+date(x.created_at)+'</div></div>'}).join("")||empty("هنوز گزارشی ثبت نشده است")}function probeLine(title,p){if(!p)return title+": —";var rt=p.runtime||{},parts=[];parts.push(p.healthy?"✅":"❌");parts.push(title);parts.push("HTTP "+(p.http_status==null?"—":p.http_status));parts.push((p.latency_ms==null?"—":num(p.latency_ms))+"ms");if(p.response_role)parts.push("نقش "+p.response_role);if(p.response_version)parts.push("v"+p.response_version);if(!rt.exact_key_present)parts.push("کلید دقیق در Runtime نیست");else if(!rt.fetch_callable)parts.push("fetch قابل فراخوانی نیست");if(p.error)parts.push("<span style='color:var(--danger)'>"+esc(p.error)+"</span>");return parts.join(" · ")}function runtimeLine(name,rt){if(!rt)return"";var line=(rt.exact_key_present?"✅ ":"❌ ")+name+" در Runtime "+(rt.fetch_callable?"قابل فراخوانی است":"قابل فراخوانی نیست");if((rt.similar_binding_names||[]).length)line+=" · نام مشابه: "+esc(rt.similar_binding_names.join(", "));return line}function renderEdge(){var e=state.edge||{},b=el("edgeWorkerBadge"),box=el("edgeWorkerStatus");if(b){var ok=!!e.enabled;b.className="badge "+(ok?"active":"disabled");b.textContent=ok?"Worker 2 متصل":"Worker 2 قطع"}if(box){var lines=[];lines.push(e.binding_detected?"✅ EDGE_WORKER در مرکز":"❌ EDGE_WORKER در مرکز متصل نیست");lines.push(e.core_binding_detected?"✅ CORE_WORKER در Worker دوم":"❌ CORE_WORKER در Worker دوم متصل نیست");lines.push(e.processor_binding_detected?"✅ PROCESSOR_WORKER در Worker دوم":"❌ PROCESSOR_WORKER در Worker دوم متصل نیست");lines.push(e.database_query_ok!==false?"✅ EDGE_DB سالم است":"❌ EDGE_DB خطا دارد");if(e.probe)lines.push(probeLine("مرکز → Worker دوم",e.probe));if(e.core_probe)lines.push(probeLine("Worker دوم → مرکز",e.core_probe));if(e.processor_probe)lines.push(probeLine("Worker دوم → Worker سوم",e.processor_probe));if(e.runtime_bindings){if(e.runtime_bindings.CORE_WORKER)lines.push(runtimeLine("CORE_WORKER",e.runtime_bindings.CORE_WORKER));if(e.runtime_bindings.PROCESSOR_WORKER)lines.push(runtimeLine("PROCESSOR_WORKER",e.runtime_bindings.PROCESSOR_WORKER))}if(e.version)lines.push("نسخه: "+esc(e.version));if(e.last_check_at)lines.push("آخرین بررسی دقیق: "+date(e.last_check_at));if(e.pending_jobs!=null)lines.push("صف جایگزین محلی: "+num(e.pending_jobs));if(e.last_error)lines.push("<span style='color:var(--danger)'>"+esc(e.last_error)+"</span>");box.innerHTML=lines.filter(Boolean).join("<br>")}}function renderProcessor(){var p=state.processor||{},b=el("processorWorkerBadge"),box=el("processorWorkerStatus");if(b){var ok=!!p.enabled;b.className="badge "+(ok?"active":"disabled");b.textContent=ok?"Worker 3 متصل":"Worker 3 قطع"}if(box){var lines=[];lines.push(p.binding_detected?"✅ PROCESSOR_WORKER در مرکز":"❌ PROCESSOR_WORKER در مرکز متصل نیست");lines.push(p.core_binding_detected?"✅ CORE_WORKER در Worker سوم":"❌ CORE_WORKER در Worker سوم متصل نیست");lines.push(p.edge_binding_detected?"✅ EDGE_WORKER در Worker سوم":"❌ EDGE_WORKER در Worker سوم متصل نیست");lines.push(p.database_query_ok!==false?"✅ PROCESSOR_DB سالم است":"❌ PROCESSOR_DB خطا دارد");if(p.probe)lines.push(probeLine("مرکز → Worker سوم",p.probe));if(p.core_probe)lines.push(probeLine("Worker سوم → مرکز",p.core_probe));if(p.edge_probe)lines.push(probeLine("Worker سوم → Worker دوم",p.edge_probe));if(p.runtime_bindings){if(p.runtime_bindings.CORE_WORKER)lines.push(runtimeLine("CORE_WORKER",p.runtime_bindings.CORE_WORKER));if(p.runtime_bindings.EDGE_WORKER)lines.push(runtimeLine("EDGE_WORKER",p.runtime_bindings.EDGE_WORKER))}if(p.version)lines.push("نسخه: "+esc(p.version));if(p.last_check_at)lines.push("آخرین بررسی دقیق: "+date(p.last_check_at));if(p.pending_jobs!=null)lines.push("صف پردازش: "+num(p.pending_jobs));if(p.processed_jobs!=null)lines.push("پردازش‌شده: "+num(p.processed_jobs));if(p.last_error)lines.push("<span style='color:var(--danger)'>"+esc(p.last_error)+"</span>");box.innerHTML=lines.filter(Boolean).join("<br>")}}function render(){var st=state.stats||{},c=state.configuration||{};el("sideVersion").textContent=state.version;el("mUsers").textContent=num(st.users_count);el("mAgencies").textContent=num(st.active_agencies)+" / "+num(st.agencies_count);el("mBots").textContent=num(st.active_bots)+" / "+num(st.bots_count);el("mPending").textContent=num(st.pending_payments);el("fWallet").textContent=money(st.total_wallet_balance);el("fRecharge").textContent=money(st.total_recharge);el("fUsage").textContent=money(st.total_usage_revenue);el("fSales").textContent=money(st.reseller_total_sales);renderSalesQuick();el("recentAgencies").innerHTML=(state.agencies||[]).slice(0,5).map(agencyCard).join("")||empty("هنوز پنلی ثبت نشده است");el("recentBots").innerHTML=(state.bots||[]).slice(0,5).map(botCard).join("")||empty("هنوز رباتی ثبت نشده است");el("setAgencySales").checked=!!state.sales.agency_enabled;el("setBotSales").checked=!!state.sales.reseller_bot_enabled;el("setPrice").value=c.price_per_gb||0;el("setSetup").value=c.setup_fee||0;el("setStoreBotSetup").value=c.reseller_store_bot_setup_fee||0;el("setStoreLicense").value=c.reseller_store_bot_license_renewal_fee||0;el("setMasterBotSetup").value=c.reseller_master_bot_setup_fee||0;el("setMasterLicense").value=c.reseller_master_bot_license_renewal_fee||0;el("setMasterMarkup").value=c.master_min_markup_toman||100;el("setSalesRoleId").value=c.pasarguard_sales_role_id||"";el("setSalesRoleName").value=c.pasarguard_sales_role_name||"نماینده فروش";el("setMasterRoleId").value=c.pasarguard_master_role_id||"";el("setMasterRoleName").value=c.pasarguard_master_role_name||"مستر نمایندگی";el("setMinRecharge").value=c.min_recharge||100000;el("setBrand").value=c.brand_name||"";el("setSupport").value=c.support_username||"";el("setTrialEnabled").checked=!!c.central_trial_enabled;el("setTrialMb").value=Math.round(Number(c.central_trial_data_limit_bytes||1073741824)/1048576);el("setTrialHours").value=c.central_trial_duration_hours||24;el("setRechargeBonus").value=c.central_recharge_bonus_percent||0;el("advancedLink").href=state.links.advanced_control;el("customerAppLink").href=state.links.customer_app;el("customerAppLink").target="_blank";renderChannels();renderAgencies();renderBots();renderUsers();renderPayments();renderHealth();renderEdge();renderProcessor()}async function load(){try{state=await api("/api/admin/control/bootstrap");render();showApp()}catch(e){if(e.code==="WEB_LOGIN_REQUIRED"||e.code==="UNAUTHORIZED")showLogin();else showLogin(e.message)}}el("loginForm").onsubmit=async function(e){e.preventDefault();var b=el("loginBtn");b.disabled=true;el("loginError").textContent="";try{var d=await api("/api/auth/control/login",{method:"POST",body:JSON.stringify({username:el("loginUsername").value,password:el("loginPassword").value})});el("loginPassword").value="";await load()}catch(x){el("loginError").textContent=x.message||"ورود ناموفق بود"}finally{b.disabled=false}};el("logoutBtn").onclick=async function(){try{await api("/api/auth/web/logout",{method:"POST",body:"{}"})}catch(_){}location.reload()};el("refreshBtn").onclick=load;el("menuBtn").onclick=function(){el("sidebar").classList.toggle("open")};document.querySelectorAll(".navBtn").forEach(function(b){b.onclick=function(){page(b.dataset.page)}});["agencySearch","botSearch","userSearch","paymentSearch"].forEach(function(x){el(x).oninput=function(){if(x==="agencySearch")renderAgencies();else if(x==="botSearch")renderBots();else if(x==="userSearch")renderUsers();else renderPayments()}});["agencyStatus","botStatus","userStatus","paymentStatus"].forEach(function(x){el(x).onchange=function(){if(x==="agencyStatus")renderAgencies();else if(x==="botStatus")renderBots();else if(x==="userStatus")renderUsers();else renderPayments()}});function saveSalesSettings(){return action({action:"save_sales_settings",agency_sales_enabled:el("setAgencySales").checked,reseller_bot_sales_enabled:el("setBotSales").checked,price_per_gb:el("setPrice").value,setup_fee:el("setSetup").value,reseller_store_bot_setup_fee:el("setStoreBotSetup").value,reseller_store_bot_license_renewal_fee:el("setStoreLicense").value,reseller_master_bot_setup_fee:el("setMasterBotSetup").value,reseller_master_bot_license_renewal_fee:el("setMasterLicense").value,master_min_markup_toman:el("setMasterMarkup").value,pasarguard_sales_role_id:el("setSalesRoleId").value,pasarguard_sales_role_name:el("setSalesRoleName").value,pasarguard_master_role_id:el("setMasterRoleId").value,pasarguard_master_role_name:el("setMasterRoleName").value,min_recharge:el("setMinRecharge").value})}el("salesForm").onsubmit=function(e){e.preventDefault();saveSalesSettings()};["setAgencySales","setBotSales"].forEach(function(id){el(id).onchange=function(){var input=this,previous=!input.checked;input.disabled=true;saveSalesSettings().catch(function(){input.checked=previous}).finally(function(){input.disabled=false})}});el("serviceForm").onsubmit=function(e){e.preventDefault();action({action:"save_service_settings",brand_name:el("setBrand").value,support_username:el("setSupport").value,central_trial_enabled:el("setTrialEnabled").checked,central_trial_data_limit_mb:el("setTrialMb").value,central_trial_duration_hours:el("setTrialHours").value,central_recharge_bonus_percent:el("setRechargeBonus").value})};el("channelsForm").onsubmit=function(e){e.preventDefault();var channels=Array.from(document.querySelectorAll(".channelRow")).map(function(r){return{chat_id:r.querySelector(".chId").value,title:r.querySelector(".chTitle").value,url:r.querySelector(".chUrl").value}}).filter(function(x){return x.chat_id.trim()});action({action:"save_channels",enabled:el("joinEnabled").checked,channels:channels})};el("releaseForm").onsubmit=function(e){e.preventDefault();action({action:"save_release_channel",enabled:el("releaseEnabled").checked,chat_id:el("releaseChat").value,title:el("releaseTitle").value,url:el("releaseUrl").value})};el("edgeWorkerForm").onsubmit=function(e){e.preventDefault();action({action:"edge_connect"},"اتصال کامل سه Worker بررسی و تقسیم بار فعال شود؟")};async function diagnoseCluster(){try{var d=await api("/api/admin/control/action",{method:"POST",body:JSON.stringify({action:"cluster_diagnose"})}),r=d.result||{},checks=r.checks||[],fails=r.failures||[],tips=r.suggestions||[];var html='<div class="notice"><b>'+(r.connected?'✅ اتصال کامل برقرار است':'⚠️ اتصال کامل نیست')+'</b><br>زمان بررسی: '+num(r.duration_ms||0)+' میلی‌ثانیه · نسخه '+esc(r.version||'—')+'</div><div class="list">'+checks.map(function(x){return'<div class="item"><div class="title">'+(x.ok?'✅ ':'❌ ')+esc(x.label)+'</div><div class="meta">'+esc(x.detail||'—')+'</div></div>'}).join('')+'</div>'+(tips.length?'<div class="notice" style="margin-top:12px"><b>راهکار پیشنهادی</b><br>'+tips.map(function(x){return'• '+esc(x)}).join('<br>')+'</div>':'')+'<details style="margin-top:12px"><summary>جزئیات فنی کامل</summary><pre class="ltr" style="white-space:pre-wrap;word-break:break-word;background:#071626;padding:12px;border-radius:12px;max-height:360px;overflow:auto">'+esc(JSON.stringify(r,null,2))+'</pre></details>';openModal("تشخیص عمیق کلاستر سه‌Worker",html);toast(d.message||"بررسی انجام شد");await load()}catch(e){toast(e.message)}}document.onclick=function(e){var b=e.target.closest("[data-act],[data-page]");if(!b)return;if(b.dataset.page){page(b.dataset.page);return}var a=b.dataset.act,id=b.dataset.id;if(a==="channel-add")addChannel({});else if(a==="channel-remove")b.closest(".channelRow").remove();else if(a==="agency-toggle")action({action:"agency_toggle",id:id},"وضعیت این پنل واقعاً تغییر کند؟");else if(a==="bot-toggle")action({action:"bot_toggle",id:id},"قفل وضعیت فروش این ربات تغییر کند؟");else if(a==="user-toggle")action({action:"user_toggle",id:id},"وضعیت حساب کاربر تغییر کند؟");else if(a==="balance"){var u=(state.users||[]).find(function(x){return String(x.id)===String(id)});openModal("مدیریت موجودی "+name(u),'<div class="meta">موجودی فعلی: <b>'+money(u.wallet_balance)+'</b></div><div class="field"><label>مبلغ تومان</label><input id="balanceAmount" class="input ltr" type="number" min="1"></div><div class="field"><label>توضیح</label><input id="balanceNote" class="input"></div><div class="itemActions"><button id="balancePlus" class="btn ok">افزایش</button><button id="balanceMinus" class="btn danger">کاهش</button></div>');el("balancePlus").onclick=function(){var am=el("balanceAmount").value,n=el("balanceNote").value;closeModal();action({action:"user_balance",id:id,operation:"increase",amount:am,note:n})};el("balanceMinus").onclick=function(){var am=el("balanceAmount").value,n=el("balanceNote").value;closeModal();action({action:"user_balance",id:id,operation:"decrease",amount:am,note:n})}}else if(a==="sync-usage")action({action:"sync_usage"});else if(a==="sync-payments")action({action:"sync_payments"});else if(a==="bitpin-approve")action({action:"bitpin_approve",id:id,note:prompt("توضیح اختیاری تأیید:","")||""},"TXID بررسی شده و کیف پول کاربر شارژ شود؟");else if(a==="bitpin-reject"){var reason=prompt("علت رد درخواست:","");if(reason!==null)action({action:"bitpin_reject",id:id,note:reason})}else if(a==="cleanup-payments")action({action:"cleanup_payments"},"فاکتورهای معلق قدیمی پاک‌سازی شوند؟");else if(a==="configure-bot")action({action:"configure_central_bot"},"Webhook و دستورات ربات مرکزی ترمیم شوند؟");else if(a==="sync-reseller-roles")action({action:"sync_reseller_roles"},"نقش پنل تمام خریداران مستقیم براساس نوع لایسنس همگام شود؟");else if(a==="update-check")action({action:"update_check"});else if(a==="update-deploy")action({action:"update_deploy"},"آخرین نسخه GitHub روی Worker نصب شود؟");else if(a==="release-test")action({action:"release_test"});else if(a==="release-publish")action({action:"release_publish"},"اطلاعیه رسمی نسخه در کانال منتشر شود؟");else if(a==="reseller-health-all")action({action:"reseller_health_all"});else if(a==="reseller-backup-all")action({action:"reseller_backup_all"},"برای همه ربات‌های نماینده نسخه پشتیبان ساخته شود؟");else if(a==="python-provision")action({action:"python_provision"},"Python Helper نصب یا ترمیم شود؟");else if(a==="edge-test")action({action:"edge_test"});else if(a==="cluster-diagnose")diagnoseCluster();else if(a==="edge-reconfigure")action({action:"edge_reconfigure"},"Webhook همه ربات‌های نماینده دوباره روی ورکر دوم تنظیم شود؟");else if(a==="edge-update")action({action:"edge_update"},"کد Worker دوم و سوم از GitHub بروزرسانی شود؟");else if(a==="edge-disconnect")action({action:"edge_disconnect"},"اتصال قطع و مسیر همه ربات‌ها به ورکر مرکزی برگردد؟")};var initial=String(location.hash||"").replace("#","");var allowed=["overview","users","agencies","bots","finance","channels","settings","system"];if(allowed.includes(initial))page(initial);load()})();</script></body></html>`;
+<script>(function(){var state=null;function el(x){return document.getElementById(x)}function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]})}function num(v){return Number(v||0).toLocaleString("fa-IR")}function money(v){return num(v)+" تومان"}function gb(v){return(Number(v||0)/1073741824).toLocaleString("fa-IR",{maximumFractionDigits:2})+" گیگ"}function date(v){if(!v)return"—";var d=new Date(v);return isNaN(d)?String(v):d.toLocaleString("fa-IR")}function name(x){return[x.first_name,x.last_name].filter(Boolean).join(" ")||x.username||x.telegram_id||"کاربر"}function label(v){var m={active:"فعال",paused:"متوقف توسط نماینده",paused_admin:"قفل توقف مرکزی",suspended_balance:"تعلیق موجودی",disabled:"غیرفعال",remote_missing:"حذف از پنل",error:"خطای اتصال",PENDING:"معلق",PAID:"پرداخت‌شده",FAILED:"ناموفق",CANCELED:"لغوشده",EXPIRED:"منقضی"};return m[String(v)]||String(v||"نامشخص")}function badge(v){return'<span class="badge '+esc(v)+'">'+esc(label(v))+'</span>'}function empty(t){return'<div class="empty">'+esc(t)+'</div>'}function toast(t){var x=el("toast");x.textContent=t;x.classList.add("show");clearTimeout(x._t);x._t=setTimeout(function(){x.classList.remove("show")},3200)}function openModal(t,h){el("modalTitle").textContent=t;el("modalBody").innerHTML=h;el("modal").classList.add("show")}function closeModal(){el("modal").classList.remove("show");el("modalBody").innerHTML=""}el("modalClose").onclick=closeModal;el("modal").onclick=function(e){if(e.target===this)closeModal()};async function api(path,opt){opt=opt||{};opt.credentials="same-origin";opt.cache="no-store";opt.redirect="manual";opt.headers=Object.assign({"content-type":"application/json","accept":"application/json","x-bluepanel-client-version":"3.0.1"},opt.headers||{});var target=path+(path.indexOf("?")>=0?"&":"?")+"_bpv=3.0.1&_t="+Date.now(),r=await fetch(target,opt),raw=await r.text(),d;try{d=JSON.parse(raw)}catch(_){var clean=String(raw||"").replace(/<[^>]*>/g," ").replace(/\s+/g," ").trim().slice(0,240),ct=String(r.headers.get("content-type")||"");var er=new Error("پاسخ ورود JSON نیست (HTTP "+r.status+"، "+(ct||"بدون content-type")+")"+(clean?": "+clean:""));er.code="AUTH_RESPONSE_NOT_JSON";throw er};if(!r.ok||d.success===false){var e=new Error(d.error||("عملیات ناموفق بود (HTTP "+r.status+")"));e.code=d.code;e.details=d;throw e}return d}async function action(body,question){if(question&&!confirm(question))return;try{var d=await api("/api/admin/control/action",{method:"POST",body:JSON.stringify(body)});toast(d.message||"انجام شد");closeModal();await load();return d}catch(e){toast(e.message);throw e}}function showLogin(msg){el("app").style.display="none";el("login").style.display="grid";el("loginError").textContent=msg||""}function showApp(){el("login").style.display="none";el("app").style.display="grid"}function page(n){document.querySelectorAll(".navBtn").forEach(function(b){b.classList.toggle("active",b.dataset.page===n)});document.querySelectorAll(".page").forEach(function(p){p.classList.remove("active")});var p=el("page-"+n);if(p)p.classList.add("active");var names={overview:["داشبورد مرکزی","کنترل کامل ربات مرکزی و نمایندگان"],users:["کاربران و موجودی","انتخاب کاربر و مدیریت کیف پول"],agencies:["پنل‌های نمایندگی","مدیریت وضعیت و مصرف پنل‌ها"],bots:["ربات‌های نمایندگان","فروش، لایسنس و قفل مرکزی"],finance:["مالی و پرداخت‌ها","فاکتورها و گردش مالی"],channels:["کانال‌ها و اطلاع‌رسانی","جوین اجباری و کانال رسمی آپدیت"],settings:["تعرفه و سیاست فروش","قیمت‌ها، تست و دسترسی خرید"],system:["سلامت و بروزرسانی","پایش، پشتیبان و نگهداری"]};el("pageTitle").textContent=names[n][0];el("pageSub").textContent=names[n][1];el("sidebar").classList.remove("open");try{history.replaceState(null,"","#"+n)}catch(_){}window.scrollTo(0,0)}function agencyCard(x){return'<div class="item"><div class="itemTop"><div><div class="title">'+esc(x.title)+' · <span class="ltr">'+esc(x.panel_username)+'</span></div><div class="meta">مالک: '+esc(name(x))+' · موجودی '+money(x.wallet_balance)+' · مصرف '+gb(x.last_usage_bytes)+' · نسخه '+esc(x.runtime_version||"—")+'</div></div>'+badge(x.status)+'</div><div class="itemActions"><button class="btn '+(x.status==="active"?"danger":"ok")+' small" data-act="agency-toggle" data-id="'+esc(x.id)+'">'+(x.status==="active"?"توقف پنل":"فعال‌سازی پنل")+'</button>'+(x.bot_id?'<button class="btn secondary small" data-page="bots">ربات متصل @'+esc(x.bot_username||"")+'</button>':"")+'</div></div>'}function botCard(x){var expired=x.license&&x.license.expired,locked=x.status==="paused_admin",child=!!x.parent_bot_id||String(x.purchase_source||"")==="master",master=String(x.license_type||"store")==="master"&&!child,type=child?"نماینده زیرمجموعه":master?"مستر نمایندگی":"ربات فروشگاهی",access=child?"فقط ربات و داشبورد مستقل":"پنل مستقل PasarGuard",parent=child?(" · مستر: @"+esc(x.parent_bot_username||"نامشخص")):"",usage=child?(" · نرخ "+money(x.upstream_price_per_gb)+"/GB · مصرف "+gb(x.upstream_last_usage_bytes)+" · بدهی "+money(x.upstream_unpaid_toman)):"";return'<div class="item"><div class="itemTop"><div><div class="title">'+esc(x.brand_name||x.bot_name||"ربات")+' · @'+esc(x.bot_username||"")+'</div><div class="meta">نوع: <b>'+esc(type)+'</b> · دسترسی: '+esc(access)+parent+'<br>مالک: '+esc(name(x))+' · پنل سرویس: '+esc(x.agency_title)+' · مشتری '+num(x.customers_count)+' · فروش '+money(x.total_sales)+usage+' · اعتبار '+date(x.license_expires_at)+(expired?' · منقضی':'')+'</div></div>'+badge(x.status)+'</div><div class="itemActions"><button class="btn '+(x.status==="active"?"danger":"ok")+' small" data-act="bot-toggle" data-id="'+esc(x.id)+'">'+(x.status==="active"?"قفل و توقف فروش":locked?"رفع قفل مرکزی":"فعال‌کردن فروش")+'</button><a class="btn secondary small" href="'+esc(x.management_url)+'" target="_blank" style="text-decoration:none">ورود مدیریت</a>'+(x.customer_url?'<a class="btn secondary small" href="'+esc(x.customer_url)+'" target="_blank" style="text-decoration:none">مشاهده ربات</a>':"")+'</div></div>'}function userCard(x){return'<div class="item"><div class="itemTop"><div><div class="title">'+esc(name(x))+' · '+(x.username?'@'+esc(x.username):esc(x.telegram_id))+'</div><div class="meta">موجودی '+money(x.wallet_balance)+' · پنل '+num(x.agencies_count)+' · ربات '+num(x.bots_count)+' · '+date(x.updated_at)+'</div></div>'+badge(x.status)+'</div><div class="itemActions"><button class="btn secondary small" data-act="balance" data-id="'+esc(x.id)+'">مدیریت موجودی</button><button class="btn '+(x.status==="active"?"danger":"ok")+' small" data-act="user-toggle" data-id="'+esc(x.id)+'">'+(x.status==="active"?"غیرفعال‌کردن":"فعال‌کردن")+'</button></div></div>'}function paymentCard(x){return'<div class="item"><div class="itemTop"><div><div class="title">'+esc(name(x))+' · '+money(x.amount_toman)+'</div><div class="meta">فاکتور '+esc(x.provider_invoice_id||x.id)+' · '+date(x.created_at)+(x.credited_at?' · شارژ شد '+date(x.credited_at):'')+'</div></div>'+badge(x.status)+'</div></div>'}function channelRow(x){x=x||{};return'<div class="channelRow"><input class="input chId ltr" placeholder="@channel یا Chat ID" value="'+esc(x.chat_id||"")+'"><input class="input chTitle" placeholder="عنوان" value="'+esc(x.title||"")+'"><input class="input chUrl ltr" placeholder="لینک عمومی یا دعوت" value="'+esc(x.url||"")+'"><button type="button" class="btn danger small" data-act="channel-remove">حذف</button></div>'}function addChannel(x){el("channelsList").insertAdjacentHTML("beforeend",channelRow(x))}function renderChannels(){var c=state.configuration||{};el("joinEnabled").checked=!!c.central_join_enabled;el("channelsList").innerHTML="";(c.central_join_channels||[]).forEach(addChannel);if(!(c.central_join_channels||[]).length)addChannel({});el("releaseEnabled").checked=!!c.release_channel_enabled;el("releaseChat").value=c.release_channel_chat_id||"";el("releaseTitle").value=c.release_channel_title||"";el("releaseUrl").value=c.release_channel_url||"";el("releaseState").textContent="آخرین انتشار: "+(c.release_last_announced_version||"—")+" · "+date(c.release_last_announcement_at)+(c.release_last_announcement_error?" · خطا: "+c.release_last_announcement_error:"")}function renderSalesQuick(){var a=state.sales.agency_enabled,b=state.sales.reseller_bot_enabled;el("salesQuick").innerHTML='<div class="switchRow"><div><b>فروش پنل نمایندگی</b><small>'+(a?'خرید و ساخت پنل باز است':'همه مسیرهای خرید پنل بسته است')+'</small></div><span class="badge '+(a?'active':'paused')+'">'+(a?'باز':'بسته')+'</span></div><div class="switchRow"><div><b>فروش ربات نمایندگی</b><small>'+(b?'خرید و ساخت ربات باز است':'همه مسیرهای خرید ربات بسته است')+'</small></div><span class="badge '+(b?'active':'paused')+'">'+(b?'باز':'بسته')+'</span></div><button class="btn secondary" style="width:100%;margin-top:8px" data-page="settings">تغییر سیاست فروش</button>'}function renderAgencies(){var q=el("agencySearch").value.toLowerCase(),f=el("agencyStatus").value,rows=(state.agencies||[]).filter(function(x){var ok=!q||[x.title,x.panel_username,x.username,x.telegram_id,x.first_name,x.last_name].join(" ").toLowerCase().includes(q);var sf=!f||(f==="active"?x.status==="active":x.status!=="active");return ok&&sf});el("agencyCount").textContent=num(rows.length);el("agencyList").innerHTML=rows.length?rows.map(agencyCard).join(""):empty("پنلی مطابق فیلتر پیدا نشد")}function renderBots(){var q=el("botSearch").value.toLowerCase(),f=el("botStatus").value,rows=(state.bots||[]).filter(function(x){return(!q||[x.brand_name,x.bot_username,x.agency_title,x.username,x.telegram_id,x.first_name,x.last_name].join(" ").toLowerCase().includes(q))&&(!f||x.status===f)});el("botCount").textContent=num(rows.length);el("botList").innerHTML=rows.length?rows.map(botCard).join(""):empty("رباتی مطابق فیلتر پیدا نشد")}function renderUsers(){var q=el("userSearch").value.toLowerCase(),f=el("userStatus").value,rows=(state.users||[]).filter(function(x){return(!q||[x.username,x.telegram_id,x.first_name,x.last_name].join(" ").toLowerCase().includes(q))&&(!f||x.status===f)});el("userCount").textContent=num(rows.length);el("userList").innerHTML=rows.length?rows.map(userCard).join(""):empty("کاربری مطابق فیلتر پیدا نشد")}function renderPayments(){var q=el("paymentSearch").value.toLowerCase(),f=el("paymentStatus").value,rows=(state.payments||[]).filter(function(x){return(!q||[x.provider_invoice_id,x.username,x.telegram_id,x.first_name,x.last_name].join(" ").toLowerCase().includes(q))&&(!f||String(x.status).toUpperCase()===f)});el("paymentList").innerHTML=rows.length?rows.map(paymentCard).join(""):empty("پرداختی مطابق فیلتر پیدا نشد")}function renderHealth(){var h=state.health||{},items=[["دیتابیس",h.database],["ربات مرکزی",h.central_bot],["PasarGuard",h.pasarguard],["بلوپال",h.blupal],["ورکر دوم",h.edge_worker],["آپدیت خودکار",h.auto_update],["Python Helper",h.python_helper]];el("healthGrid").innerHTML=items.map(function(x){return'<div class="statusBox"><b><span class="dot '+(x[1]?'ok':'')+'"></span>'+x[0]+'</b><span>'+(x[1]?'متصل و آماده':'نیازمند بررسی')+'</span></div>'}).join("");el("resellerHealthSummary").textContent="پایش سالم: "+num(h.reseller_healthy_count)+" · بررسی بحرانی: "+num(h.reseller_critical_checks)+" · پشتیبان‌ها: "+num(h.reseller_backups_count)+" · آخرین پایش: "+date(h.reseller_last_health_at);el("auditList").innerHTML=(state.audit_logs||[]).slice(0,100).map(function(x){return'<div class="item"><div class="title">'+esc(x.action)+'</div><div class="meta">'+esc(name(x))+' · '+date(x.created_at)+'</div></div>'}).join("")||empty("هنوز گزارشی ثبت نشده است")}function probeLine(title,p){if(!p)return title+": —";var rt=p.runtime||{},parts=[];parts.push(p.healthy?"✅":"❌");parts.push(title);parts.push("HTTP "+(p.http_status==null?"—":p.http_status));parts.push((p.latency_ms==null?"—":num(p.latency_ms))+"ms");if(p.response_role)parts.push("نقش "+p.response_role);if(p.response_version)parts.push("v"+p.response_version);if(!rt.exact_key_present)parts.push("کلید دقیق در Runtime نیست");else if(!rt.fetch_callable)parts.push("fetch قابل فراخوانی نیست");if(p.error)parts.push("<span style='color:var(--danger)'>"+esc(p.error)+"</span>");return parts.join(" · ")}function runtimeLine(name,rt){if(!rt)return"";var line=(rt.exact_key_present?"✅ ":"❌ ")+name+" در Runtime "+(rt.fetch_callable?"قابل فراخوانی است":"قابل فراخوانی نیست");if((rt.similar_binding_names||[]).length)line+=" · نام مشابه: "+esc(rt.similar_binding_names.join(", "));return line}function renderEdge(){var e=state.edge||{},b=el("edgeWorkerBadge"),box=el("edgeWorkerStatus");if(b){var ok=!!e.enabled;b.className="badge "+(ok?"active":"disabled");b.textContent=ok?"Worker 2 متصل":"Worker 2 قطع"}if(box){var lines=[];lines.push(e.binding_detected?"✅ EDGE_WORKER در مرکز":"❌ EDGE_WORKER در مرکز متصل نیست");lines.push(e.core_binding_detected?"✅ CORE_WORKER در Worker دوم":"❌ CORE_WORKER در Worker دوم متصل نیست");lines.push(e.processor_binding_detected?"✅ PROCESSOR_WORKER در Worker دوم":"❌ PROCESSOR_WORKER در Worker دوم متصل نیست");lines.push(e.database_query_ok!==false?"✅ EDGE_DB سالم است":"❌ EDGE_DB خطا دارد");if(e.probe)lines.push(probeLine("مرکز → Worker دوم",e.probe));if(e.core_probe)lines.push(probeLine("Worker دوم → مرکز",e.core_probe));if(e.processor_probe)lines.push(probeLine("Worker دوم → Worker سوم",e.processor_probe));if(e.runtime_bindings){if(e.runtime_bindings.CORE_WORKER)lines.push(runtimeLine("CORE_WORKER",e.runtime_bindings.CORE_WORKER));if(e.runtime_bindings.PROCESSOR_WORKER)lines.push(runtimeLine("PROCESSOR_WORKER",e.runtime_bindings.PROCESSOR_WORKER))}if(e.version)lines.push("نسخه: "+esc(e.version));if(e.last_check_at)lines.push("آخرین بررسی دقیق: "+date(e.last_check_at));if(e.pending_jobs!=null)lines.push("صف جایگزین محلی: "+num(e.pending_jobs));if(e.last_error)lines.push("<span style='color:var(--danger)'>"+esc(e.last_error)+"</span>");box.innerHTML=lines.filter(Boolean).join("<br>")}}function renderProcessor(){var p=state.processor||{},b=el("processorWorkerBadge"),box=el("processorWorkerStatus");if(b){var ok=!!p.enabled;b.className="badge "+(ok?"active":"disabled");b.textContent=ok?"Worker 3 متصل":"Worker 3 قطع"}if(box){var lines=[];lines.push(p.binding_detected?"✅ PROCESSOR_WORKER در مرکز":"❌ PROCESSOR_WORKER در مرکز متصل نیست");lines.push(p.core_binding_detected?"✅ CORE_WORKER در Worker سوم":"❌ CORE_WORKER در Worker سوم متصل نیست");lines.push(p.edge_binding_detected?"✅ EDGE_WORKER در Worker سوم":"❌ EDGE_WORKER در Worker سوم متصل نیست");lines.push(p.database_query_ok!==false?"✅ PROCESSOR_DB سالم است":"❌ PROCESSOR_DB خطا دارد");if(p.probe)lines.push(probeLine("مرکز → Worker سوم",p.probe));if(p.core_probe)lines.push(probeLine("Worker سوم → مرکز",p.core_probe));if(p.edge_probe)lines.push(probeLine("Worker سوم → Worker دوم",p.edge_probe));if(p.runtime_bindings){if(p.runtime_bindings.CORE_WORKER)lines.push(runtimeLine("CORE_WORKER",p.runtime_bindings.CORE_WORKER));if(p.runtime_bindings.EDGE_WORKER)lines.push(runtimeLine("EDGE_WORKER",p.runtime_bindings.EDGE_WORKER))}if(p.version)lines.push("نسخه: "+esc(p.version));if(p.last_check_at)lines.push("آخرین بررسی دقیق: "+date(p.last_check_at));if(p.pending_jobs!=null)lines.push("صف پردازش: "+num(p.pending_jobs));if(p.processed_jobs!=null)lines.push("پردازش‌شده: "+num(p.processed_jobs));if(p.last_error)lines.push("<span style='color:var(--danger)'>"+esc(p.last_error)+"</span>");box.innerHTML=lines.filter(Boolean).join("<br>")}}function render(){var st=state.stats||{},c=state.configuration||{};el("sideVersion").textContent=state.version;el("mUsers").textContent=num(st.users_count);el("mAgencies").textContent=num(st.active_agencies)+" / "+num(st.agencies_count);el("mBots").textContent=num(st.active_bots)+" / "+num(st.bots_count);el("mPending").textContent=num(st.pending_payments);el("fWallet").textContent=money(st.total_wallet_balance);el("fRecharge").textContent=money(st.total_recharge);el("fUsage").textContent=money(st.total_usage_revenue);el("fSales").textContent=money(st.reseller_total_sales);renderSalesQuick();el("recentAgencies").innerHTML=(state.agencies||[]).slice(0,5).map(agencyCard).join("")||empty("هنوز پنلی ثبت نشده است");el("recentBots").innerHTML=(state.bots||[]).slice(0,5).map(botCard).join("")||empty("هنوز رباتی ثبت نشده است");el("setAgencySales").checked=!!state.sales.agency_enabled;el("setBotSales").checked=!!state.sales.reseller_bot_enabled;el("setPrice").value=c.price_per_gb||0;el("setSetup").value=c.setup_fee||0;el("setStoreBotSetup").value=c.reseller_store_bot_setup_fee||0;el("setStoreLicense").value=c.reseller_store_bot_license_renewal_fee||0;el("setMasterBotSetup").value=c.reseller_master_bot_setup_fee||0;el("setMasterLicense").value=c.reseller_master_bot_license_renewal_fee||0;el("setMasterMarkup").value=c.master_min_markup_toman||100;el("setSalesRoleId").value=c.pasarguard_sales_role_id||"";el("setSalesRoleName").value=c.pasarguard_sales_role_name||"نماینده فروش";el("setMasterRoleId").value=c.pasarguard_master_role_id||"";el("setMasterRoleName").value=c.pasarguard_master_role_name||"مستر نمایندگی";el("setMinRecharge").value=c.min_recharge||100000;el("setBrand").value=c.brand_name||"";el("setSupport").value=c.support_username||"";el("setTrialEnabled").checked=!!c.central_trial_enabled;el("setTrialMb").value=Math.round(Number(c.central_trial_data_limit_bytes||1073741824)/1048576);el("setTrialHours").value=c.central_trial_duration_hours||24;el("setRechargeBonus").value=c.central_recharge_bonus_percent||0;el("advancedLink").href=state.links.advanced_control;el("customerAppLink").href=state.links.customer_app;el("customerAppLink").target="_blank";renderChannels();renderAgencies();renderBots();renderUsers();renderPayments();renderHealth();renderEdge();renderProcessor()}async function load(){try{state=await api("/api/admin/control/bootstrap");render();showApp()}catch(e){if(e.code==="WEB_LOGIN_REQUIRED"||e.code==="UNAUTHORIZED")showLogin();else showLogin(e.message)}}el("loginForm").onsubmit=async function(e){e.preventDefault();var b=el("loginBtn");b.disabled=true;el("loginError").textContent="";try{var d=await api("/api/auth/control/login",{method:"POST",body:JSON.stringify({username:el("loginUsername").value,password:el("loginPassword").value})});el("loginPassword").value="";await load()}catch(x){el("loginError").textContent=x.message||"ورود ناموفق بود"}finally{b.disabled=false}};el("logoutBtn").onclick=async function(){try{await api("/api/auth/web/logout",{method:"POST",body:"{}"})}catch(_){}location.reload()};el("refreshBtn").onclick=load;el("menuBtn").onclick=function(){el("sidebar").classList.toggle("open")};document.querySelectorAll(".navBtn").forEach(function(b){b.onclick=function(){page(b.dataset.page)}});["agencySearch","botSearch","userSearch","paymentSearch"].forEach(function(x){el(x).oninput=function(){if(x==="agencySearch")renderAgencies();else if(x==="botSearch")renderBots();else if(x==="userSearch")renderUsers();else renderPayments()}});["agencyStatus","botStatus","userStatus","paymentStatus"].forEach(function(x){el(x).onchange=function(){if(x==="agencyStatus")renderAgencies();else if(x==="botStatus")renderBots();else if(x==="userStatus")renderUsers();else renderPayments()}});function saveSalesSettings(){return action({action:"save_sales_settings",agency_sales_enabled:el("setAgencySales").checked,reseller_bot_sales_enabled:el("setBotSales").checked,price_per_gb:el("setPrice").value,setup_fee:el("setSetup").value,reseller_store_bot_setup_fee:el("setStoreBotSetup").value,reseller_store_bot_license_renewal_fee:el("setStoreLicense").value,reseller_master_bot_setup_fee:el("setMasterBotSetup").value,reseller_master_bot_license_renewal_fee:el("setMasterLicense").value,master_min_markup_toman:el("setMasterMarkup").value,pasarguard_sales_role_id:el("setSalesRoleId").value,pasarguard_sales_role_name:el("setSalesRoleName").value,pasarguard_master_role_id:el("setMasterRoleId").value,pasarguard_master_role_name:el("setMasterRoleName").value,min_recharge:el("setMinRecharge").value})}el("salesForm").onsubmit=function(e){e.preventDefault();saveSalesSettings()};["setAgencySales","setBotSales"].forEach(function(id){el(id).onchange=function(){var input=this,previous=!input.checked;input.disabled=true;saveSalesSettings().catch(function(){input.checked=previous}).finally(function(){input.disabled=false})}});el("serviceForm").onsubmit=function(e){e.preventDefault();action({action:"save_service_settings",brand_name:el("setBrand").value,support_username:el("setSupport").value,central_trial_enabled:el("setTrialEnabled").checked,central_trial_data_limit_mb:el("setTrialMb").value,central_trial_duration_hours:el("setTrialHours").value,central_recharge_bonus_percent:el("setRechargeBonus").value})};el("channelsForm").onsubmit=function(e){e.preventDefault();var channels=Array.from(document.querySelectorAll(".channelRow")).map(function(r){return{chat_id:r.querySelector(".chId").value,title:r.querySelector(".chTitle").value,url:r.querySelector(".chUrl").value}}).filter(function(x){return x.chat_id.trim()});action({action:"save_channels",enabled:el("joinEnabled").checked,channels:channels})};el("releaseForm").onsubmit=function(e){e.preventDefault();action({action:"save_release_channel",enabled:el("releaseEnabled").checked,chat_id:el("releaseChat").value,title:el("releaseTitle").value,url:el("releaseUrl").value})};el("edgeWorkerForm").onsubmit=function(e){e.preventDefault();action({action:"edge_connect"},"اتصال کامل سه Worker بررسی و تقسیم بار فعال شود؟")};async function diagnoseCluster(){try{var d=await api("/api/admin/control/action",{method:"POST",body:JSON.stringify({action:"cluster_diagnose"})}),r=d.result||{},checks=r.checks||[],fails=r.failures||[],tips=r.suggestions||[];var html='<div class="notice"><b>'+(r.connected?'✅ اتصال کامل برقرار است':'⚠️ اتصال کامل نیست')+'</b><br>زمان بررسی: '+num(r.duration_ms||0)+' میلی‌ثانیه · نسخه '+esc(r.version||'—')+'</div><div class="list">'+checks.map(function(x){return'<div class="item"><div class="title">'+(x.ok?'✅ ':'❌ ')+esc(x.label)+'</div><div class="meta">'+esc(x.detail||'—')+'</div></div>'}).join('')+'</div>'+(tips.length?'<div class="notice" style="margin-top:12px"><b>راهکار پیشنهادی</b><br>'+tips.map(function(x){return'• '+esc(x)}).join('<br>')+'</div>':'')+'<details style="margin-top:12px"><summary>جزئیات فنی کامل</summary><pre class="ltr" style="white-space:pre-wrap;word-break:break-word;background:#071626;padding:12px;border-radius:12px;max-height:360px;overflow:auto">'+esc(JSON.stringify(r,null,2))+'</pre></details>';openModal("تشخیص عمیق کلاستر سه‌Worker",html);toast(d.message||"بررسی انجام شد");await load()}catch(e){toast(e.message)}}document.onclick=function(e){var b=e.target.closest("[data-act],[data-page]");if(!b)return;if(b.dataset.page){page(b.dataset.page);return}var a=b.dataset.act,id=b.dataset.id;if(a==="channel-add")addChannel({});else if(a==="channel-remove")b.closest(".channelRow").remove();else if(a==="agency-toggle")action({action:"agency_toggle",id:id},"وضعیت این پنل واقعاً تغییر کند؟");else if(a==="bot-toggle")action({action:"bot_toggle",id:id},"قفل وضعیت فروش این ربات تغییر کند؟");else if(a==="user-toggle")action({action:"user_toggle",id:id},"وضعیت حساب کاربر تغییر کند؟");else if(a==="balance"){var u=(state.users||[]).find(function(x){return String(x.id)===String(id)});openModal("مدیریت موجودی "+name(u),'<div class="meta">موجودی فعلی: <b>'+money(u.wallet_balance)+'</b></div><div class="field"><label>مبلغ تومان</label><input id="balanceAmount" class="input ltr" type="number" min="1"></div><div class="field"><label>توضیح</label><input id="balanceNote" class="input"></div><div class="itemActions"><button id="balancePlus" class="btn ok">افزایش</button><button id="balanceMinus" class="btn danger">کاهش</button></div>');el("balancePlus").onclick=function(){var am=el("balanceAmount").value,n=el("balanceNote").value;closeModal();action({action:"user_balance",id:id,operation:"increase",amount:am,note:n})};el("balanceMinus").onclick=function(){var am=el("balanceAmount").value,n=el("balanceNote").value;closeModal();action({action:"user_balance",id:id,operation:"decrease",amount:am,note:n})}}else if(a==="sync-usage")action({action:"sync_usage"});else if(a==="sync-payments")action({action:"sync_payments"});else if(a==="cleanup-payments")action({action:"cleanup_payments"},"فاکتورهای معلق قدیمی پاک‌سازی شوند؟");else if(a==="configure-bot")action({action:"configure_central_bot"},"Webhook و دستورات ربات مرکزی ترمیم شوند؟");else if(a==="sync-reseller-roles")action({action:"sync_reseller_roles"},"نقش پنل تمام خریداران مستقیم براساس نوع لایسنس همگام شود؟");else if(a==="update-check")action({action:"update_check"});else if(a==="update-deploy")action({action:"update_deploy"},"آخرین نسخه GitHub روی Worker نصب شود؟");else if(a==="release-test")action({action:"release_test"});else if(a==="release-publish")action({action:"release_publish"},"اطلاعیه رسمی نسخه در کانال منتشر شود؟");else if(a==="reseller-health-all")action({action:"reseller_health_all"});else if(a==="reseller-backup-all")action({action:"reseller_backup_all"},"برای همه ربات‌های نماینده نسخه پشتیبان ساخته شود؟");else if(a==="python-provision")action({action:"python_provision"},"Python Helper نصب یا ترمیم شود؟");else if(a==="edge-test")action({action:"edge_test"});else if(a==="cluster-diagnose")diagnoseCluster();else if(a==="edge-reconfigure")action({action:"edge_reconfigure"},"Webhook همه ربات‌های نماینده دوباره روی ورکر دوم تنظیم شود؟");else if(a==="edge-update")action({action:"edge_update"},"کد Worker دوم و سوم از GitHub بروزرسانی شود؟");else if(a==="edge-disconnect")action({action:"edge_disconnect"},"اتصال قطع و مسیر همه ربات‌ها به ورکر مرکزی برگردد؟")};var initial=String(location.hash||"").replace("#","");var allowed=["overview","users","agencies","bots","finance","channels","settings","system"];if(allowed.includes(initial))page(initial);load()})();</script></body></html>`;
 
 const MINI_APP_HTML = String.raw`<!doctype html>
 <html lang="fa" dir="rtl">
@@ -8925,7 +9267,6 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         <div class="card"><div class="payment-provider-strip"><div><b>💠 درگاه آنلاین بلوپال</b><small>تأیید مبلغ و شارژ کیف پول به‌صورت خودکار و یک‌باره</small></div><div class="provider-gem">💠</div></div><div class="card-head"><div><div class="card-kicker">پرداخت جدید</div><h3 class="card-title">شارژ کیف پول</h3><div class="card-sub">مبلغ را انتخاب کن؛ فاکتور و لینک پرداخت خودکار ساخته می‌شود.</div></div><span class="badge active">آنلاین</span></div><form id="paymentForm"><div class="field"><label>مبلغ موردنظر به تومان</label><div class="input-wrap"><input class="input" id="paymentAmount" type="number" inputmode="numeric" required><span class="input-suffix">تومان</span></div></div><div class="amount-chips"><button class="amount-chip" type="button" id="amountChip1"></button><button class="amount-chip" type="button" id="amountChip2"></button><button class="amount-chip" type="button" id="amountChip3"></button><button class="amount-chip" type="button" id="amountChip4"></button></div><button class="btn icon-btn" type="submit"><span>ساخت فاکتور پرداخت</span><span>←</span></button></form><div id="newPayment" style="display:none" class="credentials"></div></div>
         <aside class="card"><div class="card-kicker">راهنمای پرداخت</div><h3 class="card-title">فرآیند امن و خودکار</h3><div class="card-sub">پس از پرداخت موفق، Worker فاکتور را مجدداً از API استعلام می‌کند و موجودی فقط یک‌بار افزایش می‌یابد.</div><div class="info-list" style="margin-top:12px"><div class="info-row"><span>مرحله ۱</span><b>ساخت فاکتور</b></div><div class="info-row"><span>مرحله ۲</span><b>پرداخت مبلغ دقیق</b></div><div class="info-row"><span>مرحله ۳</span><b>تأیید و شارژ خودکار</b></div></div></aside>
       </div>
-      <div id="bitpinCard" class="card" style="display:none;margin-top:13px"><div class="payment-provider-strip"><div><b>🪙 واریز ارز دیجیتال با بیت‌پین</b><small>واریز به آدرس مشخص، ثبت TXID و تأیید امن مدیریت</small></div><div class="provider-gem">₿</div></div><div class="split-grid"><div><div class="card-head"><div><div class="card-kicker">واریز رمزارزی</div><h3 class="card-title"><span id="bitpinAssetTitle">USDT</span> روی <span id="bitpinNetworkTitle">TRC20</span></h3></div><span class="badge pending">نیازمند تأیید</span></div><div class="credentials"><div class="credential-row"><span>آدرس واریز</span><span id="bitpinAddress" class="credential-value ltr" style="word-break:break-all"></span><button id="copyBitpinAddress" class="copy-mini" type="button">کپی</button></div><div class="credential-row"><span>نرخ تبدیل</span><b id="bitpinRate"></b></div></div></div><form id="bitpinForm"><div class="field"><label>مقدار رمزارز</label><div class="input-wrap"><input class="input ltr" id="bitpinCryptoAmount" type="number" step="any" min="0" required><span id="bitpinAssetSuffix" class="input-suffix">USDT</span></div></div><div class="field"><label>شناسه تراکنش TXID</label><input class="input ltr" id="bitpinTxid" maxlength="220" required></div><div class="field"><label>توضیح اختیاری</label><input class="input" id="bitpinNote" maxlength="300"></div><button class="btn" type="submit">ثبت درخواست بررسی و شارژ</button></form></div><div id="bitpinDepositList" class="list" style="margin-top:13px"></div></div>
       <div class="section-head"><div><div class="section-title">سوابق پرداخت</div><div class="section-meta">جستجو و فیلتر فاکتورها</div></div><span id="paymentResultCount" class="result-count"></span></div>
       <div class="card"><div class="toolbar"><div class="searchbox"><span class="search-icon">⌕</span><input id="paymentSearch" class="input" placeholder="جستجو در شماره فاکتور"></div><select id="paymentStatusFilter" class="input select"><option value="all">همه وضعیت‌ها</option><option value="PENDING">در انتظار</option><option value="PAID">پرداخت‌شده</option><option value="EXPIRED">منقضی</option><option value="CANCELED">لغوشده</option></select></div><div id="paymentList" class="list"></div></div>
     </section>
@@ -8955,7 +9296,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
 
             <div id="admin-users" class="admin-panel"><div class="panel-heading"><div><h3>کاربران و موجودی</h3><p>جستجوی کاربران و افزایش یا کاهش دستی کیف پول</p></div><span id="adminUserResultCount" class="badge">۰ کاربر</span></div><div class="settings-section"><div class="toolbar"><div class="searchbox"><span class="search-icon">⌕</span><input id="adminUserSearch" class="input" placeholder="نام، نام کاربری یا Telegram ID"></div><select id="adminUserSort" class="input select"><option value="recent">آخرین فعالیت</option><option value="balance_high">بیشترین موجودی</option><option value="balance_low">کمترین موجودی</option><option value="name">نام کاربر</option></select></div><div id="adminUserList" class="list"></div></div></div>
 
-            <div id="admin-finance" class="admin-panel"><div class="panel-heading"><div><h3>مالی و پرداخت‌ها</h3><p>تنظیم بلوپال، بیت‌پین، استعلام و ابزارهای مالی</p></div></div><details class="setting-group" open><summary><div class="summary-main"><span class="summary-icon">₮</span><div><div class="summary-title">اتصال بلوپال</div><div class="summary-note">تنظیمات اصلی API و کارت پرداخت</div></div></div><span class="summary-arrow">⌄</span></summary><div class="setting-body"><div class="field"><label>Base URL</label><input class="input ltr" id="setBlupalBase" value="https://blupal.net/api"></div><div class="field"><label>API Key <small>خالی یعنی بدون تغییر</small></label><input class="input ltr" id="setBlupalApiKey" type="password"></div><div class="field"><label>شماره کارت اختیاری</label><input class="input ltr" id="setBlupalCard"></div><div class="switch-row"><div class="switch-meta"><b>استعلام دوره‌ای فاکتورها</b><span>بررسی خودکار پرداخت‌های معلق</span></div><label class="switch"><input id="setPaymentPoll" type="checkbox"><span class="slider"></span></label></div><div class="switch-row"><div class="switch-meta"><b>حذف خودکار فاکتورهای معلق</b><span>پیش از حذف، وضعیت بلوپال دوباره بررسی می‌شود</span></div><label class="switch"><input id="setAutoDeletePending" type="checkbox"><span class="slider"></span></label></div><div class="field"><label>حذف پس از چند ساعت</label><input class="input ltr" id="setPendingTtl" type="number" min="1" max="720" value="24"></div></div></details><details class="setting-group"><summary><div class="summary-main"><span class="summary-icon">₿</span><div><div class="summary-title">اتصال بیت‌پین</div><div class="summary-note">API، آدرس واریز و نرخ تبدیل رمزارز</div></div></div><span class="summary-arrow">⌄</span></summary><div class="setting-body"><div class="switch-row"><div class="switch-meta"><b>فعال‌سازی واریز رمزارزی</b><span>کاربر پس از واریز TXID را ثبت می‌کند</span></div><label class="switch"><input id="setBitpinEnabled" type="checkbox"><span class="slider"></span></label></div><div class="field"><label>Base URL</label><input class="input ltr" id="setBitpinBase" value="https://api.bitpin.ir"></div><div class="form-grid"><div class="field"><label>API Key <small>خالی یعنی بدون تغییر</small></label><input class="input ltr" id="setBitpinApiKey" type="password"></div><div class="field"><label>API Secret <small>خالی یعنی بدون تغییر</small></label><input class="input ltr" id="setBitpinApiSecret" type="password"></div></div><div class="form-grid"><div class="field"><label>رمزارز</label><input class="input ltr" id="setBitpinAsset" value="USDT"></div><div class="field"><label>شبکه</label><input class="input ltr" id="setBitpinNetwork" value="TRC20"></div></div><div class="field"><label>آدرس واریز حساب بیت‌پین</label><input class="input ltr" id="setBitpinAddress"></div><div class="form-grid"><div class="field"><label>نرخ هر واحد به تومان</label><input class="input ltr" id="setBitpinRate" type="number" min="1"></div><div class="field"><label>حداقل مقدار رمزارز</label><input class="input ltr" id="setBitpinMin" type="number" step="any" min="0"></div></div><button id="testBitpinBtn" class="btn secondary" type="button">تست اتصال و مشاهده موجودی</button><div id="bitpinState" class="settings-note" style="margin-top:9px"></div></div></details><div class="settings-section"><div class="settings-title">عملیات پرداخت</div><div class="tool-grid"><button id="showWebhookBtn" class="tool" type="button"><div class="tool-icon">⌁</div><b>آدرس‌های بلوپال</b><span>نمایش Webhook و صفحه بازگشت</span></button><button id="syncPaymentsBtn" class="tool" type="button"><div class="tool-icon">↻</div><b>بررسی پرداخت‌ها</b><span>استعلام فوری فاکتورهای معلق</span></button><button id="cleanupPaymentsBtn" class="tool" type="button"><div class="tool-icon">⌫</div><b>پاک‌سازی فوری</b><span>حذف امن فاکتورهای معلق قدیمی</span></button></div><div id="webhookBox" class="credentials" style="display:none"></div></div><div class="settings-section"><div class="settings-title">درخواست‌های واریز بیت‌پین</div><div class="settings-note">TXID را در بیت‌پین بررسی و سپس تأیید یا رد کنید.</div><div id="adminBitpinList" class="list" style="margin-top:10px"></div></div></div>
+            <div id="admin-finance" class="admin-panel"><div class="panel-heading"><div><h3>مالی و بلوپال</h3><p>تنظیم درگاه، استعلام فاکتورها و ابزارهای پرداخت</p></div></div><details class="setting-group" open><summary><div class="summary-main"><span class="summary-icon">₮</span><div><div class="summary-title">اتصال بلوپال</div><div class="summary-note">تنظیمات اصلی API و کارت پرداخت</div></div></div><span class="summary-arrow">⌄</span></summary><div class="setting-body"><div class="field"><label>Base URL</label><input class="input ltr" id="setBlupalBase" value="https://blupal.net/api"></div><div class="field"><label>API Key <small>خالی یعنی بدون تغییر</small></label><input class="input ltr" id="setBlupalApiKey" type="password"></div><div class="field"><label>شماره کارت اختیاری</label><input class="input ltr" id="setBlupalCard"></div><div class="switch-row"><div class="switch-meta"><b>استعلام دوره‌ای فاکتورها</b><span>بررسی خودکار پرداخت‌های معلق</span></div><label class="switch"><input id="setPaymentPoll" type="checkbox"><span class="slider"></span></label></div><div class="switch-row"><div class="switch-meta"><b>حذف خودکار فاکتورهای معلق</b><span>پیش از حذف، وضعیت بلوپال دوباره بررسی می‌شود</span></div><label class="switch"><input id="setAutoDeletePending" type="checkbox"><span class="slider"></span></label></div><div class="field"><label>حذف پس از چند ساعت</label><input class="input ltr" id="setPendingTtl" type="number" min="1" max="720" value="24"></div></div></details><div class="settings-section"><div class="settings-title">عملیات پرداخت</div><div class="tool-grid"><button id="showWebhookBtn" class="tool" type="button"><div class="tool-icon">⌁</div><b>آدرس‌های بلوپال</b><span>نمایش Webhook و صفحه بازگشت</span></button><button id="syncPaymentsBtn" class="tool" type="button"><div class="tool-icon">↻</div><b>بررسی پرداخت‌ها</b><span>استعلام فوری فاکتورهای معلق</span></button><button id="cleanupPaymentsBtn" class="tool" type="button"><div class="tool-icon">⌫</div><b>پاک‌سازی فوری</b><span>حذف امن فاکتورهای معلق قدیمی</span></button></div><div id="webhookBox" class="credentials" style="display:none"></div></div></div>
 
             <div id="admin-services" class="admin-panel"><div class="panel-heading"><div><h3>سرویس‌ها و امنیت</h3><p>اتصال PasarGuard، ربات تلگرام و تنظیمات امنیتی</p></div></div><details class="setting-group" open><summary><div class="summary-main"><span class="summary-icon">P</span><div><div class="summary-title">اتصال PasarGuard</div><div class="summary-note">پنل مرکزی، مالک و Role نمایندگی</div></div></div><span class="summary-arrow">⌄</span></summary><div class="setting-body"><div class="field"><label>آدرس پنل مرکزی</label><input class="input ltr" id="setPgUrl"></div><div class="field"><label>نام کاربری مالک</label><input class="input ltr" id="setPgUsername"></div><div class="field"><label>رمز مالک <small>خالی یعنی بدون تغییر</small></label><input class="input ltr" id="setPgPassword" type="password"></div><div class="field"><label>Access Token اختیاری</label><input class="input ltr" id="setPgToken" type="password"></div><div class="form-grid"><div class="field"><label>Role ID نماینده فروش</label><input class="input ltr" id="setPgSalesRoleId"></div><div class="field"><label>نام Role نماینده فروش</label><input class="input" id="setPgSalesRoleName"></div></div><div class="form-grid"><div class="field"><label>Role ID مستر نمایندگی</label><input class="input ltr" id="setPgMasterRoleId"></div><div class="field"><label>نام Role مستر نمایندگی</label><input class="input" id="setPgMasterRoleName"></div></div><div class="settings-note">نمایندگان ساخته‌شده توسط مستر هیچ Role و پنل مستقلی در PasarGuard دریافت نمی‌کنند.</div></div></details><details class="setting-group"><summary><div class="summary-main"><span class="summary-icon">＋</span><div><div class="summary-title">تنظیمات پیشرفته نمایندگی</div><div class="summary-note">ترافیک، دامنه، پشتیبانی و Telegram ID</div></div></div><span class="summary-arrow">⌄</span></summary><div class="setting-body"><div class="field"><label>سقف ترافیک مدیر به بایت</label><input class="input ltr" id="setPgDataLimit" type="number"></div><div class="field"><label>Sub Domain اختیاری</label><input class="input ltr" id="setPgSubDomain"></div><div class="field"><label>Support URL اختیاری</label><input class="input ltr" id="setPgSupportUrl"></div><div class="switch-row"><div class="switch-meta"><b>ثبت Telegram ID</b><span>همیشه فعال؛ برای اتصال خودکار پنل به مینی‌اپ</span></div><label class="switch"><input id="setPgTelegram" type="checkbox" checked disabled><span class="slider"></span></label></div></div></details><details class="setting-group"><summary><div class="summary-main"><span class="summary-icon">✦</span><div><div class="summary-title">ربات و امنیت</div><div class="summary-note">توکن‌ها، رمزنگاری و نشست تلگرام</div></div></div><span class="summary-arrow">⌄</span></summary><div class="setting-body"><div class="field"><label>توکن ربات مرکزی <small>خالی یعنی بدون تغییر</small></label><input class="input ltr" id="setBotToken" type="password" autocomplete="new-password"></div><div class="field"><label>Secret وبهوک</label><input class="input ltr" id="setWebhookSecret" type="password"></div><div class="field"><label>کلید رمزنگاری</label><input class="input ltr" id="setEncryptionKey" type="password"></div><div class="field"><label>حداکثر عمر نشست</label><input class="input ltr" id="setAuthAge" type="number"></div><div class="switch-row"><div class="switch-meta"><b>ورود آزمایشی</b><span>فقط برای تست خارج از تلگرام</span></div><label class="switch"><input id="setDevAuth" type="checkbox"><span class="slider"></span></label></div><div class="field"><label>Telegram ID آزمایشی</label><input class="input ltr" id="setDevTelegramId"></div></div></details></div>
 
@@ -8995,10 +9336,6 @@ const MINI_APP_HTML = String.raw`<!doctype html>
   function renderLedger(target,list){var box=el(target);if(target==='fullLedger')list=filteredLedger();if(el('ledgerResultCount')&&target==='fullLedger')el('ledgerResultCount').textContent=money(list.length)+' تراکنش';if(!list.length){box.innerHTML=empty('تراکنشی وجود ندارد','فیلترها را تغییر دهید یا پس از اولین عملیات دوباره بررسی کنید');return}box.innerHTML=ledgerRows(list)}
   function paymentItem(x,admin){var pending=String(x.status).toUpperCase()==='PENDING',actions='';if(!admin&&pending){actions='<div class="agency-actions"><button class="btn small secondary checkPayBtn" data-id="'+esc(x.id)+'">بررسی وضعیت</button>'+(x.payment_link?'<button class="btn small payLinkBtn" data-link="'+esc(x.payment_link)+'">ادامه پرداخت</button>':'')+'</div>'}var who=admin?'<div class="item-sub">کاربر: '+esc(x.first_name||x.username||x.telegram_id||'')+'</div>':'';return '<div class="item"><div class="row"><div class="item-main"><div class="item-title">'+money(x.amount_toman)+' تومان</div>'+who+'<div class="item-sub">فاکتور '+esc(x.provider_invoice_id)+' · '+date(x.created_at)+'</div></div>'+badge(x.status)+'</div><div class="item-sub">مبلغ دقیق پرداخت: '+rial(x.final_amount_rial)+'</div>'+actions+'</div>'}
 
-  function bitpinDepositItem(x,admin){var actions='';if(admin&&x.status==='pending_review')actions='<div class="agency-actions"><button class="btn small bitpinApproveBtn" data-id="'+esc(x.id)+'">تأیید و شارژ</button><button class="btn small danger bitpinRejectBtn" data-id="'+esc(x.id)+'">رد</button></div>';return '<div class="item"><div class="row"><div class="item-main"><div class="item-title">'+esc(x.crypto_amount)+' '+esc(x.asset)+' · '+money(x.amount_toman)+' تومان</div>'+(admin?'<div class="item-sub">کاربر: '+esc(x.first_name||x.username||x.telegram_id||'')+'</div>':'')+'<div class="item-sub">'+esc(x.network)+' · '+date(x.created_at)+'</div><div class="item-sub ltr" style="word-break:break-all">TXID: '+esc(x.txid)+'</div>'+(x.note?'<div class="item-sub">توضیح: '+esc(x.note)+'</div>':'')+'</div>'+badge(x.status)+'</div>'+actions+'</div>'}
-  function bindBitpinAdminButtons(){document.querySelectorAll('.bitpinApproveBtn').forEach(function(b){b.onclick=async function(){if(!confirm('این واریز بررسی شده و کیف پول کاربر شارژ شود؟'))return;try{var note=prompt('توضیح اختیاری تأیید:','')||'';await api('/api/admin/payments/bitpin/'+encodeURIComponent(b.dataset.id)+'/approve',{method:'POST',body:JSON.stringify({note:note})});toast('واریز تأیید و کیف پول شارژ شد');await load()}catch(e){toast(e.message)}}});document.querySelectorAll('.bitpinRejectBtn').forEach(function(b){b.onclick=async function(){var note=prompt('علت رد درخواست را وارد کنید:','');if(note===null)return;try{await api('/api/admin/payments/bitpin/'+encodeURIComponent(b.dataset.id)+'/reject',{method:'POST',body:JSON.stringify({note:note})});toast('درخواست رد شد');await load()}catch(e){toast(e.message)}}})}
-  function renderBitpin(){var s=state.settings||{},box=el('bitpinCard');if(!box)return;box.style.display=s.bitpin_enabled?'block':'none';if(!s.bitpin_enabled)return;el('bitpinAssetTitle').textContent=s.bitpin_asset||'USDT';el('bitpinNetworkTitle').textContent=s.bitpin_network||'TRC20';el('bitpinAssetSuffix').textContent=s.bitpin_asset||'USDT';el('bitpinAddress').textContent=s.bitpin_deposit_address||'—';el('bitpinRate').textContent='هر '+(s.bitpin_asset||'USDT')+' = '+money(s.bitpin_toman_per_unit)+' تومان';el('bitpinCryptoAmount').min=s.bitpin_min_crypto_amount||0;var rows=state.bitpin_deposits||[];el('bitpinDepositList').innerHTML=rows.length?rows.map(function(x){return bitpinDepositItem(x,false)}).join(''):empty('هنوز واریز رمزارزی ثبت نشده','پس از انتقال، مقدار و TXID را ثبت کنید');el('copyBitpinAddress').onclick=async function(){try{await copyText(s.bitpin_deposit_address||'');toast('آدرس کپی شد')}catch(_){toast('کپی ممکن نبود')}}}
-
   function filteredPayments(){var list=(state&&state.payments?state.payments:[]).slice(),q=el('paymentSearch')?el('paymentSearch').value.trim().toLowerCase():'',status=el('paymentStatusFilter')?el('paymentStatusFilter').value:'all';if(q)list=list.filter(function(x){return String(x.provider_invoice_id||'').toLowerCase().includes(q)||String(x.amount_toman||'').includes(q)});if(status!=='all')list=list.filter(function(x){return String(x.status||'').toUpperCase()===status});return list}
   function renderPayments(){var list=filteredPayments(),box=el('paymentList');if(el('paymentResultCount'))el('paymentResultCount').textContent=money(list.length)+' فاکتور';box.innerHTML=list.length?list.map(function(x){return paymentItem(x,false)}).join(''):empty('فاکتوری پیدا نشد','فیلتر یا عبارت جستجو را تغییر دهید');bindPaymentButtons()}
   function bindPaymentButtons(){document.querySelectorAll('.checkPayBtn').forEach(function(b){b.onclick=async function(){try{var d=await api('/api/payments/'+encodeURIComponent(b.dataset.id)+'/status');toast(d.payment.status==='PAID'?'پرداخت تأیید و کیف پول شارژ شد':'وضعیت: '+d.payment.status);await load()}catch(e){toast(e.message)}}});document.querySelectorAll('.payLinkBtn').forEach(function(b){b.onclick=function(){if(tg&&tg.openLink)tg.openLink(b.dataset.link);else location.href=b.dataset.link}})}
@@ -9015,7 +9352,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
   function filteredAdminUsers(){var list=(state&&state.admin&&state.admin.users?state.admin.users:[]).slice(),q=el('adminUserSearch')?el('adminUserSearch').value.trim().toLowerCase():'',sort=el('adminUserSort')?el('adminUserSort').value:'recent';if(q)list=list.filter(function(x){return [x.first_name,x.last_name,x.username,x.telegram_id].some(function(v){return String(v||'').toLowerCase().includes(q)})});list.sort(function(a,b){if(sort==='balance_high')return Number(b.wallet_balance||0)-Number(a.wallet_balance||0);if(sort==='balance_low')return Number(a.wallet_balance||0)-Number(b.wallet_balance||0);if(sort==='name')return String(a.first_name||a.username||a.telegram_id||'').localeCompare(String(b.first_name||b.username||b.telegram_id||''),'fa');return String(b.updated_at||'').localeCompare(String(a.updated_at||''))});return list}
   function renderAdminUsers(){var box=el('adminUserList');if(!box)return;var list=filteredAdminUsers();if(el('adminUserResultCount'))el('adminUserResultCount').textContent=money(list.length)+' کاربر';if(!list.length){box.innerHTML=empty('کاربری پیدا نشد','عبارت جستجو را تغییر دهید');return}box.innerHTML=list.map(function(x){var name=[x.first_name,x.last_name].filter(Boolean).join(' ')||x.username||('کاربر '+x.telegram_id),uname=x.username?'@'+x.username:'بدون نام کاربری';return '<div class="item"><div class="row"><div class="item-main"><div class="item-title">'+esc(name)+'</div><div class="item-sub ltr">'+esc(uname)+' · ID: '+esc(x.telegram_id)+'</div><div class="item-sub">'+money(x.agencies_count)+' پنل · '+(x.role==='admin'?'مدیر':'کاربر')+'</div></div><div style="text-align:left"><div class="amount plus" style="color:var(--text)">'+money(x.wallet_balance)+' تومان</div><button type="button" class="btn small secondary adjustBalanceBtn" data-id="'+esc(x.id)+'" data-name="'+esc(name)+'" data-balance="'+esc(x.wallet_balance)+'" style="margin-top:8px">تغییر موجودی</button></div></div></div>'}).join('');bindBalanceButtons()}
   function bindBalanceButtons(){document.querySelectorAll('.adjustBalanceBtn').forEach(function(btn){btn.onclick=function(){var userId=btn.dataset.id,userName=btn.dataset.name,current=Number(btn.dataset.balance||0);openModal('مدیریت موجودی '+userName,'<div class="credentials"><div class="credential-row"><span>موجودی فعلی</span><b>'+money(current)+' تومان</b></div></div><div class="field"><label>مبلغ به تومان</label><input id="balanceAdjustAmount" class="input ltr" type="number" min="1" step="1" placeholder="مثلاً 100000"></div><div class="field"><label>توضیح اختیاری</label><input id="balanceAdjustNote" class="input" maxlength="180" placeholder="علت تغییر موجودی"></div><div class="form-grid"><button type="button" id="increaseBalanceBtn" class="btn ok">افزایش موجودی</button><button type="button" id="decreaseBalanceBtn" class="btn danger">کاهش موجودی</button></div>');function submit(op){var amount=Number(el('balanceAdjustAmount').value||0),note=el('balanceAdjustNote').value;if(!Number.isFinite(amount)||amount<=0)return toast('مبلغ معتبر وارد کنید');if(op==='decrease'&&amount>current)return toast('مبلغ کاهش نمی‌تواند بیشتر از موجودی فعلی باشد');api('/api/admin/users/'+encodeURIComponent(userId)+'/balance',{method:'POST',body:JSON.stringify({operation:op,amount:amount,note:note})}).then(function(d){closeModal();toast((op==='increase'?'موجودی افزایش یافت':'موجودی کاهش یافت')+'؛ مانده '+money(d.user.wallet_balance)+' تومان');load()}).catch(function(e){toast(e.message)})}el('increaseBalanceBtn').onclick=function(){submit('increase')};el('decreaseBalanceBtn').onclick=function(){submit('decrease')}}})}
-  function fillAdmin(){if(!(state.user.role==='admin'&&state.admin))return;el('page-admin').classList.remove('adminOnly');el('adminNav').style.display=CONTROL_MODE?'none':'flex';var st=state.admin.stats||{},c=state.admin.configuration||{};el('adminUsers').textContent=money(st.users_count);el('adminAgencies').textContent=money(st.agencies_count);el('adminPending').textContent=money(st.pending_payments);var vals={setBrand:c.brand_name,setPrice:c.price_per_gb,setSetupFee:c.setup_fee,setStoreBotFee:c.reseller_store_bot_setup_fee,setStoreBotLicenseFee:c.reseller_store_bot_license_renewal_fee,setMasterBotFee:c.reseller_master_bot_setup_fee,setMasterBotLicenseFee:c.reseller_master_bot_license_renewal_fee,setMasterMarkupFee:c.master_min_markup_toman,setCentralBonus:c.central_recharge_bonus_percent,setCentralTrialMb:Math.round(Number(c.central_trial_data_limit_bytes||1073741824)/1048576),setCentralTrialHours:c.central_trial_duration_hours,setMinRecharge:c.min_recharge,setSupport:c.support_username,setAppUrl:c.app_url,setAdminIds:c.admin_ids,setAuthAge:c.auth_max_age_seconds,setDevTelegramId:c.dev_telegram_id,setBlupalBase:c.blupal_base_url,setBlupalCard:c.blupal_card_number,setBitpinBase:c.bitpin_base_url,setBitpinAsset:c.bitpin_asset,setBitpinNetwork:c.bitpin_network,setBitpinAddress:c.bitpin_deposit_address,setBitpinRate:c.bitpin_toman_per_unit,setBitpinMin:c.bitpin_min_crypto_amount,setPendingTtl:c.pending_invoice_ttl_hours,setPgUrl:c.pasarguard_panel_url,setPgUsername:c.pasarguard_admin_username,setPgSalesRoleId:c.pasarguard_sales_role_id,setPgSalesRoleName:c.pasarguard_sales_role_name,setPgMasterRoleId:c.pasarguard_master_role_id,setPgMasterRoleName:c.pasarguard_master_role_name,setPgDataLimit:c.pasarguard_admin_data_limit_bytes,setPgSubDomain:c.pasarguard_sub_domain,setPgSupportUrl:c.pasarguard_support_url,setGithubRepo:c.github_repo,setGithubBranch:c.github_branch,setGithubWorkerFile:(c.github_worker_file&&c.github_worker_file!=='worker.js'?c.github_worker_file:'core/worker.js'),setGithubVersionFile:c.github_version_file,setCfAccount:c.cf_account_id,setCfWorker:c.cf_worker_name,setPythonWorker:c.python_helper_worker_name};Object.keys(vals).forEach(function(k){if(el(k))el(k).value=vals[k]==null?'':vals[k]});el('setCentralTrialEnabled').checked=!!c.central_trial_enabled;el('setUsageSync').checked=!!c.usage_sync_enabled;el('setPaymentPoll').checked=!!c.payment_poll_enabled;if(el('setBitpinEnabled'))el('setBitpinEnabled').checked=!!c.bitpin_enabled;el('setAutoDeletePending').checked=!!c.auto_delete_pending_invoices;el('setDevAuth').checked=!!c.allow_dev_auth;if(el('pythonHelperStatus')){var pyLabels={never:'هنوز ساخته نشده',configuration_required:'نیازمند تکمیل اطلاعات Cloudflare',deploying:'در حال ساخت فایل‌های Python',deployed:'Python Worker ساخته شده',deployed_and_bound:'ساخته شد؛ Binding در درخواست بعد فعال می‌شود',ready:'فعال و آماده استفاده',failed:'ساخت خودکار ناموفق بود'};var pyWhen=c.python_helper_last_deployed_at?new Date(c.python_helper_last_deployed_at).toLocaleString('fa-IR'):'';el('pythonHelperStatus').textContent=(pyLabels[c.python_helper_last_status]||c.python_helper_last_status)+(c.python_helper_worker_name?' · '+c.python_helper_worker_name:'')+(pyWhen?' · '+pyWhen:'')+(c.python_helper_last_error?' · '+c.python_helper_last_error:'')}if(el('autoUpdateStatus')){var labels={never:'هنوز بررسی نشده',configuration_required:'نیازمند تکمیل اطلاعات Cloudflare',up_to_date:'آخرین نسخه نصب است',deployed:'نسخه جدید خودکار نصب شد',failed:'آخرین بررسی ناموفق بود'};var when=c.auto_update_last_check_epoch?new Date(c.auto_update_last_check_epoch*1000).toLocaleString('fa-IR'):'';el('autoUpdateStatus').textContent=(labels[c.auto_update_last_status]||c.auto_update_last_status)+(c.auto_update_last_version?' · نسخه '+c.auto_update_last_version:'')+(when?' · '+when:'')+(c.auto_update_last_error?' · '+c.auto_update_last_error:'')}el('setPgTelegram').checked=!!c.pasarguard_set_telegram_id;if(el('bitpinState'))el('bitpinState').textContent='API Key: '+(c.bitpin_api_key_set?'ثبت شده':'ثبت نشده')+' · Secret: '+(c.bitpin_api_secret_set?'ثبت شده':'ثبت نشده')+(c.bitpin_last_verified_at?' · آخرین اتصال: '+date(c.bitpin_last_verified_at):'')+(c.bitpin_last_error?' · خطا: '+c.bitpin_last_error:'');el('secretStatus').textContent='توکن ربات: '+(c.bot_token_set?'ثبت شده':'ثبت نشده')+' · بلوپال: '+(c.blupal_api_key_set?'ثبت شده':'ثبت نشده')+' · بیت‌پین: '+(c.bitpin_api_key_set&&c.bitpin_api_secret_set?'ثبت شده':'ثبت نشده')+' · پاسارگارد: '+(c.pasarguard_admin_password_set?'ثبت شده':'ثبت نشده')+' · Cloudflare: '+(c.cf_api_token_set?'ثبت شده':'ثبت نشده');var recent=state.admin.recentPayments||[];el('adminPaymentList').innerHTML=recent.length?recent.map(function(x){return paymentItem(x,true)}).join(''):empty('پرداختی وجود ندارد','آخرین پرداخت کاربران اینجا دیده می‌شود');var bitpin=state.admin.recentBitpinDeposits||[];if(el('adminBitpinList'))el('adminBitpinList').innerHTML=bitpin.length?bitpin.map(function(x){return bitpinDepositItem(x,true)}).join(''):empty('درخواستی وجود ندارد','واریزهای رمزارزی کاربران اینجا دیده می‌شود');bindBitpinAdminButtons();renderAdminUsers()}
+  function fillAdmin(){if(!(state.user.role==='admin'&&state.admin))return;el('page-admin').classList.remove('adminOnly');el('adminNav').style.display=CONTROL_MODE?'none':'flex';var st=state.admin.stats||{},c=state.admin.configuration||{};el('adminUsers').textContent=money(st.users_count);el('adminAgencies').textContent=money(st.agencies_count);el('adminPending').textContent=money(st.pending_payments);var vals={setBrand:c.brand_name,setPrice:c.price_per_gb,setSetupFee:c.setup_fee,setStoreBotFee:c.reseller_store_bot_setup_fee,setStoreBotLicenseFee:c.reseller_store_bot_license_renewal_fee,setMasterBotFee:c.reseller_master_bot_setup_fee,setMasterBotLicenseFee:c.reseller_master_bot_license_renewal_fee,setMasterMarkupFee:c.master_min_markup_toman,setCentralBonus:c.central_recharge_bonus_percent,setCentralTrialMb:Math.round(Number(c.central_trial_data_limit_bytes||1073741824)/1048576),setCentralTrialHours:c.central_trial_duration_hours,setMinRecharge:c.min_recharge,setSupport:c.support_username,setAppUrl:c.app_url,setAdminIds:c.admin_ids,setAuthAge:c.auth_max_age_seconds,setDevTelegramId:c.dev_telegram_id,setBlupalBase:c.blupal_base_url,setBlupalCard:c.blupal_card_number,setPendingTtl:c.pending_invoice_ttl_hours,setPgUrl:c.pasarguard_panel_url,setPgUsername:c.pasarguard_admin_username,setPgSalesRoleId:c.pasarguard_sales_role_id,setPgSalesRoleName:c.pasarguard_sales_role_name,setPgMasterRoleId:c.pasarguard_master_role_id,setPgMasterRoleName:c.pasarguard_master_role_name,setPgDataLimit:c.pasarguard_admin_data_limit_bytes,setPgSubDomain:c.pasarguard_sub_domain,setPgSupportUrl:c.pasarguard_support_url,setGithubRepo:c.github_repo,setGithubBranch:c.github_branch,setGithubWorkerFile:(c.github_worker_file&&c.github_worker_file!=='worker.js'?c.github_worker_file:'core/worker.js'),setGithubVersionFile:c.github_version_file,setCfAccount:c.cf_account_id,setCfWorker:c.cf_worker_name,setPythonWorker:c.python_helper_worker_name};Object.keys(vals).forEach(function(k){if(el(k))el(k).value=vals[k]==null?'':vals[k]});el('setCentralTrialEnabled').checked=!!c.central_trial_enabled;el('setUsageSync').checked=!!c.usage_sync_enabled;el('setPaymentPoll').checked=!!c.payment_poll_enabled;el('setAutoDeletePending').checked=!!c.auto_delete_pending_invoices;el('setDevAuth').checked=!!c.allow_dev_auth;if(el('pythonHelperStatus')){var pyLabels={never:'هنوز ساخته نشده',configuration_required:'نیازمند تکمیل اطلاعات Cloudflare',deploying:'در حال ساخت فایل‌های Python',deployed:'Python Worker ساخته شده',deployed_and_bound:'ساخته شد؛ Binding در درخواست بعد فعال می‌شود',ready:'فعال و آماده استفاده',failed:'ساخت خودکار ناموفق بود'};var pyWhen=c.python_helper_last_deployed_at?new Date(c.python_helper_last_deployed_at).toLocaleString('fa-IR'):'';el('pythonHelperStatus').textContent=(pyLabels[c.python_helper_last_status]||c.python_helper_last_status)+(c.python_helper_worker_name?' · '+c.python_helper_worker_name:'')+(pyWhen?' · '+pyWhen:'')+(c.python_helper_last_error?' · '+c.python_helper_last_error:'')}if(el('autoUpdateStatus')){var labels={never:'هنوز بررسی نشده',configuration_required:'نیازمند تکمیل اطلاعات Cloudflare',up_to_date:'آخرین نسخه نصب است',deployed:'نسخه جدید خودکار نصب شد',failed:'آخرین بررسی ناموفق بود'};var when=c.auto_update_last_check_epoch?new Date(c.auto_update_last_check_epoch*1000).toLocaleString('fa-IR'):'';el('autoUpdateStatus').textContent=(labels[c.auto_update_last_status]||c.auto_update_last_status)+(c.auto_update_last_version?' · نسخه '+c.auto_update_last_version:'')+(when?' · '+when:'')+(c.auto_update_last_error?' · '+c.auto_update_last_error:'')}el('setPgTelegram').checked=!!c.pasarguard_set_telegram_id;el('secretStatus').textContent='توکن ربات: '+(c.bot_token_set?'ثبت شده':'ثبت نشده')+' · بلوپال: '+(c.blupal_api_key_set?'ثبت شده':'ثبت نشده')+' · پاسارگارد: '+(c.pasarguard_admin_password_set?'ثبت شده':'ثبت نشده')+' · Cloudflare: '+(c.cf_api_token_set?'ثبت شده':'ثبت نشده');var recent=state.admin.recentPayments||[];el('adminPaymentList').innerHTML=recent.length?recent.map(function(x){return paymentItem(x,true)}).join(''):empty('پرداختی وجود ندارد','آخرین پرداخت کاربران اینجا دیده می‌شود');renderAdminUsers()}
   function setAmountChips(min){var values=[min,min*2,min*5,min*10],ids=['amountChip1','amountChip2','amountChip3','amountChip4'];ids.forEach(function(k,i){var b=el(k);b.textContent=money(values[i]);b.dataset.amount=values[i];b.onclick=function(){el('paymentAmount').value=b.dataset.amount;document.querySelectorAll('.amount-chip').forEach(function(x){x.classList.remove('active')});b.classList.add('active')}})}
 
   function setLiveUsageStatus(mode,text,sub){
@@ -9061,8 +9398,8 @@ const MINI_APP_HTML = String.raw`<!doctype html>
     setTimeout(refreshLiveUsage,700);
     liveUsageTimer=setInterval(refreshLiveUsage,LIVE_USAGE_INTERVAL);
   }
-  function render(){var u=state.user,s=state.settings,a=state.agencies||[],p=state.payments||[];el('brand').textContent=s.brand_name;var name=u.first_name||u.username||'کاربر';el('hello').textContent='سلام '+name;el('avatar').textContent=String(name).trim().slice(0,1).toUpperCase()||'P';el('balance').textContent=money(u.wallet_balance);el('pricePerGb').textContent=money(s.price_per_gb)+' تومان';var active=a.filter(function(x){return x.status==='active'}).length,suspended=a.filter(function(x){return x.status!=='active'}).length;el('activeCount').textContent=money(active);el('totalUsage').textContent=gb(a.reduce(function(t,x){return t+Number(x.last_usage_bytes||0)},0));el('totalCharged').textContent=money(a.reduce(function(t,x){return t+Number(x.total_charged||0)},0))+' تومان';el('pendingCount').textContent=money(p.filter(function(x){return String(x.status).toUpperCase()==='PENDING'}).length);var insight=state.dashboard_insight||{};if(el('healthScore')){el('healthScore').textContent=money(insight.score==null?88:insight.score);el('healthScore').className='health-score '+(insight.tone||'good')}if(el('accountInsight')){el('accountInsight').className='insight-strip '+(insight.tone||'good');el('accountInsight').innerHTML='<b>'+esc(insight.title||'حساب آماده فعالیت است')+'</b><span>'+esc(insight.message||'وضعیت حساب شما پایدار است.')+'</span>'}if(el('agencyTotalCount'))el('agencyTotalCount').textContent=money(a.length);if(el('agencyActiveCount'))el('agencyActiveCount').textContent=money(active);if(el('agencySuspendedCount'))el('agencySuspendedCount').textContent=money(suspended);el('paymentAmount').min=s.min_recharge;el('paymentAmount').placeholder='حداقل '+money(s.min_recharge);setAmountChips(Number(s.min_recharge||10000));el('setupFeeNote').textContent=s.agency_sales_enabled===false?'فروش پنل نمایندگی موقتاً توسط مدیریت مرکزی بسته است.':'حداقل موجودی لازم: '+money(s.setup_fee)+' تومان — پس از ساخت کسر نمی‌شود';if(el('agencyCreateCard'))el('agencyCreateCard').style.display=(s.agency_sales_enabled===false)?'none':'';if(el('focusAgencyForm'))el('focusAgencyForm').style.display=(s.agency_sales_enabled===false)?'none':'';renderLedger('ledgerList',(state.ledger||[]).slice(0,5));renderLedger('fullLedger',state.ledger||[]);renderPayments();renderBitpin();renderAgencies();renderAgencyPreview(a);renderCentralTrial();fillAdmin()}
-  function showCentralWebLogin(message){el('app').style.display='none';var msg=message?'<div class="web-login-note" style="color:var(--danger)">'+esc(message)+'</div>':'';el('loading').style.display='grid';var title=CONTROL_MODE?'ورود به مدیریت مرکزی':'ورود به BluePanel';var subtitle=CONTROL_MODE?'با نام کاربری و رمز مدیر پنل PasarGuard وارد شوید.':'با نام کاربری و رمز همان پنل PasarGuard وارد شوید.';var endpoint=CONTROL_MODE?'/api/auth/control/login':'/api/auth/web/login';el('loading').innerHTML='<div class="web-login-shell"><div class="web-login-logo">BP</div><h2>'+title+'</h2><div class="card-sub">'+subtitle+'</div>'+msg+'<form id="centralWebLoginForm" style="margin-top:18px"><div class="field"><label>نام کاربری پنل</label><input id="webPanelUsername" class="input ltr" autocomplete="username" required></div><div class="field"><label>رمز عبور پنل</label><input id="webPanelPassword" class="input ltr" type="password" autocomplete="current-password" required></div><button id="centralWebLoginBtn" class="btn" type="submit" style="width:100%">ورود امن</button></form><div class="web-login-note">'+(CONTROL_MODE?'آدرس مدیریت ثابت است و ورود یک‌بارمصرف حذف شده است.':'این ورود مستقیماً با PasarGuard بررسی می‌شود. پنل‌های دستی نیز پس از ورود معتبر به حساب متصل می‌شوند.')+'</div></div>';el('centralWebLoginForm').onsubmit=async function(e){e.preventDefault();var btn=el('centralWebLoginBtn');btn.disabled=true;try{var r=await fetch(endpoint+'?_bpv=3.0.8&_t='+Date.now(),{method:'POST',credentials:'same-origin',cache:'no-store',redirect:'manual',headers:{'content-type':'application/json','accept':'application/json','x-bluepanel-client-version':'3.0.8'},body:JSON.stringify({username:el('webPanelUsername').value,password:el('webPanelPassword').value})}),raw=await r.text(),d;try{d=JSON.parse(raw)}catch(_){var clean=String(raw||'').replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim().slice(0,180);throw new Error('پاسخ نامعتبر سرور (HTTP '+r.status+')'+(clean?': '+clean:''))}if(!r.ok||d.success===false)throw Object.assign(new Error(d.error||'ورود ناموفق بود'),{code:d.code});el('webPanelPassword').value='';el('loading').innerHTML='<div><div class="spinner"></div><div class="card-sub">در حال ورود…</div></div>';await load()}catch(err){toast(err.message)}finally{btn.disabled=false}}}
+  function render(){var u=state.user,s=state.settings,a=state.agencies||[],p=state.payments||[];el('brand').textContent=s.brand_name;var name=u.first_name||u.username||'کاربر';el('hello').textContent='سلام '+name;el('avatar').textContent=String(name).trim().slice(0,1).toUpperCase()||'P';el('balance').textContent=money(u.wallet_balance);el('pricePerGb').textContent=money(s.price_per_gb)+' تومان';var active=a.filter(function(x){return x.status==='active'}).length,suspended=a.filter(function(x){return x.status!=='active'}).length;el('activeCount').textContent=money(active);el('totalUsage').textContent=gb(a.reduce(function(t,x){return t+Number(x.last_usage_bytes||0)},0));el('totalCharged').textContent=money(a.reduce(function(t,x){return t+Number(x.total_charged||0)},0))+' تومان';el('pendingCount').textContent=money(p.filter(function(x){return String(x.status).toUpperCase()==='PENDING'}).length);var insight=state.dashboard_insight||{};if(el('healthScore')){el('healthScore').textContent=money(insight.score==null?88:insight.score);el('healthScore').className='health-score '+(insight.tone||'good')}if(el('accountInsight')){el('accountInsight').className='insight-strip '+(insight.tone||'good');el('accountInsight').innerHTML='<b>'+esc(insight.title||'حساب آماده فعالیت است')+'</b><span>'+esc(insight.message||'وضعیت حساب شما پایدار است.')+'</span>'}if(el('agencyTotalCount'))el('agencyTotalCount').textContent=money(a.length);if(el('agencyActiveCount'))el('agencyActiveCount').textContent=money(active);if(el('agencySuspendedCount'))el('agencySuspendedCount').textContent=money(suspended);el('paymentAmount').min=s.min_recharge;el('paymentAmount').placeholder='حداقل '+money(s.min_recharge);setAmountChips(Number(s.min_recharge||10000));el('setupFeeNote').textContent=s.agency_sales_enabled===false?'فروش پنل نمایندگی موقتاً توسط مدیریت مرکزی بسته است.':'حداقل موجودی لازم: '+money(s.setup_fee)+' تومان — پس از ساخت کسر نمی‌شود';if(el('agencyCreateCard'))el('agencyCreateCard').style.display=(s.agency_sales_enabled===false)?'none':'';if(el('focusAgencyForm'))el('focusAgencyForm').style.display=(s.agency_sales_enabled===false)?'none':'';renderLedger('ledgerList',(state.ledger||[]).slice(0,5));renderLedger('fullLedger',state.ledger||[]);renderPayments();renderAgencies();renderAgencyPreview(a);renderCentralTrial();fillAdmin()}
+  function showCentralWebLogin(message){el('app').style.display='none';var msg=message?'<div class="web-login-note" style="color:var(--danger)">'+esc(message)+'</div>':'';el('loading').style.display='grid';var title=CONTROL_MODE?'ورود به مدیریت مرکزی':'ورود به BluePanel';var subtitle=CONTROL_MODE?'با نام کاربری و رمز مدیر پنل PasarGuard وارد شوید.':'با نام کاربری و رمز همان پنل PasarGuard وارد شوید.';var endpoint=CONTROL_MODE?'/api/auth/control/login':'/api/auth/web/login';el('loading').innerHTML='<div class="web-login-shell"><div class="web-login-logo">BP</div><h2>'+title+'</h2><div class="card-sub">'+subtitle+'</div>'+msg+'<form id="centralWebLoginForm" style="margin-top:18px"><div class="field"><label>نام کاربری پنل</label><input id="webPanelUsername" class="input ltr" autocomplete="username" required></div><div class="field"><label>رمز عبور پنل</label><input id="webPanelPassword" class="input ltr" type="password" autocomplete="current-password" required></div><button id="centralWebLoginBtn" class="btn" type="submit" style="width:100%">ورود امن</button></form><div class="web-login-note">'+(CONTROL_MODE?'آدرس مدیریت ثابت است و ورود یک‌بارمصرف حذف شده است.':'این ورود مستقیماً با PasarGuard بررسی می‌شود. پنل‌های دستی نیز پس از ورود معتبر به حساب متصل می‌شوند.')+'</div></div>';el('centralWebLoginForm').onsubmit=async function(e){e.preventDefault();var btn=el('centralWebLoginBtn');btn.disabled=true;try{var r=await fetch(endpoint+'?_bpv=3.0.1&_t='+Date.now(),{method:'POST',credentials:'same-origin',cache:'no-store',redirect:'manual',headers:{'content-type':'application/json','accept':'application/json','x-bluepanel-client-version':'3.0.1'},body:JSON.stringify({username:el('webPanelUsername').value,password:el('webPanelPassword').value})}),raw=await r.text(),d;try{d=JSON.parse(raw)}catch(_){var clean=String(raw||'').replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim().slice(0,180);throw new Error('پاسخ نامعتبر سرور (HTTP '+r.status+')'+(clean?': '+clean:''))}if(!r.ok||d.success===false)throw Object.assign(new Error(d.error||'ورود ناموفق بود'),{code:d.code});el('webPanelPassword').value='';el('loading').innerHTML='<div><div class="spinner"></div><div class="card-sub">در حال ورود…</div></div>';await load()}catch(err){toast(err.message)}finally{btn.disabled=false}}}
 
   async function centralWebLogout(){try{await fetch('/api/auth/web/logout',{method:'POST',credentials:'same-origin'})}catch(_){}location.reload()}
   async function load(){try{state=await api('/api/bootstrap');if(CONTROL_MODE&&!(state.user&&state.user.role==='admin'&&state.admin)){var ce=new Error('دسترسی مدیریت مرکزی لازم است');ce.code='ADMIN_REQUIRED';throw ce}render();if(CONTROL_MODE)go('admin');el('loading').style.display='none';el('app').style.display='block';if(!isTelegram&&!el('centralWebLogout')){var actions=document.querySelector('.top-actions');if(actions){var out=document.createElement('button');out.id='centralWebLogout';out.className='btn secondary small';out.textContent='خروج';out.onclick=centralWebLogout;actions.appendChild(out)}}startLiveUsage()}catch(e){if(e.code==='JOIN_REQUIRED'){var links=(e.channels||[]).filter(function(x){return x.url}).map(function(x){return '<a class="btn secondary" style="display:block;text-decoration:none;margin-top:8px" href="'+esc(x.url)+'">📢 '+esc(x.title)+'</a>'}).join('');el('loading').innerHTML='<div class="card" style="max-width:520px;width:100%"><div class="empty"><div class="empty-icon">🔐</div><b>عضویت اجباری</b><span>ابتدا در کانال‌های تعیین‌شده عضو شوید.</span>'+links+'<button class="btn" style="margin-top:10px" onclick="location.reload()">✅ بررسی مجدد</button></div></div>'}else if(e.code==='WEB_LOGIN_REQUIRED'&&!isTelegram){showCentralWebLogin()}else{el('loading').innerHTML='<div class="card" style="max-width:520px;width:100%"><div class="empty"><div class="empty-icon">!</div><b>خطای ورود</b><span>'+esc(e.message)+'</span><div class="card-sub" style="margin-top:10px">اتصال خود را بررسی و دوباره تلاش کنید.</div></div></div>'}}}
@@ -9076,10 +9413,8 @@ const MINI_APP_HTML = String.raw`<!doctype html>
   if(el('settingsForm'))el('settingsForm').addEventListener('input',function(){if(el('saveStatus')){el('saveStatus').textContent='تغییر ذخیره‌نشده وجود دارد.';el('saveStatus').style.color='var(--warn)'}});
   el('modalClose').onclick=closeModal;el('modal').onclick=function(e){if(e.target===el('modal'))closeModal()};
   el('paymentForm').onsubmit=async function(e){e.preventDefault();try{var d=await api('/api/payments/blupal/create',{method:'POST',body:JSON.stringify({amount:el('paymentAmount').value})}),x=d.payment;el('newPayment').style.display='block';el('newPayment').innerHTML='<div class="row"><b>فاکتور آماده پرداخت</b>'+badge('PENDING')+'</div><div class="credential-row"><span>شارژ کیف پول</span><b>'+money(x.amount)+' تومان</b></div><div class="credential-row"><span>مبلغ دقیق</span><b>'+rial(x.final_amount_rial)+'</b></div>'+(x.card_number?'<div class="credential-row"><span>شماره کارت</span><span class="credential-value">'+esc(x.card_number)+'</span><button class="copy-mini" data-copy="'+esc(x.card_number)+'">کپی</button></div>':'')+'<button id="openPaymentBtn" class="btn" style="margin-top:11px">ورود به صفحه پرداخت</button>';bindCopyButtons(el('newPayment'));el('openPaymentBtn').onclick=function(){if(tg&&tg.openLink)tg.openLink(x.payment_link);else location.href=x.payment_link};toast('فاکتور بلوپال ساخته شد');e.target.reset();document.querySelectorAll('.amount-chip').forEach(function(x){x.classList.remove('active')});await load()}catch(err){toast(err.message)}};
-  if(el('bitpinForm'))el('bitpinForm').onsubmit=async function(e){e.preventDefault();try{var d=await api('/api/payments/bitpin/claim',{method:'POST',body:JSON.stringify({crypto_amount:el('bitpinCryptoAmount').value,txid:el('bitpinTxid').value,note:el('bitpinNote').value})});toast('درخواست واریز بیت‌پین ثبت شد و در انتظار بررسی است');e.target.reset();await load()}catch(err){toast(err.message)}};
   el('agencyForm').onsubmit=async function(e){e.preventDefault();try{var d=await api('/api/agencies',{method:'POST',body:JSON.stringify({title:el('agencyTitle').value,username:el('agencyUsername').value,password:el('agencyPassword').value})});el('newCredentials').innerHTML='<div class="credentials"><b>اطلاعات پنل ساخته‌شده</b><div class="credential-row"><span>آدرس پنل</span><span class="credential-value ltr" style="word-break:break-all">'+esc(d.agency.panel_url)+'</span><button class="copy-mini" data-copy="'+esc(d.agency.panel_url)+'">کپی</button></div><div class="credential-row"><span>نام کاربری</span><span class="credential-value">'+esc(d.agency.username)+'</span><button class="copy-mini" data-copy="'+esc(d.agency.username)+'">کپی</button></div><div class="credential-row"><span>رمز عبور</span><span class="credential-value">'+esc(d.agency.password)+'</span><button class="copy-mini" data-copy="'+esc(d.agency.password)+'">کپی</button></div><button class="btn panelLinkBtn" data-link="'+esc(d.agency.panel_url)+'" style="margin-top:11px;width:100%">ورود به پنل</button><div class="card-sub" style="margin-top:9px">این اطلاعات را در جای امن ذخیره کنید.</div><div class="insight-strip good" style="margin-top:10px"><b>موجودی شما کسر نشد</b><span>حداقل موجودی فقط شرط ساخت پنل است و از این پس هزینه براساس مصرف واقعی محاسبه می‌شود.</span></div></div>';bindCopyButtons(el('newCredentials'));bindPanelLinks(el('newCredentials'));toast('پنل ساخته شد');e.target.reset();await load()}catch(err){toast(err.message)}};
-  el('settingsForm').onsubmit=async function(e){e.preventDefault();try{var body={brand_name:el('setBrand').value,price_per_gb:el('setPrice').value,setup_fee:el('setSetupFee').value,reseller_store_bot_setup_fee:el('setStoreBotFee').value,reseller_store_bot_license_renewal_fee:el('setStoreBotLicenseFee').value,reseller_master_bot_setup_fee:el('setMasterBotFee').value,reseller_master_bot_license_renewal_fee:el('setMasterBotLicenseFee').value,master_min_markup_toman:el('setMasterMarkupFee').value,central_recharge_bonus_percent:el('setCentralBonus').value,central_trial_enabled:el('setCentralTrialEnabled').checked,central_trial_data_limit_bytes:Number(el('setCentralTrialMb').value||1024)*1048576,central_trial_duration_hours:el('setCentralTrialHours').value,min_recharge:el('setMinRecharge').value,support_username:el('setSupport').value,app_url:el('setAppUrl').value,admin_ids:el('setAdminIds').value,usage_sync_enabled:el('setUsageSync').checked,payment_poll_enabled:el('setPaymentPoll').checked,auto_delete_pending_invoices:el('setAutoDeletePending').checked,pending_invoice_ttl_hours:el('setPendingTtl').value,auto_update:true,bot_token:el('setBotToken').value,telegram_webhook_secret:el('setWebhookSecret').value,app_encryption_key:el('setEncryptionKey').value,auth_max_age_seconds:el('setAuthAge').value,allow_dev_auth:el('setDevAuth').checked,dev_telegram_id:el('setDevTelegramId').value,blupal_base_url:el('setBlupalBase').value,blupal_api_key:el('setBlupalApiKey').value,blupal_card_number:el('setBlupalCard').value,bitpin_enabled:el('setBitpinEnabled').checked,bitpin_base_url:el('setBitpinBase').value,bitpin_api_key:el('setBitpinApiKey').value,bitpin_api_secret:el('setBitpinApiSecret').value,bitpin_asset:el('setBitpinAsset').value,bitpin_network:el('setBitpinNetwork').value,bitpin_deposit_address:el('setBitpinAddress').value,bitpin_toman_per_unit:el('setBitpinRate').value,bitpin_min_crypto_amount:el('setBitpinMin').value,pasarguard_panel_url:el('setPgUrl').value,pasarguard_admin_username:el('setPgUsername').value,pasarguard_admin_password:el('setPgPassword').value,pasarguard_access_token:el('setPgToken').value,pasarguard_sales_role_id:el('setPgSalesRoleId').value,pasarguard_sales_role_name:el('setPgSalesRoleName').value,pasarguard_master_role_id:el('setPgMasterRoleId').value,pasarguard_master_role_name:el('setPgMasterRoleName').value,pasarguard_reseller_role_id:el('setPgSalesRoleId').value,pasarguard_reseller_role_name:el('setPgSalesRoleName').value,pasarguard_admin_data_limit_bytes:el('setPgDataLimit').value,pasarguard_sub_domain:el('setPgSubDomain').value,pasarguard_support_url:el('setPgSupportUrl').value,pasarguard_set_telegram_id:true,github_repo:el('setGithubRepo').value,github_branch:el('setGithubBranch').value,github_worker_file:el('setGithubWorkerFile').value,github_version_file:el('setGithubVersionFile').value,github_token:el('setGithubToken').value,cf_account_id:el('setCfAccount').value,cf_worker_name:el('setCfWorker').value,cf_api_token:el('setCfToken').value,python_helper_auto_provision:true,python_helper_worker_name:el('setPythonWorker').value};await api('/api/admin/settings',{method:'POST',body:JSON.stringify(body)});['setBotToken','setWebhookSecret','setEncryptionKey','setBlupalApiKey','setBitpinApiKey','setBitpinApiSecret','setPgPassword','setPgToken','setGithubToken','setCfToken'].forEach(function(k){el(k).value=''});toast('همه تنظیمات ذخیره شد');if(el('saveStatus')){el('saveStatus').textContent='تنظیمات ذخیره شد.';el('saveStatus').style.color='var(--ok)'}await load()}catch(err){toast(err.message)}};
-  if(el('testBitpinBtn'))el('testBitpinBtn').onclick=async function(){try{await api('/api/admin/settings',{method:'POST',body:JSON.stringify({bitpin_enabled:el('setBitpinEnabled').checked,bitpin_base_url:el('setBitpinBase').value,bitpin_api_key:el('setBitpinApiKey').value,bitpin_api_secret:el('setBitpinApiSecret').value,bitpin_asset:el('setBitpinAsset').value,bitpin_network:el('setBitpinNetwork').value,bitpin_deposit_address:el('setBitpinAddress').value,bitpin_toman_per_unit:el('setBitpinRate').value,bitpin_min_crypto_amount:el('setBitpinMin').value})});el('setBitpinApiKey').value='';el('setBitpinApiSecret').value='';var d=await api('/api/admin/payments/bitpin/test',{method:'POST',body:'{}'}),w=d.selected_wallet;toast(w?'اتصال برقرار است؛ موجودی '+w.asset+': '+w.balance:'اتصال بیت‌پین برقرار است');await load()}catch(e){toast(e.message)}};
+  el('settingsForm').onsubmit=async function(e){e.preventDefault();try{var body={brand_name:el('setBrand').value,price_per_gb:el('setPrice').value,setup_fee:el('setSetupFee').value,reseller_store_bot_setup_fee:el('setStoreBotFee').value,reseller_store_bot_license_renewal_fee:el('setStoreBotLicenseFee').value,reseller_master_bot_setup_fee:el('setMasterBotFee').value,reseller_master_bot_license_renewal_fee:el('setMasterBotLicenseFee').value,master_min_markup_toman:el('setMasterMarkupFee').value,central_recharge_bonus_percent:el('setCentralBonus').value,central_trial_enabled:el('setCentralTrialEnabled').checked,central_trial_data_limit_bytes:Number(el('setCentralTrialMb').value||1024)*1048576,central_trial_duration_hours:el('setCentralTrialHours').value,min_recharge:el('setMinRecharge').value,support_username:el('setSupport').value,app_url:el('setAppUrl').value,admin_ids:el('setAdminIds').value,usage_sync_enabled:el('setUsageSync').checked,payment_poll_enabled:el('setPaymentPoll').checked,auto_delete_pending_invoices:el('setAutoDeletePending').checked,pending_invoice_ttl_hours:el('setPendingTtl').value,auto_update:true,bot_token:el('setBotToken').value,telegram_webhook_secret:el('setWebhookSecret').value,app_encryption_key:el('setEncryptionKey').value,auth_max_age_seconds:el('setAuthAge').value,allow_dev_auth:el('setDevAuth').checked,dev_telegram_id:el('setDevTelegramId').value,blupal_base_url:el('setBlupalBase').value,blupal_api_key:el('setBlupalApiKey').value,blupal_card_number:el('setBlupalCard').value,pasarguard_panel_url:el('setPgUrl').value,pasarguard_admin_username:el('setPgUsername').value,pasarguard_admin_password:el('setPgPassword').value,pasarguard_access_token:el('setPgToken').value,pasarguard_sales_role_id:el('setPgSalesRoleId').value,pasarguard_sales_role_name:el('setPgSalesRoleName').value,pasarguard_master_role_id:el('setPgMasterRoleId').value,pasarguard_master_role_name:el('setPgMasterRoleName').value,pasarguard_reseller_role_id:el('setPgSalesRoleId').value,pasarguard_reseller_role_name:el('setPgSalesRoleName').value,pasarguard_admin_data_limit_bytes:el('setPgDataLimit').value,pasarguard_sub_domain:el('setPgSubDomain').value,pasarguard_support_url:el('setPgSupportUrl').value,pasarguard_set_telegram_id:true,github_repo:el('setGithubRepo').value,github_branch:el('setGithubBranch').value,github_worker_file:el('setGithubWorkerFile').value,github_version_file:el('setGithubVersionFile').value,github_token:el('setGithubToken').value,cf_account_id:el('setCfAccount').value,cf_worker_name:el('setCfWorker').value,cf_api_token:el('setCfToken').value,python_helper_auto_provision:true,python_helper_worker_name:el('setPythonWorker').value};await api('/api/admin/settings',{method:'POST',body:JSON.stringify(body)});['setBotToken','setWebhookSecret','setEncryptionKey','setBlupalApiKey','setPgPassword','setPgToken','setGithubToken','setCfToken'].forEach(function(k){el(k).value=''});toast('همه تنظیمات ذخیره شد');if(el('saveStatus')){el('saveStatus').textContent='تنظیمات ذخیره شد.';el('saveStatus').style.color='var(--ok)'}await load()}catch(err){toast(err.message)}};
   el('showWebhookBtn').onclick=async function(){try{var d=await api('/api/admin/payments/blupal/webhook-url');el('webhookBox').style.display='block';el('webhookBox').innerHTML='<b>Webhook بلوپال</b><div class="credential-row"><span class="credential-value" style="word-break:break-all">'+esc(d.webhook_url)+'</span><button class="copy-mini" data-copy="'+esc(d.webhook_url)+'">کپی</button></div><b style="display:block;margin-top:14px">صفحه بازگشت بلوپال</b><div class="credential-row"><span class="credential-value" style="word-break:break-all">'+esc(d.return_url||d.callback_url)+'</span><button class="copy-mini" data-copy="'+esc(d.return_url||d.callback_url)+'">کپی</button></div><div class="muted" style="margin-top:8px">این آدرس را در بخش Return URL یا Callback URL تنظیمات API بلوپال ثبت کنید.</div>';bindCopyButtons(el('webhookBox'))}catch(e){toast(e.message)}};
   el('syncPaymentsBtn').onclick=async function(){try{var d=await api('/api/admin/payments/sync',{method:'POST',body:'{}'});toast('بررسی: '+d.result.checked+'، شارژ جدید: '+d.result.credited);await load()}catch(e){toast(e.message)}};
   el('cleanupPaymentsBtn').onclick=async function(){try{var d=await api('/api/admin/payments/cleanup',{method:'POST',body:'{}'});toast('حذف‌شده: '+d.result.deleted+'، پرداخت‌شده: '+d.result.credited+'، ردشده: '+d.result.skipped);await load()}catch(e){toast(e.message)}};
@@ -9144,7 +9479,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_EDGE_VERSION='3.0.8';
+const BLUEPANEL_EDGE_VERSION='3.0.9';
 function bluePanelEdgeJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function bluePanelEdgeInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
 function bluePanelEdgeRuntimeBinding(env,name){const value=env?.[name];return{name,exact_key_present:Object.prototype.hasOwnProperty.call(env||{},name),value_present:value!==undefined&&value!==null,fetch_callable:Boolean(value&&typeof value.fetch==='function'),constructor_name:value?.constructor?.name||''}}
@@ -9169,6 +9504,8 @@ export default {
   if(['/', '/app','/miniapp'].includes(path)&&request.method==='GET')return new Response(MINI_APP_HTML.replaceAll('__APP_VERSION__',APP_VERSION).replaceAll('__CONTROL_MODE__','false'),{headers:bluePanelStaticHeaders()});
   const wh=path.match(/^\/sales-bot\/([^/]+)\/webhook$/);if(wh&&request.method==='POST')return resellerSalesWebhook(request,runtime,decodeURIComponent(wh[1]),ctx);
   const pwh=path.match(/^\/sales-payments\/([^/]+)\/blupal\/webhook$/);if(pwh&&request.method==='POST')return resellerBlupalWebhook(request,runtime,ctx,decodeURIComponent(pwh[1]));
+  const pcback=path.match(/^\/sales-payments\/([^/]+)\/plisio\/callback$/);if(pcback&&request.method==='POST')return resellerPlisioCallback(request,runtime,decodeURIComponent(pcback[1]));
+  const pcret=path.match(/^\/sales-payments\/([^/]+)\/plisio\/return$/);if(pcret&&request.method==='GET'){await ensureDb(runtime);const bot=await getResellerBotById(runtime,decodeURIComponent(pcret[1]));if(!bot)return new Response('Not found',{status:404});return new Response(resellerPlisioReturnPage(bot,request.headers.get('x-bluepanel-public-origin')||url.origin,url),{headers:bluePanelStaticHeaders()});}
   const pret=path.match(/^\/sales-payments\/([^/]+)\/return$/);if(pret&&request.method==='GET'){await ensureDb(runtime);const bot=await getResellerBotById(runtime,decodeURIComponent(pret[1]));if(!bot)return new Response('Not found',{status:404});return new Response(resellerBlupalReturnPage(bot,request.headers.get('x-bluepanel-public-origin')||url.origin),{headers:bluePanelStaticHeaders()});}
   const auth=path.match(/^\/reseller-control-auth\/([^/]+)\/(login|logout)$/);if(auth&&request.method==='POST')return auth[2]==='login'?resellerAdminWebLogin(request,runtime,decodeURIComponent(auth[1])):resellerAdminWebLogout(request,runtime,decodeURIComponent(auth[1]));
   const page=path.match(/^\/reseller-control\/([^/]+)$/);if(page&&request.method==='GET'){await ensureDb(runtime);const botId=decodeURIComponent(page[1]),bot=await getResellerBotById(runtime,botId);if(!bot)return new Response('Not found',{status:404});return new Response(RESELLER_CONTROL_HTML.replaceAll('__BOT_ID__',botId).replaceAll('__APP_VERSION__',APP_VERSION),{headers:bluePanelStaticHeaders()});}

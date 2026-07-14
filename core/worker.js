@@ -1,11 +1,11 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.0.8
+ * Version: 3.0.9
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.0.8";
+const APP_VERSION = "3.0.9";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -13,7 +13,8 @@ const RELEASE_NOTES = Object.freeze({
   central: Object.freeze([
     { emoji: "⚡", text: "کاهش رفت‌وبرگشت بین Workerها در مسیرهای پرتکرار" },
     { emoji: "🚀", text: "ارسال سریع‌تر منوی شروع با انتقال ثبت گزارش و پاک‌سازی نشست به پس‌زمینه" },
-    { emoji: "🧠", text: "کش کوتاه‌مدت تنظیمات و وضعیت عضویت برای پاسخ سریع‌تر" }
+    { emoji: "🧠", text: "کش کوتاه‌مدت تنظیمات و وضعیت عضویت برای پاسخ سریع‌تر" },
+    { emoji: "🪙", text: "افزودن درگاه رمزارزی Plisio با Callback امضاشده و شارژ یک‌باره" }
   ]),
   reseller: Object.freeze([
     { emoji: "📦", text: "تجمیع درخواست‌های اولیه پنل فروش و مدیریت در یک Batch دیتابیس" },
@@ -30,9 +31,7 @@ const RESELLER_BACKUP_FIELDS = Object.freeze([
   "cashback_enabled","cashback_percent","cashback_min_purchase_toman","cashback_max_toman",
   "notifications_enabled","expiry_reminder_hours","usage_reminder_percent","ticketing_enabled",
   "phone_verification_required","ticket_auto_close_hours","daily_report_enabled","daily_report_hour_utc",
-  "blupal_enabled","blupal_base_url","blupal_card_number",
-  "bitpin_enabled","bitpin_base_url","bitpin_asset","bitpin_network","bitpin_deposit_address","bitpin_toman_per_unit","bitpin_min_crypto_amount",
-  "miniapp_enabled",
+  "blupal_enabled","blupal_base_url","blupal_card_number","miniapp_enabled",
   "sales_automation_enabled","abandoned_reminder_minutes","winback_days","loyalty_enabled","loyalty_profile",
   "fraud_protection_enabled","order_cooldown_seconds","max_pending_orders","daily_order_limit",
   "daily_wallet_charge_limit_toman","duplicate_receipt_protection","auto_block_risk_score",
@@ -276,17 +275,15 @@ const DEFAULT_SETTINGS = {
   blupal_api_key: "",
   blupal_card_number: "",
   blupal_webhook_token: "",
-  bitpin_enabled: "false",
-  bitpin_base_url: "https://api.bitpin.ir",
-  bitpin_api_key: "",
-  bitpin_api_secret: "",
-  bitpin_asset: "USDT",
-  bitpin_network: "TRC20",
-  bitpin_deposit_address: "",
-  bitpin_toman_per_unit: "100000",
-  bitpin_min_crypto_amount: "1",
-  bitpin_last_verified_at: "",
-  bitpin_last_error: "",
+  plisio_enabled: "false",
+  plisio_api_key: "",
+  plisio_source_currency: "USD",
+  plisio_toman_per_source_unit: "0",
+  plisio_allowed_currencies: "",
+  plisio_expire_minutes: "60",
+  plisio_test_currency: "BTC",
+  plisio_last_verified_at: "",
+  plisio_last_error: "",
   payment_poll_enabled: "true",
   auto_delete_pending_invoices: "true",
   pending_invoice_ttl_hours: "24",
@@ -369,7 +366,7 @@ const DEFAULT_SETTINGS = {
 const SECRET_SETTING_KEYS = new Set([
   "bot_token", "app_encryption_key", "telegram_webhook_secret",
   "pasarguard_access_token", "pasarguard_admin_password",
-  "blupal_api_key", "blupal_webhook_token", "bitpin_api_key", "bitpin_api_secret",
+  "blupal_api_key", "blupal_webhook_token", "plisio_api_key",
   "github_token", "cf_api_token", "edge_worker_api_key", "setup_password_hash", "setup_password_salt"
 ]);
 
@@ -449,31 +446,6 @@ CREATE TABLE IF NOT EXISTS payment_invoices (
 
 CREATE INDEX IF NOT EXISTS idx_payment_invoices_user ON payment_invoices(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_payment_invoices_status ON payment_invoices(status, updated_at DESC);
-
-CREATE TABLE IF NOT EXISTS bitpin_deposits (
-  id TEXT PRIMARY KEY,
-  user_id INTEGER NOT NULL,
-  asset TEXT NOT NULL DEFAULT 'USDT',
-  network TEXT NOT NULL DEFAULT 'TRC20',
-  txid TEXT NOT NULL UNIQUE,
-  crypto_amount REAL NOT NULL,
-  rate_toman INTEGER NOT NULL,
-  amount_toman INTEGER NOT NULL,
-  destination_address TEXT,
-  status TEXT NOT NULL DEFAULT 'pending_review',
-  wallet_balance_snapshot TEXT,
-  provider_payload TEXT,
-  note TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  reviewed_at TEXT,
-  reviewed_by INTEGER,
-  credited_at TEXT,
-  FOREIGN KEY(user_id) REFERENCES users(id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_bitpin_deposits_user ON bitpin_deposits(user_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_bitpin_deposits_status ON bitpin_deposits(status, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS agencies (
   id TEXT PRIMARY KEY,
@@ -673,26 +645,23 @@ CREATE INDEX IF NOT EXISTS idx_reseller_bots_agency ON reseller_bots(agency_id);
 CREATE INDEX IF NOT EXISTS idx_reseller_bots_parent ON reseller_bots(parent_bot_id,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_reseller_bots_license_type ON reseller_bots(license_type,purchase_source,status);
 
-CREATE TABLE IF NOT EXISTS reseller_bitpin_configs (
+CREATE TABLE IF NOT EXISTS reseller_plisio_configs (
   bot_id TEXT PRIMARY KEY,
-  bitpin_enabled INTEGER NOT NULL DEFAULT 0,
-  bitpin_base_url TEXT NOT NULL DEFAULT 'https://api.bitpin.ir',
-  bitpin_api_key_enc TEXT,
-  bitpin_api_secret_enc TEXT,
-  bitpin_asset TEXT NOT NULL DEFAULT 'USDT',
-  bitpin_network TEXT NOT NULL DEFAULT 'TRC20',
-  bitpin_deposit_address TEXT,
-  bitpin_toman_per_unit INTEGER NOT NULL DEFAULT 100000,
-  bitpin_min_crypto_amount REAL NOT NULL DEFAULT 1,
-  bitpin_configured_at TEXT,
-  bitpin_last_verified_at TEXT,
-  bitpin_last_error TEXT,
+  plisio_enabled INTEGER NOT NULL DEFAULT 0,
+  plisio_api_key_enc TEXT,
+  plisio_source_currency TEXT NOT NULL DEFAULT 'USD',
+  plisio_toman_per_source_unit INTEGER NOT NULL DEFAULT 0,
+  plisio_allowed_currencies TEXT NOT NULL DEFAULT '',
+  plisio_expire_minutes INTEGER NOT NULL DEFAULT 60,
+  plisio_test_currency TEXT NOT NULL DEFAULT 'BTC',
+  plisio_configured_at TEXT,
+  plisio_last_verified_at TEXT,
+  plisio_last_error TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY(bot_id) REFERENCES reseller_bots(id)
 );
-
-CREATE INDEX IF NOT EXISTS idx_reseller_bitpin_enabled ON reseller_bitpin_configs(bitpin_enabled,updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reseller_plisio_enabled ON reseller_plisio_configs(plisio_enabled,updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS reseller_usage_events (
   event_key TEXT PRIMARY KEY,
@@ -895,34 +864,6 @@ CREATE TABLE IF NOT EXISTS sales_wallet_requests (
 );
 CREATE INDEX IF NOT EXISTS idx_sales_wallet_requests_bot ON sales_wallet_requests(bot_id,status,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sales_wallet_requests_customer ON sales_wallet_requests(customer_id,created_at DESC);
-
-CREATE TABLE IF NOT EXISTS sales_bitpin_deposits (
-  id TEXT PRIMARY KEY,
-  bot_id TEXT NOT NULL,
-  customer_id TEXT NOT NULL,
-  asset TEXT NOT NULL,
-  network TEXT NOT NULL,
-  txid TEXT NOT NULL,
-  crypto_amount REAL NOT NULL,
-  rate_toman INTEGER NOT NULL,
-  amount_toman INTEGER NOT NULL,
-  destination_address TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending_review',
-  wallet_balance_snapshot TEXT,
-  provider_payload TEXT,
-  note TEXT,
-  origin TEXT NOT NULL DEFAULT 'bot',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  reviewed_at TEXT,
-  reviewed_by_telegram_id TEXT,
-  credited_at TEXT,
-  FOREIGN KEY(bot_id) REFERENCES reseller_bots(id),
-  FOREIGN KEY(customer_id) REFERENCES sales_customers(id),
-  UNIQUE(bot_id,txid)
-);
-CREATE INDEX IF NOT EXISTS idx_sales_bitpin_deposits_bot ON sales_bitpin_deposits(bot_id,status,created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_sales_bitpin_deposits_customer ON sales_bitpin_deposits(customer_id,created_at DESC);
 
 CREATE TABLE IF NOT EXISTS sales_payment_invoices (
   id TEXT PRIMARY KEY,
@@ -1881,14 +1822,12 @@ function publicSettings(settings) {
     release_last_announcement_at: settings.release_last_announcement_at || "",
     release_last_announcement_error: settings.release_last_announcement_error || "",
     min_recharge: Number(settings.min_recharge || 0),
-    payment_provider: "blupal",
-    bitpin_enabled: settings.bitpin_enabled === "true" && Boolean(settings.bitpin_deposit_address),
-    bitpin_asset: settings.bitpin_asset || "USDT",
-    bitpin_network: settings.bitpin_network || "TRC20",
-    bitpin_deposit_address: settings.bitpin_deposit_address || "",
-    bitpin_toman_per_unit: Number(settings.bitpin_toman_per_unit || 0),
-    bitpin_min_crypto_amount: Number(settings.bitpin_min_crypto_amount || 0),
-    bitpin_review_mode: "txid_manual_review",
+    payment_provider: settings.plisio_enabled === "true" ? "plisio" : "blupal",
+    plisio_enabled: settings.plisio_enabled === "true" && Boolean(settings.plisio_api_key) && Number(settings.plisio_toman_per_source_unit || 0) > 0,
+    plisio_source_currency: settings.plisio_source_currency || "USD",
+    plisio_toman_per_source_unit: Number(settings.plisio_toman_per_source_unit || 0),
+    plisio_allowed_currencies: settings.plisio_allowed_currencies || "",
+    plisio_expire_minutes: Number(settings.plisio_expire_minutes || 60),
     support_username: settings.support_username || "",
     version: APP_VERSION
   };
@@ -1923,19 +1862,18 @@ function adminSettings(settings) {
     release_last_announcement_at: settings.release_last_announcement_at || "",
     release_last_announcement_error: settings.release_last_announcement_error || "",
     min_recharge: Number(settings.min_recharge || 0),
-    payment_provider: "blupal",
+    payment_provider: settings.plisio_enabled === "true" ? "plisio" : "blupal",
+    plisio_enabled: settings.plisio_enabled === "true",
+    plisio_source_currency: settings.plisio_source_currency || "USD",
+    plisio_toman_per_source_unit: Number(settings.plisio_toman_per_source_unit || 0),
+    plisio_allowed_currencies: settings.plisio_allowed_currencies || "",
+    plisio_expire_minutes: Number(settings.plisio_expire_minutes || 60),
+    plisio_test_currency: settings.plisio_test_currency || "BTC",
+    plisio_last_verified_at: settings.plisio_last_verified_at || "",
+    plisio_last_error: settings.plisio_last_error || "",
     support_username: settings.support_username || "",
     blupal_base_url: settings.blupal_base_url || "https://blupal.net/api",
     blupal_card_number: settings.blupal_card_number || "",
-    bitpin_enabled: settings.bitpin_enabled === "true",
-    bitpin_base_url: settings.bitpin_base_url || "https://api.bitpin.ir",
-    bitpin_asset: settings.bitpin_asset || "USDT",
-    bitpin_network: settings.bitpin_network || "TRC20",
-    bitpin_deposit_address: settings.bitpin_deposit_address || "",
-    bitpin_toman_per_unit: Number(settings.bitpin_toman_per_unit || 0),
-    bitpin_min_crypto_amount: Number(settings.bitpin_min_crypto_amount || 0),
-    bitpin_last_verified_at: settings.bitpin_last_verified_at || "",
-    bitpin_last_error: settings.bitpin_last_error || "",
     payment_poll_enabled: settings.payment_poll_enabled === "true",
     auto_delete_pending_invoices: settings.auto_delete_pending_invoices === "true",
     pending_invoice_ttl_hours: Number(settings.pending_invoice_ttl_hours || 24),
@@ -3769,11 +3707,6 @@ async function bootstrap(request, env) {
            payment_link, card_number, paid_at, credited_at, created_at, updated_at
     FROM payment_invoices WHERE user_id=? ORDER BY created_at DESC LIMIT 30
   `).bind(auth.user.id).all();
-  const bitpinDeposits = await env.PASARGUARD_DB.prepare(`
-    SELECT id,asset,network,txid,crypto_amount,rate_toman,amount_toman,destination_address,status,note,
-           created_at,updated_at,reviewed_at,credited_at
-    FROM bitpin_deposits WHERE user_id=? ORDER BY created_at DESC LIMIT 30
-  `).bind(auth.user.id).all();
   const ledger = await env.PASARGUARD_DB.prepare(`
     SELECT id, type, amount, balance_after, description, created_at
     FROM wallet_ledger WHERE user_id=? ORDER BY created_at DESC LIMIT 40
@@ -3802,18 +3735,12 @@ async function bootstrap(request, env) {
       FROM payment_invoices p JOIN users u ON u.id=p.user_id
       ORDER BY p.created_at DESC LIMIT 100
     `).all();
-    const recentBitpinDeposits = await env.PASARGUARD_DB.prepare(`
-      SELECT d.id,d.asset,d.network,d.txid,d.crypto_amount,d.rate_toman,d.amount_toman,d.status,d.note,
-             d.created_at,d.updated_at,d.reviewed_at,d.credited_at,u.telegram_id,u.username,u.first_name,u.last_name
-      FROM bitpin_deposits d JOIN users u ON u.id=d.user_id
-      ORDER BY d.created_at DESC LIMIT 100
-    `).all();
     const stats = await env.PASARGUARD_DB.prepare(`
       SELECT
         (SELECT COUNT(*) FROM users) AS users_count,
         (SELECT COUNT(*) FROM agencies) AS agencies_count,
         (SELECT COUNT(*) FROM agencies WHERE status='active') AS active_agencies,
-        ((SELECT COUNT(*) FROM payment_invoices WHERE status='PENDING') + (SELECT COUNT(*) FROM bitpin_deposits WHERE status='pending_review')) AS pending_payments,
+        (SELECT COUNT(*) FROM payment_invoices WHERE status='PENDING') AS pending_payments,
         (SELECT COALESCE(SUM(wallet_balance),0) FROM users) AS total_wallet_balance,
         (SELECT COALESCE(SUM(total_charged),0) FROM agencies) AS total_usage_revenue
     `).first();
@@ -3829,7 +3756,6 @@ async function bootstrap(request, env) {
     configuration.python_helper_binding_detected = Boolean(env.PY_HELPER && typeof env.PY_HELPER.fetch === "function");
     admin = {
       recentPayments: recentPayments.results || [],
-      recentBitpinDeposits: recentBitpinDeposits.results || [],
       users: users.results || [],
       stats,
       configuration
@@ -3851,7 +3777,6 @@ async function bootstrap(request, env) {
     central_trial: centralTrial,
     agencies: agencyList,
     payments: paymentList,
-    bitpin_deposits: bitpinDeposits.results || [],
     ledger: ledger.results || [],
     dashboard_insight: dashboardInsightResult,
     pasarguard_sync: pasarguardSync,
@@ -3922,331 +3847,125 @@ async function blupalRequest(env, method, path, body = undefined) {
 }
 
 
-function normalizeBitpinBaseUrl(value) {
-  const raw = String(value || "https://api.bitpin.ir").trim();
+function normalizePlisioBaseUrl(value = "https://api.plisio.net/api/v1") {
+  const raw = String(value || "https://api.plisio.net/api/v1").trim();
   let url;
-  try { url = new URL(raw); } catch (_) { throw new Error("آدرس API بیت‌پین معتبر نیست"); }
-  if (url.protocol !== "https:" || url.hostname.toLowerCase() !== "api.bitpin.ir") {
-    throw new Error("آدرس API بیت‌پین باید https://api.bitpin.ir باشد");
-  }
-  return "https://api.bitpin.ir";
+  try { url = new URL(raw); } catch (_) { throw new Error("آدرس API Plisio معتبر نیست"); }
+  if (url.protocol !== "https:" || url.hostname.toLowerCase() !== "api.plisio.net") throw new Error("دامنه API Plisio معتبر نیست");
+  const path = url.pathname.replace(/\/+$/, "");
+  if (path !== "/api/v1") throw new Error("مسیر API Plisio باید /api/v1 باشد");
+  return "https://api.plisio.net/api/v1";
 }
 
-function bitpinWalletRows(payload) {
-  if (Array.isArray(payload)) return payload;
-  for (const key of ["results", "wallets", "data", "items"]) {
-    if (Array.isArray(payload?.[key])) return payload[key];
-  }
-  if (payload?.data && typeof payload.data === "object") {
-    for (const key of ["results", "wallets", "items"]) if (Array.isArray(payload.data[key])) return payload.data[key];
-  }
-  return [];
+function normalizePlisioStatus(value) {
+  const status = String(value || "new").trim().toLowerCase();
+  if (status === "completed") return "PAID";
+  if (status === "expired") return "EXPIRED";
+  if (status === "cancelled" || status === "cancelled duplicate") return "CANCELED";
+  if (status === "error" || status === "mismatch") return "FAILED";
+  return "PENDING";
 }
 
-function bitpinWalletSymbol(row) {
-  return cleanText(
-    row?.currency?.code || row?.currency?.symbol || row?.currency?.title || row?.symbol || row?.code ||
-    row?.currency_symbol || row?.asset || row?.coin || row?.name,
-    40
-  ).toUpperCase();
+function plisioConfigured(settings) {
+  return settings?.plisio_enabled === "true" && !!String(settings?.plisio_api_key || "").trim() && Number(settings?.plisio_toman_per_source_unit || 0) > 0;
 }
 
-function bitpinWalletBalance(row) {
-  const candidates = [row?.available_balance, row?.available, row?.balance, row?.total_balance, row?.total, row?.amount, row?.credit];
-  for (const value of candidates) {
-    const number = Number(value);
-    if (Number.isFinite(number)) return number;
-  }
-  return 0;
-}
-
-function sanitizeBitpinWallets(payload) {
-  return bitpinWalletRows(payload).slice(0, 250).map(row => ({
-    asset: bitpinWalletSymbol(row),
-    balance: bitpinWalletBalance(row),
-    frozen: Number(row?.frozen_balance ?? row?.frozen ?? row?.blocked ?? 0) || 0
-  })).filter(row => row.asset);
-}
-
-async function bitpinSettingSecret(settings, key, env) {
-  const raw = String(settings?.[key] || "").trim();
-  if (!raw) return "";
+async function centralPlisioApiKey(settings, env) {
+  const raw = String(settings?.plisio_api_key || "").trim();
+  if (!raw) throw new Error("Secret Key درگاه Plisio ثبت نشده است");
   if (!raw.startsWith("enc:")) return raw;
-  try { return await decryptSecret(raw.slice(4), env); }
-  catch (_) {
-    const error = new Error("رمزگشایی اطلاعات اتصال بیت‌پین ناموفق بود؛ کلید رمزگذاری برنامه را بررسی کنید");
-    error.code = "BITPIN_SECRET_DECRYPT_FAILED";
-    error.status = 500;
-    throw error;
+  try {
+    const value = await decryptSecret(raw.slice(4), env);
+    if (!value) throw new Error("empty");
+    return value;
+  } catch (_) {
+    throw new Error("Secret Key درگاه Plisio قابل بازیابی نیست؛ آن را دوباره ثبت کنید");
   }
 }
 
-async function bitpinApiSession(settings, env) {
-  const apiKey = (await bitpinSettingSecret(settings, "bitpin_api_key", env)).trim();
-  const apiSecret = (await bitpinSettingSecret(settings, "bitpin_api_secret", env)).trim();
-  if (!apiKey || !apiSecret) {
-    const error = new Error("API Key و Secret بیت‌پین در تنظیمات ثبت نشده است");
-    error.code = "BITPIN_NOT_CONFIGURED";
-    error.status = 400;
-    throw error;
+async function plisioRequest(settings, env, path, params = {}) {
+  const apiKey = await centralPlisioApiKey(settings, env);
+  const url = new URL(normalizePlisioBaseUrl() + path);
+  for (const [key, value] of Object.entries(params || {})) {
+    if (value !== undefined && value !== null && String(value) !== "") url.searchParams.set(key, String(value));
   }
-  const base = normalizeBitpinBaseUrl(settings.bitpin_base_url);
-  const response = await fetchWithTimeout(base + "/v1/usr/api/login/", {
-    method: "POST",
-    headers: { "content-type": "application/json", "accept": "application/json" },
-    body: JSON.stringify({ api_key: apiKey, secret_key: apiSecret })
-  }, 15000);
+  url.searchParams.set("api_key", apiKey);
+  const response = await fetch(url.toString(), { method: "GET", headers: { accept: "application/json" } });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok || !data?.access) {
-    const error = new Error(cleanText(data?.detail || data?.message || data?.error || ("Bitpin HTTP " + response.status), 500));
-    error.code = "BITPIN_LOGIN_FAILED";
-    error.status = response.status || 502;
+  if (!response.ok || data?.status !== "success") {
+    const message = cleanText(data?.data?.message || data?.message || data?.error || ("Plisio HTTP " + response.status), 700);
+    const error = new Error(message || "خطای ناشناخته Plisio");
+    error.code = "PLISIO_ERROR";
+    error.status = response.status;
     throw error;
   }
-  return { base, access: String(data.access), refresh: String(data.refresh || "") };
+  return data.data;
 }
 
-async function fetchBitpinWallets(settings, env) {
-  const session = await bitpinApiSession(settings, env);
-  const response = await fetchWithTimeout(session.base + "/v1/wlt/wallets/", {
-    method: "GET",
-    headers: { "accept": "application/json", "Authorization": "Bearer " + session.access }
-  }, 15000);
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = new Error(cleanText(data?.detail || data?.message || data?.error || ("Bitpin HTTP " + response.status), 500));
-    error.code = "BITPIN_WALLETS_FAILED";
-    error.status = response.status || 502;
-    throw error;
-  }
-  return { raw: data, wallets: sanitizeBitpinWallets(data) };
+function plisioSourceAmount(amountToman, settings) {
+  const rate = Number(settings?.plisio_toman_per_source_unit || 0);
+  if (!Number.isFinite(rate) || rate <= 0) throw new Error("نرخ تبدیل تومان به ارز مبنا در تنظیمات Plisio ثبت نشده است");
+  const value = Number((Number(amountToman || 0) / rate).toFixed(2));
+  if (!Number.isFinite(value) || value < 0.01) throw new Error("مبلغ فاکتور پس از تبدیل کمتر از حد مجاز Plisio است");
+  return value;
 }
 
-async function recordBitpinConnectionState(env, success, errorMessage = "") {
-  const values = success
-    ? { bitpin_last_verified_at: nowIso(), bitpin_last_error: "" }
-    : { bitpin_last_error: cleanText(errorMessage, 800) };
-  try { await setSettings(env, values); } catch (_) {}
+function centralPlisioUrls(origin) {
+  const base = String(origin || "").replace(/\/+$/, "");
+  return {
+    callback_url: base + "/payments/plisio/callback?json=true",
+    success_callback_url: base + "/payments/plisio/return?status=success&json=true",
+    fail_callback_url: base + "/payments/plisio/return?status=failed&json=true",
+    return_url: base + "/payments/plisio/return"
+  };
 }
 
-async function testBitpinConnection(request, env) {
-  const auth = await requireAuth(request, env, true);
-  if (auth.response) return auth.response;
+function plisioOperationData(payload) {
+  const data = payload?.data && typeof payload.data === "object" ? payload.data : (payload || {});
+  const params = data?.params && typeof data.params === "object" ? data.params : {};
+  return {
+    txn_id: cleanText(data.txn_id || data.id || payload?.txn_id, 160),
+    order_number: cleanText(data.order_number || params.order_number || payload?.order_number, 160),
+    status: String(data.status || payload?.status || "new"),
+    source_amount: Number(data.source_amount ?? params.source_amount ?? payload?.source_amount),
+    source_currency: cleanText(data.source_currency || params.source_currency || payload?.source_currency, 20).toUpperCase(),
+    currency: cleanText(data.currency || data.psys_cid || payload?.currency, 40).toUpperCase(),
+    finished_at_utc: data.finished_at_utc || payload?.finished_at_utc || null,
+    raw: payload
+  };
+}
+
+async function hmacSha1Hex(secret, text) {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(String(secret)), { name: "HMAC", hash: "SHA-1" }, false, ["sign"]);
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(String(text)));
+  return bytesToHex(signature);
+}
+
+async function verifyPlisioCallback(payload, secret) {
+  if (!payload || typeof payload !== "object" || !payload.verify_hash) return false;
+  const ordered = { ...payload };
+  const supplied = String(ordered.verify_hash || "");
+  delete ordered.verify_hash;
+  const expected = await hmacSha1Hex(secret, JSON.stringify(ordered));
+  return constantTimeTextEqual(expected, supplied);
+}
+
+async function recordCentralPlisioState(env, ok, message = "") {
+  await setSettings(env, ok ? { plisio_last_verified_at: nowIso(), plisio_last_error: "" } : { plisio_last_error: cleanText(message, 800) });
+}
+
+async function testCentralPlisioConnection(env) {
   const settings = await getSettings(env);
-  try {
-    const snapshot = await fetchBitpinWallets(settings, env);
-    await recordBitpinConnectionState(env, true);
-    const asset = String(settings.bitpin_asset || "USDT").toUpperCase();
-    const selected = snapshot.wallets.find(row => row.asset === asset) || null;
-    await audit(env, auth.user.id, "bitpin_connection_tested", { asset, walletFound: Boolean(selected) });
-    return json({ success: true, asset, selected_wallet: selected, wallets: snapshot.wallets });
-  } catch (error) {
-    await recordBitpinConnectionState(env, false, error.message);
-    return fail("اتصال به بیت‌پین ناموفق بود: " + error.message, error.status || 502, error.code || "BITPIN_TEST_FAILED");
-  }
-}
-
-async function createBitpinDepositClaim(request, env) {
-  const auth = await requireAuth(request, env);
-  if (auth.response) return auth.response;
-  const settings = await getSettings(env);
-  if (settings.bitpin_enabled !== "true") return fail("واریز رمزارزی بیت‌پین غیرفعال است", 403, "BITPIN_DISABLED");
-  const address = cleanText(settings.bitpin_deposit_address, 300);
-  if (!address) return fail("آدرس واریز بیت‌پین در تنظیمات ثبت نشده است", 503, "BITPIN_ADDRESS_MISSING");
-  const body = await parseBody(request);
-  const cryptoAmount = Number(body.crypto_amount);
-  const minCrypto = Math.max(0.00000001, Number(settings.bitpin_min_crypto_amount || 1));
-  if (!Number.isFinite(cryptoAmount) || cryptoAmount < minCrypto || cryptoAmount > 1000000000) {
-    return fail("مقدار رمزارز معتبر نیست؛ حداقل " + minCrypto + " است", 400, "INVALID_CRYPTO_AMOUNT");
-  }
-  const txid = cleanText(body.txid, 220).replace(/\s+/g, "").toLowerCase();
-  if (!/^[a-z0-9:_-]{16,220}$/i.test(txid)) return fail("شناسه تراکنش (TXID) معتبر نیست", 400, "INVALID_TXID");
-  const rate = clampInt(settings.bitpin_toman_per_unit, 1, 1000000000000);
-  const amountToman = Math.floor(cryptoAmount * rate);
-  if (amountToman < Math.max(10000, clampInt(settings.min_recharge, 0))) {
-    return fail("ارزش واریز از حداقل شارژ کمتر است", 400, "AMOUNT_TOO_LOW");
-  }
-  let snapshot;
-  try {
-    snapshot = await fetchBitpinWallets(settings, env);
-    await recordBitpinConnectionState(env, true);
-  } catch (error) {
-    await recordBitpinConnectionState(env, false, error.message);
-    return fail("استعلام حساب بیت‌پین ناموفق بود: " + error.message, error.status || 502, error.code || "BITPIN_SYNC_FAILED");
-  }
-  const asset = cleanText(settings.bitpin_asset || "USDT", 30).toUpperCase();
-  const network = cleanText(settings.bitpin_network || "TRC20", 40).toUpperCase();
-  const selectedWallet = snapshot.wallets.find(row => row.asset === asset) || null;
-  const claimId = id("bpd");
-  const ts = nowIso();
-  try {
-    await env.PASARGUARD_DB.prepare(`
-      INSERT INTO bitpin_deposits(
-        id,user_id,asset,network,txid,crypto_amount,rate_toman,amount_toman,destination_address,status,
-        wallet_balance_snapshot,provider_payload,note,created_at,updated_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,'pending_review',?,?,?,?,?)
-    `).bind(
-      claimId, auth.user.id, asset, network, txid, cryptoAmount, rate, amountToman, address,
-      selectedWallet ? String(selectedWallet.balance) : "", JSON.stringify({ wallets: snapshot.wallets }), cleanText(body.note, 300), ts, ts
-    ).run();
-  } catch (error) {
-    if (/unique|constraint/i.test(String(error?.message || error))) return fail("این TXID قبلاً ثبت شده است", 409, "DUPLICATE_TXID");
-    return fail("ثبت درخواست واریز ناموفق بود", 500, "BITPIN_CLAIM_STORAGE_FAILED");
-  }
-  await audit(env, auth.user.id, "bitpin_deposit_claim_created", { claimId, asset, network, txid, cryptoAmount, rate, amountToman });
-  const adminIds = parseAdminTelegramIds(settings.admin_ids || "");
-  for (const adminId of adminIds.slice(0, 20)) {
-    try {
-      await notifyTelegramUser(env, adminId, "🪙 درخواست واریز بیت‌پین\n" +
-        "کاربر: " + String(auth.user.telegram_id) + "\n" +
-        "مقدار: " + cryptoAmount + " " + asset + "\n" +
-        "ارزش: " + amountToman.toLocaleString("fa-IR") + " تومان\n" +
-        "شبکه: " + network + "\nTXID: " + txid);
-    } catch (_) {}
-  }
-  return json({ success: true, deposit: { id: claimId, asset, network, txid, crypto_amount: cryptoAmount, rate_toman: rate, amount_toman: amountToman, status: "pending_review", created_at: ts } });
-}
-
-async function reviewBitpinDeposit(request, env, claimId, decision, providedBody = null) {
-  const auth = await requireAuth(request, env, true);
-  if (auth.response) return auth.response;
-  const body = providedBody && typeof providedBody === "object" ? providedBody : await parseBody(request);
-  const claim = await env.PASARGUARD_DB.prepare(`
-    SELECT d.*,u.telegram_id,u.username,u.first_name,u.last_name,u.wallet_balance
-    FROM bitpin_deposits d JOIN users u ON u.id=d.user_id WHERE d.id=?
-  `).bind(claimId).first();
-  if (!claim) return fail("درخواست بیت‌پین پیدا نشد", 404, "BITPIN_CLAIM_NOT_FOUND");
-  if (decision === "reject") {
-    if (claim.credited_at) return fail("درخواست قبلاً شارژ شده و قابل رد نیست", 409, "ALREADY_CREDITED");
-    const ts = nowIso();
-    const result = await env.PASARGUARD_DB.prepare(`
-      UPDATE bitpin_deposits SET status='rejected',note=?,reviewed_at=?,reviewed_by=?,updated_at=?
-      WHERE id=? AND status='pending_review' AND credited_at IS NULL
-    `).bind(cleanText(body.note, 400), ts, auth.user.id, ts, claim.id).run();
-    if (!Number(result?.meta?.changes || 0)) return fail("این درخواست قبلاً بررسی شده است", 409, "ALREADY_REVIEWED");
-    await audit(env, auth.user.id, "bitpin_deposit_rejected", { claimId: claim.id, txid: claim.txid, note: cleanText(body.note, 400) });
-    await notifyTelegramUser(env, claim.telegram_id, "❌ درخواست واریز رمزارزی شما رد شد.\nTXID: " + claim.txid + (body.note ? "\nتوضیح: " + cleanText(body.note, 300) : ""));
-    return json({ success: true, status: "rejected" });
-  }
-
-  if (claim.credited_at) return json({ success: true, status: "approved", already_credited: true });
-  if (claim.status !== "pending_review") return fail("فقط درخواست در انتظار بررسی قابل تأیید است", 409, "INVALID_CLAIM_STATUS");
-  const settings = await getSettings(env);
-  let snapshot;
-  try {
-    snapshot = await fetchBitpinWallets(settings, env);
-    await recordBitpinConnectionState(env, true);
-  } catch (error) {
-    await recordBitpinConnectionState(env, false, error.message);
-    return fail("پیش از تأیید، اتصال بیت‌پین ناموفق بود: " + error.message, error.status || 502, error.code || "BITPIN_SYNC_FAILED");
-  }
-  const wallet = snapshot.wallets.find(row => row.asset === String(claim.asset || "").toUpperCase()) || null;
-  const ts = nowIso();
-  const ledgerId = "led_bitpin_" + claim.id;
-  const description = "شارژ بیت‌پین " + claim.crypto_amount + " " + claim.asset + " · TXID " + claim.txid;
-  const statements = [
-    env.PASARGUARD_DB.prepare(`
-      UPDATE bitpin_deposits
-      SET status='approved',credited_at=?,reviewed_at=?,reviewed_by=?,updated_at=?,note=?,provider_payload=?,wallet_balance_snapshot=?
-      WHERE id=? AND status='pending_review' AND credited_at IS NULL
-    `).bind(ts, ts, auth.user.id, ts, cleanText(body.note, 400), JSON.stringify({ wallets: snapshot.wallets }), wallet ? String(wallet.balance) : "", claim.id),
-    env.PASARGUARD_DB.prepare(`
-      UPDATE users SET wallet_balance=wallet_balance+?,updated_at=?
-      WHERE id=?
-        AND EXISTS(SELECT 1 FROM bitpin_deposits WHERE id=? AND status='approved' AND credited_at=?)
-        AND NOT EXISTS(SELECT 1 FROM wallet_ledger WHERE id=?)
-    `).bind(Number(claim.amount_toman), ts, claim.user_id, claim.id, ts, ledgerId),
-    env.PASARGUARD_DB.prepare(`
-      INSERT OR IGNORE INTO wallet_ledger(id,user_id,type,amount,balance_after,ref_type,ref_id,description,created_at)
-      SELECT ?,id,'recharge',?,wallet_balance,'bitpin',?,?,?
-      FROM users WHERE id=? AND EXISTS(SELECT 1 FROM bitpin_deposits WHERE id=? AND credited_at=?)
-    `).bind(ledgerId, Number(claim.amount_toman), claim.id, description, ts, claim.user_id, claim.id, ts)
-  ];
-  const results = await env.PASARGUARD_DB.batch(statements);
-  if (!Number(results?.[0]?.meta?.changes || 0)) return fail("تأیید انجام نشد یا درخواست هم‌زمان بررسی شده است", 409, "BITPIN_APPROVAL_CONFLICT");
-  const updatedUser = await env.PASARGUARD_DB.prepare("SELECT wallet_balance FROM users WHERE id=?").bind(claim.user_id).first();
-  await audit(env, auth.user.id, "bitpin_deposit_approved", { claimId: claim.id, txid: claim.txid, cryptoAmount: claim.crypto_amount, amountToman: claim.amount_toman, walletBalance: wallet?.balance ?? null });
-  await notifyTelegramUser(env, claim.telegram_id, "✅ واریز رمزارزی شما تأیید شد.\n" +
-    "مقدار: " + claim.crypto_amount + " " + claim.asset + "\n" +
-    "شارژ: " + Number(claim.amount_toman).toLocaleString("fa-IR") + " تومان\n" +
-    "موجودی جدید: " + Number(updatedUser?.wallet_balance || 0).toLocaleString("fa-IR") + " تومان");
-  return json({ success: true, status: "approved", amount_toman: Number(claim.amount_toman), wallet_balance: Number(updatedUser?.wallet_balance || 0), bitpin_wallet: wallet });
-}
-
-
-async function createBitpinDepositClaimForTelegram(env, user, settings, cryptoAmountRaw, txidRaw, note = "") {
-  if (settings.bitpin_enabled !== "true") throw new Error("واریز رمزارزی بیت‌پین غیرفعال است");
-  const address = cleanText(settings.bitpin_deposit_address, 300).replace(/\s+/g, "");
-  if (!address) throw new Error("آدرس واریز بیت‌پین ثبت نشده است");
-  const cryptoAmount = Number(cryptoAmountRaw);
-  const minCrypto = Math.max(0.00000001, Number(settings.bitpin_min_crypto_amount || 1));
-  if (!Number.isFinite(cryptoAmount) || cryptoAmount < minCrypto || cryptoAmount > 1000000000) throw new Error("مقدار رمزارز معتبر نیست؛ حداقل " + minCrypto + " است");
-  const txid = cleanText(txidRaw, 220).replace(/\s+/g, "").toLowerCase();
-  if (!/^[a-z0-9:_-]{16,220}$/i.test(txid)) throw new Error("شناسه تراکنش (TXID) معتبر نیست");
-  const rate = clampInt(settings.bitpin_toman_per_unit, 1, 1000000000000);
-  const amountToman = Math.floor(cryptoAmount * rate);
-  if (amountToman < Math.max(10000, clampInt(settings.min_recharge, 0))) throw new Error("ارزش واریز از حداقل شارژ کمتر است");
-  let snapshot;
-  try { snapshot = await fetchBitpinWallets(settings, env); await recordBitpinConnectionState(env, true); }
-  catch (error) { await recordBitpinConnectionState(env, false, error.message); throw new Error("استعلام حساب بیت‌پین ناموفق بود: " + error.message); }
-  const asset = cleanText(settings.bitpin_asset || "USDT", 30).toUpperCase();
-  const network = cleanText(settings.bitpin_network || "TRC20", 40).toUpperCase();
-  const selectedWallet = snapshot.wallets.find(row => row.asset === asset) || null;
-  const claimId = id("bpd");
-  const ts = nowIso();
-  try {
-    await env.PASARGUARD_DB.prepare(`INSERT INTO bitpin_deposits(
-      id,user_id,asset,network,txid,crypto_amount,rate_toman,amount_toman,destination_address,status,
-      wallet_balance_snapshot,provider_payload,note,created_at,updated_at
-    ) VALUES(?,?,?,?,?,?,?,?,?,'pending_review',?,?,?,?,?)`).bind(
-      claimId,user.id,asset,network,txid,cryptoAmount,rate,amountToman,address,
-      selectedWallet ? String(selectedWallet.balance) : "",JSON.stringify({wallets:snapshot.wallets}),cleanText(note,300),ts,ts
-    ).run();
-  } catch (error) {
-    if (/unique|constraint/i.test(String(error?.message || error))) throw new Error("این TXID قبلاً ثبت شده است");
-    throw error;
-  }
-  await audit(env,user.id,"bitpin_deposit_claim_created_bot",{claimId,asset,network,txid,cryptoAmount,rate,amountToman});
-  return {id:claimId,asset,network,txid,crypto_amount:cryptoAmount,rate_toman:rate,amount_toman:amountToman,status:"pending_review",created_at:ts};
-}
-
-async function reviewBitpinDepositFromTelegram(env, adminUser, claimId, decision) {
-  const claim = await env.PASARGUARD_DB.prepare(`SELECT d.*,u.telegram_id,u.username,u.first_name,u.last_name,u.wallet_balance
-    FROM bitpin_deposits d JOIN users u ON u.id=d.user_id WHERE d.id=?`).bind(claimId).first();
-  if (!claim) throw new Error("درخواست بیت‌پین پیدا نشد");
-  if (decision === "reject") {
-    if (claim.credited_at) throw new Error("این درخواست قبلاً شارژ شده است");
-    const ts=nowIso();
-    const result=await env.PASARGUARD_DB.prepare(`UPDATE bitpin_deposits SET status='rejected',reviewed_at=?,reviewed_by=?,updated_at=? WHERE id=? AND status='pending_review' AND credited_at IS NULL`).bind(ts,adminUser.id,ts,claim.id).run();
-    if(!Number(result?.meta?.changes||0)) throw new Error("این درخواست قبلاً بررسی شده است");
-    await audit(env,adminUser.id,"bitpin_deposit_rejected_bot",{claimId:claim.id,txid:claim.txid});
-    await notifyTelegramUser(env,claim.telegram_id,"❌ درخواست واریز رمزارزی شما رد شد.\nTXID: "+claim.txid);
-    return {status:"rejected"};
-  }
-  if (claim.credited_at) return {status:"approved",already_credited:true};
-  if (claim.status !== "pending_review") throw new Error("فقط درخواست در انتظار بررسی قابل تأیید است");
-  const settings=await getSettings(env);
-  const snapshot=await fetchBitpinWallets(settings,env);
-  await recordBitpinConnectionState(env,true);
-  const wallet=snapshot.wallets.find(row=>row.asset===String(claim.asset||"").toUpperCase())||null;
-  const ts=nowIso(),ledgerId="led_bitpin_"+claim.id;
-  const description="شارژ بیت‌پین "+claim.crypto_amount+" "+claim.asset+" · TXID "+claim.txid;
-  const results=await env.PASARGUARD_DB.batch([
-    env.PASARGUARD_DB.prepare(`UPDATE bitpin_deposits SET status='approved',credited_at=?,reviewed_at=?,reviewed_by=?,updated_at=?,provider_payload=?,wallet_balance_snapshot=? WHERE id=? AND status='pending_review' AND credited_at IS NULL`).bind(ts,ts,adminUser.id,ts,JSON.stringify({wallets:snapshot.wallets}),wallet?String(wallet.balance):"",claim.id),
-    env.PASARGUARD_DB.prepare(`UPDATE users SET wallet_balance=wallet_balance+?,updated_at=? WHERE id=? AND EXISTS(SELECT 1 FROM bitpin_deposits WHERE id=? AND status='approved' AND credited_at=?) AND NOT EXISTS(SELECT 1 FROM wallet_ledger WHERE id=?)`).bind(Number(claim.amount_toman),ts,claim.user_id,claim.id,ts,ledgerId),
-    env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO wallet_ledger(id,user_id,type,amount,balance_after,ref_type,ref_id,description,created_at) SELECT ?,id,'recharge',?,wallet_balance,'bitpin',?,?,? FROM users WHERE id=? AND EXISTS(SELECT 1 FROM bitpin_deposits WHERE id=? AND credited_at=?)`).bind(ledgerId,Number(claim.amount_toman),claim.id,description,ts,claim.user_id,claim.id,ts)
-  ]);
-  if(!Number(results?.[0]?.meta?.changes||0)) throw new Error("تأیید انجام نشد یا هم‌زمان بررسی شده است");
-  const updated=await env.PASARGUARD_DB.prepare("SELECT wallet_balance FROM users WHERE id=?").bind(claim.user_id).first();
-  await reconcileUserAgencies(env,claim.user_id);
-  await audit(env,adminUser.id,"bitpin_deposit_approved_bot",{claimId:claim.id,txid:claim.txid,amountToman:claim.amount_toman});
-  await notifyTelegramUser(env,claim.telegram_id,"✅ واریز رمزارزی شما تأیید شد.\nمقدار: "+claim.crypto_amount+" "+claim.asset+"\nشارژ: "+Number(claim.amount_toman).toLocaleString("fa-IR")+" تومان\nموجودی جدید: "+Number(updated?.wallet_balance||0).toLocaleString("fa-IR")+" تومان");
-  return {status:"approved",wallet_balance:Number(updated?.wallet_balance||0)};
+  const secret = await centralPlisioApiKey(settings, env);
+  if (String(secret).length < 12) throw new Error("Secret Key معتبر نیست");
+  if (Number(settings.plisio_toman_per_source_unit || 0) <= 0) throw new Error("نرخ تبدیل ثبت نشده است");
+  await recordCentralPlisioState(env, true);
+  return { configured: true, source_currency: settings.plisio_source_currency || "USD" };
 }
 
 function normalizePaymentStatus(value) {
   const status = String(value || "PENDING").toUpperCase();
-  return ["PENDING", "PAID", "EXPIRED", "CANCELED"].includes(status) ? status : "PENDING";
+  return ["PENDING", "PAID", "EXPIRED", "CANCELED", "FAILED"].includes(status) ? status : "PENDING";
 }
 
 async function createPaymentInvoice(request, env) {
@@ -4313,6 +4032,159 @@ async function createPaymentInvoice(request, env) {
       card_number: cleanText(provider.card_number, 100)
     }
   }, 201);
+}
+
+
+async function createPlisioPaymentInvoice(request, env) {
+  const auth = await requireAuth(request, env);
+  if (auth.response) return auth.response;
+  const body = await parseBody(request);
+  const settings = await getSettings(env);
+  if (!plisioConfigured(settings)) return fail("درگاه Plisio فعال یا کامل تنظیم نشده است", 503, "PLISIO_NOT_CONFIGURED");
+  const amountToman = clampInt(body.amount, 0, 1000000000000);
+  const minRecharge = Math.max(10000, clampInt(settings.min_recharge, 0));
+  if (amountToman < minRecharge) return fail("حداقل مبلغ شارژ " + minRecharge.toLocaleString("fa-IR") + " تومان است", 400, "AMOUNT_TOO_LOW");
+  const localId = id("ppay");
+  const sourceAmount = plisioSourceAmount(amountToman, settings);
+  const urls = centralPlisioUrls(new URL(request.url).origin);
+  const params = {
+    source_currency: cleanText(settings.plisio_source_currency || "USD", 20).toUpperCase() || "USD",
+    source_amount: sourceAmount.toFixed(2),
+    order_number: localId,
+    order_name: "BluePanel wallet recharge",
+    description: "Wallet recharge " + amountToman + " toman",
+    callback_url: urls.callback_url,
+    success_invoice_url: urls.return_url + "?status=success",
+    fail_invoice_url: urls.return_url + "?status=failed",
+    email: "telegram" + String(auth.user.telegram_id || auth.user.id).replace(/\D/g, "") + "@bluepanel.local",
+    expire_min: Math.max(5, Math.min(1440, Number(settings.plisio_expire_minutes || 60))),
+    return_existing: "true"
+  };
+  const allowed = cleanText(settings.plisio_allowed_currencies || "", 500).replace(/\s+/g, "");
+  if (allowed) params.allowed_psys_cids = allowed;
+  let provider;
+  try {
+    provider = await plisioRequest(settings, env, "/invoices/new", params);
+    await recordCentralPlisioState(env, true);
+  } catch (error) {
+    await recordCentralPlisioState(env, false, error.message);
+    return fail("ساخت فاکتور Plisio ناموفق بود: " + error.message, error.status || 502, "PLISIO_CREATE_FAILED");
+  }
+  const providerInvoiceId = cleanText(provider?.txn_id, 160);
+  const paymentLink = cleanText(provider?.invoice_url, 1000);
+  if (!providerInvoiceId || !paymentLink) return fail("پاسخ Plisio ناقص است", 502, "INVALID_PROVIDER_RESPONSE");
+  const amountRial = amountToman * 10;
+  const ts = nowIso();
+  const storedPayload = { request: { ...params, api_key: undefined }, response: provider };
+  try {
+    await env.PASARGUARD_DB.prepare(`
+      INSERT INTO payment_invoices(id,user_id,provider,provider_invoice_id,amount_rial,amount_toman,final_amount_rial,status,payment_link,card_number,provider_payload,created_at,updated_at)
+      VALUES(?,?,'plisio',?,?,?,?,'PENDING',?,NULL,?,?,?)
+    `).bind(localId, auth.user.id, providerInvoiceId, amountRial, amountToman, amountRial, paymentLink, JSON.stringify(storedPayload), ts, ts).run();
+  } catch (error) {
+    return fail("ثبت فاکتور در دیتابیس ناموفق بود", 500, "PAYMENT_STORAGE_FAILED");
+  }
+  await audit(env, auth.user.id, "plisio_invoice_created", { paymentId: localId, providerInvoiceId, amountToman, sourceAmount, sourceCurrency: params.source_currency });
+  return json({ success: true, payment: { id: localId, invoice_id: providerInvoiceId, amount: amountToman, status: "PENDING", payment_link: paymentLink, provider: "plisio", source_amount: sourceAmount, source_currency: params.source_currency } }, 201);
+}
+
+async function applyVerifiedPlisioPayment(env, payment, providerPayload) {
+  const operation = plisioOperationData(providerPayload);
+  if (operation.order_number && operation.order_number !== String(payment.id)) throw new Error("شماره سفارش Plisio تطبیق ندارد");
+  if (!operation.order_number && operation.txn_id && operation.txn_id !== String(payment.provider_invoice_id)) throw new Error("شناسه تراکنش Plisio تطبیق ندارد");
+  let initial = {};
+  try { initial = JSON.parse(payment.provider_payload || "{}"); } catch (_) {}
+  const expectedSource = Number(initial?.request?.source_amount);
+  if (Number.isFinite(operation.source_amount) && Number.isFinite(expectedSource) && Math.abs(operation.source_amount - expectedSource) > 0.011) {
+    throw new Error("مبلغ ارزی فاکتور Plisio با رکورد داخلی تطبیق ندارد");
+  }
+  const status = normalizePlisioStatus(operation.status);
+  const ts = nowIso();
+  if (status !== "PAID") {
+    await env.PASARGUARD_DB.prepare("UPDATE payment_invoices SET status=?,provider_payload=?,updated_at=? WHERE id=? AND credited_at IS NULL")
+      .bind(status, JSON.stringify({ initial, latest: providerPayload }), ts, payment.id).run();
+    return { status, credited: false };
+  }
+  const settings = await getSettings(env);
+  const bonusPercent = Math.max(0, Math.min(100, Number(settings.central_recharge_bonus_percent || 0)));
+  const baseAmount = Number(payment.amount_toman || 0);
+  const bonusAmount = Math.floor(baseAmount * bonusPercent / 100);
+  const creditedAmount = baseAmount + bonusAmount;
+  const suffix = String(crypto.getRandomValues(new Uint32Array(1))[0]).padStart(10, "0").slice(0, 6);
+  const creditToken = ts.replace("Z", suffix + "Z");
+  const ledgerId = "led_plisio_" + String(payment.id).replace(/[^a-zA-Z0-9_]/g, "");
+  let paidAt = ts;
+  if (operation.finished_at_utc) {
+    const numeric = Number(operation.finished_at_utc);
+    if (Number.isFinite(numeric)) {
+      const millis = numeric > 100000000000 ? numeric : numeric * 1000;
+      const parsed = new Date(millis);
+      if (!Number.isNaN(parsed.getTime())) paidAt = parsed.toISOString();
+    } else {
+      const parsed = new Date(String(operation.finished_at_utc));
+      if (!Number.isNaN(parsed.getTime())) paidAt = parsed.toISOString();
+    }
+  }
+  const description = bonusAmount > 0 ? ("شارژ Plisio + بونس " + bonusPercent + "٪") : "شارژ خودکار از طریق Plisio";
+  const results = await env.PASARGUARD_DB.batch([
+    env.PASARGUARD_DB.prepare(`UPDATE payment_invoices SET status='PAID',paid_at=?,credited_at=?,provider_payload=?,updated_at=? WHERE id=? AND credited_at IS NULL`)
+      .bind(paidAt, creditToken, JSON.stringify({ initial, latest: providerPayload }), ts, payment.id),
+    env.PASARGUARD_DB.prepare(`UPDATE users SET wallet_balance=wallet_balance+?,updated_at=? WHERE id=? AND EXISTS(SELECT 1 FROM payment_invoices WHERE id=? AND credited_at=?)`)
+      .bind(creditedAmount, ts, payment.user_id, payment.id, creditToken),
+    env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO wallet_ledger(id,user_id,type,amount,balance_after,ref_type,ref_id,description,created_at)
+      SELECT ?,id,'recharge',?,wallet_balance,'plisio',?,?,? FROM users WHERE id=? AND EXISTS(SELECT 1 FROM payment_invoices WHERE id=? AND credited_at=?)`)
+      .bind(ledgerId, creditedAmount, payment.id, description, ts, payment.user_id, payment.id, creditToken)
+  ]);
+  const credited = Number(results?.[0]?.meta?.changes || 0) > 0;
+  if (credited) {
+    await reconcileUserAgencies(env, payment.user_id);
+    const target = await env.PASARGUARD_DB.prepare("SELECT telegram_id,wallet_balance,first_name,username FROM users WHERE id=?").bind(payment.user_id).first();
+    if (target) {
+      await notifyTelegramUser(env, target.telegram_id, "✅ پرداخت رمزارزی Plisio تأیید شد.\nمبلغ پرداخت: " + baseAmount.toLocaleString("fa-IR") + " تومان" + (bonusAmount > 0 ? "\n🎁 بونس: " + bonusAmount.toLocaleString("fa-IR") + " تومان" : "") + "\nموجودی: " + Number(target.wallet_balance).toLocaleString("fa-IR") + " تومان");
+      await notifyAdmins(env, "✅ <b>پرداخت موفق Plisio</b>\nکاربر: " + (target.first_name || target.username || target.telegram_id) + "\nمبلغ: " + baseAmount.toLocaleString("fa-IR") + " تومان\nفاکتور: <code>" + botEscape(payment.provider_invoice_id) + "</code>");
+    }
+    await audit(env, payment.user_id, "plisio_payment_credited", { paymentId: payment.id, providerInvoiceId: payment.provider_invoice_id, amount: baseAmount, bonusAmount, creditedAmount });
+  }
+  return { status: "PAID", credited, bonusAmount, creditedAmount };
+}
+
+async function reconcilePlisioPaymentInvoice(env, payment) {
+  return env.PASARGUARD_DB.prepare(`SELECT id,provider,provider_invoice_id,amount_toman,amount_rial,final_amount_rial,status,payment_link,card_number,paid_at,credited_at,created_at,updated_at FROM payment_invoices WHERE id=?`).bind(payment.id).first();
+}
+
+async function plisioCallback(request, env) {
+  const settings = await getSettings(env);
+  const payload = await parseBody(request);
+  const secret = await centralPlisioApiKey(settings, env);
+  if (!(await verifyPlisioCallback(payload, secret))) return fail("Invalid callback signature", 422, "INVALID_SIGNATURE");
+  const operation = plisioOperationData(payload);
+  if (!operation.txn_id && !operation.order_number) return fail("Invalid callback payload", 400, "INVALID_CALLBACK");
+  let payment = null;
+  if (operation.txn_id) payment = await env.PASARGUARD_DB.prepare("SELECT * FROM payment_invoices WHERE provider='plisio' AND provider_invoice_id=?").bind(operation.txn_id).first();
+  if (!payment && operation.order_number) payment = await env.PASARGUARD_DB.prepare("SELECT * FROM payment_invoices WHERE provider='plisio' AND id=?").bind(operation.order_number).first();
+  if (!payment) {
+    await audit(env, null, "plisio_callback_unknown_invoice", { txnId: operation.txn_id, orderNumber: operation.order_number });
+    return fail("Invoice not found", 404, "NOT_FOUND");
+  }
+  try {
+    await applyVerifiedPlisioPayment(env, payment, payload);
+    await recordCentralPlisioState(env, true);
+    await audit(env, payment.user_id, "plisio_callback_processed", { paymentId: payment.id, status: operation.status });
+    return json({ received: true });
+  } catch (error) {
+    await recordCentralPlisioState(env, false, error.message);
+    await audit(env, payment.user_id, "plisio_callback_failed", { paymentId: payment.id, message: error.message });
+    return fail("Callback processing failed", 500, "CALLBACK_FAILED");
+  }
+}
+
+function centralPlisioReturnPage(settings, origin, url) {
+  const urls = centralPlisioUrls(origin);
+  const username = String(settings.central_bot_username || "").replace(/^@/, "").replace(/[^A-Za-z0-9_]/g, "");
+  const botLink = username ? ("https://t.me/" + username + "?start=payment_return") : canonicalAppUrl(settings.app_url || (origin + "/app"), origin);
+  const brand = htmlEscape(settings.brand_name || "BluePanel");
+  const ok = String(url?.searchParams?.get("status") || "").toLowerCase() === "success";
+  return `<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>بازگشت از Plisio</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:20px;background:#f3f6ff;color:#17223b;font-family:Tahoma,Arial}.card{width:min(100%,500px);background:#fff;border-radius:28px;padding:30px;text-align:center;box-shadow:0 24px 70px #263d6b25}.icon{font-size:48px}.muted{color:#6e7890;line-height:2}.btn{display:block;text-decoration:none;margin-top:14px;padding:14px;border-radius:16px;background:linear-gradient(135deg,#4e8cff,#765eff);color:white;font-weight:900}</style></head><body><main class="card"><div class="icon">${ok ? "✅" : "↩️"}</div><h1>بازگشت از پرداخت Plisio</h1><p class="muted">وضعیت نهایی پرداخت از Callback امضاشده Plisio بررسی می‌شود. برای مشاهده موجودی جدید به ${brand} برگردید.</p><a class="btn" href="${htmlEscape(botLink)}">بازکردن ربات مرکزی</a><a class="btn" href="${htmlEscape(urls.return_url.replace('/payments/plisio/return','/app#payments'))}">مشاهده پرداخت‌ها</a></main></body></html>`;
 }
 
 async function applyVerifiedPayment(env, payment, providerData) {
@@ -4386,7 +4258,7 @@ async function applyVerifiedPayment(env, payment, providerData) {
   return { status: "PAID", credited, bonusAmount, creditedAmount };
 }
 
-async function reconcilePaymentInvoice(env, payment) {
+async function reconcileBlupalPaymentInvoice(env, payment) {
   const providerData = await blupalRequest(
     env, "GET", "/v1/invoices/" + encodeURIComponent(payment.provider_invoice_id)
   );
@@ -4396,6 +4268,11 @@ async function reconcilePaymentInvoice(env, payment) {
            card_number,paid_at,credited_at,created_at,updated_at
     FROM payment_invoices WHERE id=?
   `).bind(payment.id).first();
+}
+
+async function reconcilePaymentInvoice(env, payment) {
+  if (String(payment?.provider || "blupal").toLowerCase() === "plisio") return reconcilePlisioPaymentInvoice(env, payment);
+  return reconcileBlupalPaymentInvoice(env, payment);
 }
 
 async function getPaymentStatus(request, env, paymentId) {
@@ -4414,14 +4291,14 @@ async function getPaymentStatus(request, env, paymentId) {
     const user = await env.PASARGUARD_DB.prepare("SELECT wallet_balance FROM users WHERE id=?").bind(auth.user.id).first();
     return json({ success: true, payment: updated, wallet_balance: Number(user?.wallet_balance || 0) });
   } catch (error) {
-    return fail("استعلام بلوپال ناموفق بود: " + error.message, error.status || 502, "BLUPAL_CHECK_FAILED");
+    return fail("استعلام درگاه ناموفق بود: " + error.message, error.status || 502, "PAYMENT_CHECK_FAILED");
   }
 }
 
 async function pollPendingPayments(env, limit = 30) {
   const rows = await env.PASARGUARD_DB.prepare(`
     SELECT * FROM payment_invoices
-    WHERE status='PENDING' AND credited_at IS NULL
+    WHERE status='PENDING' AND credited_at IS NULL AND provider='blupal'
     ORDER BY updated_at ASC LIMIT ?
   `).bind(limit).all();
   let checked = 0, credited = 0;
@@ -4434,7 +4311,7 @@ async function pollPendingPayments(env, limit = 30) {
       if (!before && updated?.credited_at) credited++;
     } catch (error) {
       errors.push({ paymentId: payment.id, error: error.message });
-      await audit(env, null, "blupal_poll_failed", { paymentId: payment.id, message: error.message });
+      await audit(env, null, "payment_poll_failed", { paymentId: payment.id, message: error.message });
     }
   }
   return { checked, credited, errors };
@@ -4450,7 +4327,7 @@ async function cleanupStalePendingInvoices(env, options = {}) {
   const cutoff = new Date(Date.now() - ttlHours * 60 * 60 * 1000).toISOString();
   const rows = await env.PASARGUARD_DB.prepare(`
     SELECT * FROM payment_invoices
-    WHERE status='PENDING' AND credited_at IS NULL AND created_at<=?
+    WHERE status='PENDING' AND credited_at IS NULL AND provider='blupal' AND created_at<=?
     ORDER BY created_at ASC LIMIT ?
   `).bind(cutoff, limit).all();
 
@@ -4458,9 +4335,10 @@ async function cleanupStalePendingInvoices(env, options = {}) {
   const errors = [];
   for (const payment of rows.results || []) {
     try {
-      if (!settings.blupal_api_key) {
+      const providerName = String(payment.provider || "blupal").toLowerCase();
+      if ((providerName === "plisio" && !settings.plisio_api_key) || (providerName !== "plisio" && !settings.blupal_api_key)) {
         skipped++;
-        errors.push({ paymentId: payment.id, error: "BluePal API key is not configured" });
+        errors.push({ paymentId: payment.id, error: providerName + " API key is not configured" });
         continue;
       }
       const updated = await reconcilePaymentInvoice(env, payment);
@@ -4545,7 +4423,7 @@ async function adminPaymentSync(request, env) {
   const auth = await requireAuth(request, env, true);
   if (auth.response) return auth.response;
   const result = await pollPendingPayments(env, 100);
-  await audit(env, auth.user.id, "manual_blupal_sync", result);
+  await audit(env, auth.user.id, "manual_payment_sync", result);
   return json({ success: true, result });
 }
 
@@ -4888,8 +4766,7 @@ async function saveAdminSettings(request, env) {
     "brand_name", "price_per_gb", "setup_fee", "reseller_bot_setup_fee", "reseller_bot_license_renewal_fee",
     "reseller_store_bot_setup_fee", "reseller_store_bot_license_renewal_fee", "reseller_master_bot_setup_fee", "reseller_master_bot_license_renewal_fee", "master_min_markup_toman",
     "agency_sales_enabled", "reseller_bot_sales_enabled", "central_recharge_bonus_percent", "central_trial_enabled", "central_trial_data_limit_bytes", "central_trial_duration_hours", "min_recharge", "support_username",
-    "blupal_base_url", "blupal_api_key", "blupal_card_number", "blupal_webhook_token", "payment_poll_enabled",
-    "bitpin_enabled", "bitpin_base_url", "bitpin_api_key", "bitpin_api_secret", "bitpin_asset", "bitpin_network", "bitpin_deposit_address", "bitpin_toman_per_unit", "bitpin_min_crypto_amount",
+    "blupal_base_url", "blupal_api_key", "blupal_card_number", "blupal_webhook_token", "plisio_enabled", "plisio_api_key", "plisio_source_currency", "plisio_toman_per_source_unit", "plisio_allowed_currencies", "plisio_expire_minutes", "plisio_test_currency", "payment_poll_enabled",
     "auto_delete_pending_invoices", "pending_invoice_ttl_hours", "usage_sync_enabled", "auto_update", "auto_update_interval_seconds", "bot_token", "admin_ids",
     "auth_max_age_seconds", "allow_dev_auth", "dev_telegram_id", "app_encryption_key", "app_url",
     "telegram_webhook_secret", "pasarguard_panel_url", "pasarguard_access_token",
@@ -4924,23 +4801,10 @@ async function saveAdminSettings(request, env) {
     try { values.blupal_base_url = normalizeBlupalBaseUrl(values.blupal_base_url); }
     catch (error) { return fail(error.message, 400, "INVALID_BLUPAL_URL"); }
   }
-  if (values.bitpin_base_url !== undefined) {
-    try { values.bitpin_base_url = normalizeBitpinBaseUrl(values.bitpin_base_url); }
-    catch (error) { return fail(error.message, 400, "INVALID_BITPIN_URL"); }
-  }
-  if (values.bitpin_asset !== undefined) values.bitpin_asset = cleanText(values.bitpin_asset, 30).toUpperCase() || "USDT";
-  if (values.bitpin_network !== undefined) values.bitpin_network = cleanText(values.bitpin_network, 40).toUpperCase() || "TRC20";
-  if (values.bitpin_deposit_address !== undefined) values.bitpin_deposit_address = cleanText(values.bitpin_deposit_address, 300).replace(/\s+/g, "");
-  if (values.bitpin_toman_per_unit !== undefined) values.bitpin_toman_per_unit = String(clampInt(values.bitpin_toman_per_unit, 1, 1000000000000));
-  if (values.bitpin_min_crypto_amount !== undefined) {
-    const minCrypto = Number(values.bitpin_min_crypto_amount);
-    if (!Number.isFinite(minCrypto) || minCrypto <= 0) return fail("حداقل مقدار رمزارز معتبر نیست", 400, "INVALID_BITPIN_MIN_AMOUNT");
-    values.bitpin_min_crypto_amount = String(minCrypto);
-  }
   if (values.app_url !== undefined) {
     values.app_url = canonicalAppUrl(values.app_url, new URL(request.url).origin);
   }
-  for (const key of ["central_trial_enabled", "agency_sales_enabled", "reseller_bot_sales_enabled", "usage_sync_enabled", "payment_poll_enabled", "auto_delete_pending_invoices", "auto_update", "allow_dev_auth", "pasarguard_set_telegram_id", "python_helper_auto_provision", "bitpin_enabled"]) {
+  for (const key of ["central_trial_enabled", "agency_sales_enabled", "reseller_bot_sales_enabled", "usage_sync_enabled", "payment_poll_enabled", "auto_delete_pending_invoices", "auto_update", "allow_dev_auth", "pasarguard_set_telegram_id", "python_helper_auto_provision"]) {
     if (body[key] !== undefined) values[key] = String(body[key] === true || body[key] === "true");
   }
   if (values.admin_ids !== undefined) {
@@ -4978,9 +4842,6 @@ async function saveAdminSettings(request, env) {
   }
   if (values.pending_invoice_ttl_hours !== undefined) {
     values.pending_invoice_ttl_hours = String(Math.max(1, Math.min(720, Number(values.pending_invoice_ttl_hours || 24))));
-  }
-  for (const key of ["bitpin_api_key", "bitpin_api_secret"]) {
-    if (values[key] !== undefined) values[key] = "enc:" + await encryptSecret(String(values[key]), env);
   }
   await setSettings(env, values);
   const advancedCleanup = [];
@@ -7187,51 +7048,25 @@ async function resolveResellerServiceAgency(env, bot) {
 }
 
 
-const RESELLER_BITPIN_DEFAULTS = Object.freeze({
-  bitpin_enabled: 0,
-  bitpin_base_url: "https://api.bitpin.ir",
-  bitpin_api_key_enc: null,
-  bitpin_api_secret_enc: null,
-  bitpin_asset: "USDT",
-  bitpin_network: "TRC20",
-  bitpin_deposit_address: null,
-  bitpin_toman_per_unit: 100000,
-  bitpin_min_crypto_amount: 1,
-  bitpin_configured_at: null,
-  bitpin_last_verified_at: null,
-  bitpin_last_error: null
+const RESELLER_PLISIO_DEFAULTS = Object.freeze({
+  plisio_enabled:0,plisio_api_key_enc:null,plisio_source_currency:"USD",plisio_toman_per_source_unit:0,
+  plisio_allowed_currencies:"",plisio_expire_minutes:60,plisio_test_currency:"BTC",plisio_configured_at:null,
+  plisio_last_verified_at:null,plisio_last_error:null
 });
-
-async function getResellerBitpinConfig(env, botId) {
-  if (!botId) return { ...RESELLER_BITPIN_DEFAULTS };
-  try {
-    const row = await env.PASARGUARD_DB.prepare(`
-      SELECT bitpin_enabled,bitpin_base_url,bitpin_api_key_enc,bitpin_api_secret_enc,
-             bitpin_asset,bitpin_network,bitpin_deposit_address,bitpin_toman_per_unit,
-             bitpin_min_crypto_amount,bitpin_configured_at,bitpin_last_verified_at,bitpin_last_error
-      FROM reseller_bitpin_configs WHERE bot_id=?
-    `).bind(botId).first();
-    return { ...RESELLER_BITPIN_DEFAULTS, ...(row || {}) };
-  } catch (error) {
-    if (/no such table/i.test(String(error?.message || error))) return { ...RESELLER_BITPIN_DEFAULTS };
-    throw error;
-  }
-}
+async function getResellerPlisioConfig(env,botId){if(!botId)return{...RESELLER_PLISIO_DEFAULTS};try{const row=await env.PASARGUARD_DB.prepare(`SELECT plisio_enabled,plisio_api_key_enc,plisio_source_currency,plisio_toman_per_source_unit,plisio_allowed_currencies,plisio_expire_minutes,plisio_test_currency,plisio_configured_at,plisio_last_verified_at,plisio_last_error FROM reseller_plisio_configs WHERE bot_id=?`).bind(botId).first();return{...RESELLER_PLISIO_DEFAULTS,...(row||{})}}catch(e){if(/no such table/i.test(String(e?.message||e)))return{...RESELLER_PLISIO_DEFAULTS};throw e}}
 
 async function hydrateResellerBotRelations(env, bot) {
   if (!bot) return null;
-  const [relation, bitpin] = await Promise.all([
+  const [relation,plisio] = await Promise.all([
     env.PASARGUARD_DB.prepare(`
-      SELECT a.title AS agency_title,a.panel_username,a.panel_password_enc,a.status AS agency_status,a.remote_manager_id,
-             u.telegram_id AS owner_telegram_id,u.username AS owner_username,u.first_name AS owner_first_name,
-             u.last_name AS owner_last_name,u.wallet_balance AS owner_wallet_balance,
-             CASE WHEN a.panel_password_enc IS NULL THEN 0 ELSE 1 END AS agency_has_password
-      FROM users u LEFT JOIN agencies a ON a.id=?
-      WHERE u.id=?
-    `).bind(bot.agency_id, bot.user_id).first(),
-    getResellerBitpinConfig(env, bot.id)
-  ]);
-  return { ...bot, ...RESELLER_BITPIN_DEFAULTS, ...(bitpin || {}), ...(relation || {}) };
+    SELECT a.title AS agency_title,a.panel_username,a.panel_password_enc,a.status AS agency_status,a.remote_manager_id,
+           u.telegram_id AS owner_telegram_id,u.username AS owner_username,u.first_name AS owner_first_name,
+           u.last_name AS owner_last_name,u.wallet_balance AS owner_wallet_balance,
+           CASE WHEN a.panel_password_enc IS NULL THEN 0 ELSE 1 END AS agency_has_password
+    FROM users u LEFT JOIN agencies a ON a.id=?
+    WHERE u.id=?
+  `).bind(bot.agency_id, bot.user_id).first(),getResellerPlisioConfig(env,bot.id)]);
+  return { ...bot,...RESELLER_PLISIO_DEFAULTS,...(plisio||{}), ...(relation || {}) };
 }
 
 async function getResellerBotForUser(env, userId) {
@@ -8198,7 +8033,6 @@ async function createResellerSnapshot(env, bot, actorTelegramId = "system", snap
 }
 
 async function runResellerHealthCheck(env, bot) {
-  bot = { ...bot, ...(await getResellerBitpinConfig(env, bot?.id)) };
   const details=[];
   let score=100;
   const add=(key,label,status,message,penalty=0)=>{ details.push({key,label,status,message}); if(status!=="ok") score-=penalty; };
@@ -8613,45 +8447,14 @@ async function botWalletView(env, account) {
     return "• " + botEscape(item.description || "تراکنش کیف پول") + "\n  <b>" + sign + botMoney(item.amount) + "</b> تومان · " + botDate(item.created_at);
   }).join("\n") : "هنوز تراکنشی ثبت نشده است.";
   const min = Math.max(10000, Number(account.settings.min_recharge || 100000));
-  const rows = [
-    [{ text: botMoney(min) + " تومان", callback_data: "bot:charge:" + min }, { text: botMoney(min * 2) + " تومان", callback_data: "bot:charge:" + (min * 2) }],
-    [{ text: botMoney(min * 5) + " تومان", callback_data: "bot:charge:" + (min * 5) }, { text: "✍️ مبلغ دلخواه", callback_data: "bot:charge:custom" }]
-  ];
-  if (account.settings.bitpin_enabled === "true" && cleanText(account.settings.bitpin_deposit_address,300)) rows.push([{ text: "🪙 واریز رمزارزی با بیت‌پین", callback_data: "bot:bitpin" }]);
-  rows.push([{ text: "📊 همه تراکنش‌ها", callback_data: "bot:ledger" }, { text: "🏠 منوی اصلی", callback_data: "bot:home" }]);
   return {
     text: "💳 <b>کیف پول من</b>\n━━━━━━━━━━━━━━\nموجودی قابل استفاده:\n<b>" + botMoney(account.user.wallet_balance) + " تومان</b>\n\nآخرین گردش‌ها:\n" + lines,
-    reply_markup: { inline_keyboard: rows }
+    reply_markup: { inline_keyboard: [
+      [{ text: botMoney(min) + " تومان", callback_data: "bot:charge:" + min }, { text: botMoney(min * 2) + " تومان", callback_data: "bot:charge:" + (min * 2) }],
+      [{ text: botMoney(min * 5) + " تومان", callback_data: "bot:charge:" + (min * 5) }, { text: "✍️ مبلغ دلخواه", callback_data: "bot:charge:custom" }],
+      [{ text: "📊 همه تراکنش‌ها", callback_data: "bot:ledger" }, { text: "🏠 منوی اصلی", callback_data: "bot:home" }]
+    ] }
   };
-}
-
-
-async function botBitpinView(env, account) {
-  const s=await getSettings(env);
-  if(s.bitpin_enabled!=="true") throw new Error("واریز رمزارزی بیت‌پین غیرفعال است");
-  const address=cleanText(s.bitpin_deposit_address,300);
-  if(!address) throw new Error("آدرس واریز بیت‌پین ثبت نشده است");
-  const rows=await env.PASARGUARD_DB.prepare("SELECT id,asset,network,txid,crypto_amount,amount_toman,status,created_at FROM bitpin_deposits WHERE user_id=? ORDER BY created_at DESC LIMIT 5").bind(account.user.id).all();
-  const history=(rows.results||[]).length?(rows.results||[]).map((x,i)=>(i+1)+". <b>"+botEscape(x.crypto_amount+" "+x.asset)+"</b> · "+botMoney(x.amount_toman)+" تومان · "+botEscape(x.status)+"\n<code>"+botEscape(x.txid)+"</code>").join("\n\n"):"هنوز واریزی ثبت نشده است.";
-  return {text:"🪙 <b>واریز رمزارزی با بیت‌پین</b>\n━━━━━━━━━━━━━━\nرمزارز: <b>"+botEscape(s.bitpin_asset||"USDT")+"</b>\nشبکه: <b>"+botEscape(s.bitpin_network||"TRC20")+"</b>\nنرخ هر واحد: <b>"+botMoney(s.bitpin_toman_per_unit)+" تومان</b>\nحداقل مقدار: <b>"+botEscape(s.bitpin_min_crypto_amount||"1")+"</b>\n\nآدرس واریز:\n<code>"+botEscape(address)+"</code>\n\nپس از انتقال، مقدار و TXID را ثبت کنید. شارژ پس از بررسی مدیر انجام می‌شود.\n\n<b>آخرین درخواست‌ها</b>\n"+history,reply_markup:{inline_keyboard:[[{text:"📋 کپی آدرس",copy_text:{text:address}}],[{text:"➕ ثبت واریز جدید",callback_data:"bot:bitpin:new"}],[{text:"↩️ کیف پول",callback_data:"bot:wallet"}]]}};
-}
-
-async function botAdminBitpinView(env, account) {
-  if(!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
-  const s=await getSettings(env);
-  const pending=await env.PASARGUARD_DB.prepare("SELECT COUNT(*) AS c FROM bitpin_deposits WHERE status='pending_review'").first();
-  const configured=Boolean(s.bitpin_api_key&&s.bitpin_api_secret&&s.bitpin_deposit_address);
-  return {text:"🪙 <b>مدیریت بیت‌پین مرکزی</b>\n━━━━━━━━━━━━━━\nوضعیت: <b>"+(s.bitpin_enabled==="true"?"🟢 فعال":"🔴 غیرفعال")+"</b>\nاتصال API: <b>"+(configured?"ثبت شده":"ناقص")+"</b>\nرمزارز/شبکه: <b>"+botEscape((s.bitpin_asset||"USDT")+" / "+(s.bitpin_network||"TRC20"))+"</b>\nنرخ: <b>"+botMoney(s.bitpin_toman_per_unit)+" تومان</b>\nحداقل: <b>"+botEscape(s.bitpin_min_crypto_amount||"1")+"</b>\nآدرس: <code>"+botEscape(s.bitpin_deposit_address||"ثبت نشده")+"</code>\nدر انتظار بررسی: <b>"+botMoney(pending?.c||0)+"</b>\n"+(s.bitpin_last_verified_at?"آخرین اتصال موفق: <b>"+botDate(s.bitpin_last_verified_at)+"</b>\n":"")+(s.bitpin_last_error?"⚠️ خطا: <code>"+botEscape(s.bitpin_last_error)+"</code>\n":""),reply_markup:{inline_keyboard:[[{text:"🔑 API Key",callback_data:"bot:admin:bitpin:api"},{text:"🔐 API Secret",callback_data:"bot:admin:bitpin:secret"}],[{text:"🪙 رمزارز و شبکه",callback_data:"bot:admin:bitpin:asset"},{text:"📍 آدرس واریز",callback_data:"bot:admin:bitpin:address"}],[{text:"💱 نرخ و حداقل",callback_data:"bot:admin:bitpin:rate"}],[{text:"🧪 تست اتصال",callback_data:"bot:admin:bitpin:test"},{text:s.bitpin_enabled==="true"?"⏸ غیرفعال‌کردن":"▶️ فعال‌کردن",callback_data:"bot:admin:bitpin:toggle"}],[{text:"📥 واریزهای در انتظار",callback_data:"bot:admin:bitpin:claims"}],[{text:"↩️ تنظیمات مالی",callback_data:"bot:admin:settings:finance"}]]}};
-}
-
-async function botAdminBitpinClaimsView(env, account) {
-  if(!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
-  const rows=await env.PASARGUARD_DB.prepare(`SELECT d.*,u.telegram_id,u.first_name,u.username FROM bitpin_deposits d JOIN users u ON u.id=d.user_id ORDER BY CASE WHEN d.status='pending_review' THEN 0 ELSE 1 END,d.created_at DESC LIMIT 12`).all();
-  const items=rows.results||[];
-  const lines=items.length?items.map((x,i)=>(i+1)+". "+(x.status==='pending_review'?"🟠":"▫️")+" <b>"+botEscape(x.first_name||x.username||x.telegram_id)+"</b>\n"+botEscape(x.crypto_amount+" "+x.asset+" · "+botMoney(x.amount_toman)+" تومان")+"\n<code>"+botEscape(x.txid)+"</code> · "+botEscape(x.status)).join("\n\n"):"درخواستی ثبت نشده است.";
-  const buttons=[];items.filter(x=>x.status==='pending_review').slice(0,8).forEach((x,i)=>buttons.push([{text:"✅ تأیید "+(i+1),callback_data:"bot:admin:bitpin:approve:"+x.id},{text:"❌ رد "+(i+1),callback_data:"bot:admin:bitpin:reject:"+x.id}]));
-  buttons.push([{text:"🔄 بروزرسانی",callback_data:"bot:admin:bitpin:claims"},{text:"↩️ بیت‌پین",callback_data:"bot:admin:bitpin"}]);
-  return {text:"📥 <b>واریزهای بیت‌پین مرکزی</b>\n━━━━━━━━━━━━━━\n"+lines,reply_markup:{inline_keyboard:buttons}};
 }
 
 async function botBuyAgencyView(env, account) {
@@ -9266,6 +9069,34 @@ async function botAdminSettingsView(env, account) {
   };
 }
 
+
+async function botAdminPlisioView(env, account) {
+  if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+  const s = await getSettings(env);
+  const keySet = !!String(s.plisio_api_key || "").trim();
+  const enabled = s.plisio_enabled === "true";
+  const ready = keySet && Number(s.plisio_toman_per_source_unit || 0) > 0;
+  return {
+    text: "🪙 <b>درگاه رمزارزی Plisio</b>\n━━━━━━━━━━━━━━\n" +
+      "وضعیت: <b>" + (enabled && ready ? "🟢 فعال" : enabled ? "🟠 تنظیمات ناقص" : "🔴 غیرفعال") + "</b>\n" +
+      "Secret Key: <b>" + (keySet ? "ثبت و رمزگذاری شده" : "ثبت نشده") + "</b>\n" +
+      "ارز مبنا: <b>" + botEscape(s.plisio_source_currency || "USD") + "</b>\n" +
+      "نرخ هر واحد ارز مبنا: <b>" + botMoney(s.plisio_toman_per_source_unit || 0) + " تومان</b>\n" +
+      "رمزارزهای مجاز: <code>" + botEscape(s.plisio_allowed_currencies || "انتخاب از تنظیمات حساب Plisio") + "</code>\n" +
+      "انقضای فاکتور: <b>" + botMoney(s.plisio_expire_minutes || 60) + " دقیقه</b>\n" +
+      (s.plisio_last_verified_at ? "آخرین بررسی موفق: <b>" + botDate(s.plisio_last_verified_at) + "</b>\n" : "") +
+      (s.plisio_last_error ? "\n⚠️ آخرین خطا:\n<code>" + botEscape(s.plisio_last_error) + "</code>" : "") +
+      "\n\nCallback به‌صورت خودکار هنگام ساخت فاکتور ارسال و امضای verify_hash بررسی می‌شود.",
+    reply_markup:{inline_keyboard:[
+      [{text:keySet?"🔑 تغییر Secret Key":"🔑 ثبت Secret Key",callback_data:"bot:admin:plisio:key"}],
+      [{text:"💱 ارز مبنا و نرخ",callback_data:"bot:admin:plisio:rate"},{text:"🪙 رمزارزهای مجاز",callback_data:"bot:admin:plisio:currencies"}],
+      [{text:"⏱ زمان انقضای فاکتور",callback_data:"bot:admin:plisio:expire"}],
+      [{text:"🧪 بررسی تنظیمات",callback_data:"bot:admin:plisio:test"},{text:enabled?"⏸ غیرفعال‌کردن":"▶️ فعال‌کردن",callback_data:"bot:admin:plisio:toggle"}],
+      [{text:"↩️ تعرفه و هزینه‌ها",callback_data:"bot:admin:settings:finance"}]
+    ]}
+  };
+}
+
 async function botAdminTrialView(env, account) {
   if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
   const settings = await getSettings(env);
@@ -9305,14 +9136,15 @@ async function botAdminSettingsGroupView(env, account, group) {
         "🤖 هزینه ساخت ربات نماینده: <b>" + botMoney(s.reseller_bot_setup_fee || 0) + " تومان</b>",
         "🪪 تمدید ماهانه ربات: <b>" + botMoney(s.reseller_bot_license_renewal_fee || 0) + " تومان</b>",
         "🎉 بونس شارژ مرکزی: <b>" + botMoney(s.central_recharge_bonus_percent || 0) + "٪</b>",
-        "💳 حداقل شارژ: <b>" + botMoney(s.min_recharge) + " تومان</b>"
+        "💳 حداقل شارژ: <b>" + botMoney(s.min_recharge) + " تومان</b>",
+        "🪙 Plisio: <b>" + (s.plisio_enabled === "true" ? "فعال" : "غیرفعال") + "</b>"
       ],
       rows: [
         [{ text: "قیمت هر گیگ", callback_data: "bot:setting:price_per_gb" }, { text: "حداقل موجودی پنل", callback_data: "bot:setting:setup_fee" }],
         [{ text: "هزینه ساخت ربات", callback_data: "bot:setting:reseller_bot_setup_fee" }, { text: "تمدید ماهانه", callback_data: "bot:setting:reseller_bot_license_renewal_fee" }],
         [{ text: "بونس شارژ مرکزی", callback_data: "bot:setting:central_recharge_bonus_percent" }],
-        [{ text: "🪙 مدیریت بیت‌پین", callback_data: "bot:admin:bitpin" }],
-        [{ text: "حداقل شارژ", callback_data: "bot:setting:min_recharge" }]
+        [{ text: "حداقل شارژ", callback_data: "bot:setting:min_recharge" }],
+        [{ text: "🪙 مدیریت Plisio", callback_data: "bot:admin:plisio" }]
       ]
     },
     access: {
@@ -9438,7 +9270,6 @@ async function botRenderView(env, account, view) {
   if (view === "reports") return botReportsMenuView(account);
   if (view === "assistance") return botAssistanceMenuView(account);
   if (view === "wallet") return botWalletView(env, account);
-  if (view === "bitpin") return botBitpinView(env, account);
   if (view === "trial") return botCentralTrialView(env, account);
   if (view === "agencies") return botAgenciesView(env, account);
   if (view === "buy_agency") return botBuyAgencyView(env, account);
@@ -9471,9 +9302,8 @@ async function botRenderView(env, account, view) {
   if (view === "admin_users") return botAdminUsersView(env, account);
   if (view === "admin_settings") return botAdminSettingsView(env, account);
   if (view === "admin_trial") return botAdminTrialView(env, account);
-  if (view === "admin_bitpin") return botAdminBitpinView(env, account);
-  if (view === "admin_bitpin_claims") return botAdminBitpinClaimsView(env, account);
   if (view === "admin_settings_finance") return botAdminSettingsGroupView(env, account, "finance");
+  if (view === "admin_plisio") return botAdminPlisioView(env, account);
   if (view === "admin_settings_access") return botAdminSettingsGroupView(env, account, "access");
   if (view === "admin_settings_automation") return botAdminSettingsGroupView(env, account, "automation");
   if (view === "admin_join_channels") return botAdminJoinChannelsView(env, account);
@@ -9534,6 +9364,63 @@ async function botCreatePaymentInvoice(env, user, amountToman) {
   ).run();
   await audit(env, user.id, "bot_blupal_invoice_created", { paymentId: localId, providerInvoiceId, amountToman: amount });
   return { id: localId, providerInvoiceId, amount, paymentLink, status: normalizePaymentStatus(provider.status) };
+}
+
+
+async function botCreatePlisioPaymentInvoice(env, user, amountToman, origin) {
+  const settings = await getSettings(env);
+  if (!plisioConfigured(settings)) throw new Error("درگاه Plisio فعال یا کامل تنظیم نشده است");
+  const amount = clampInt(amountToman, 0, 1000000000000);
+  const minRecharge = Math.max(10000, clampInt(settings.min_recharge, 0));
+  if (amount < minRecharge) throw new Error("حداقل مبلغ شارژ " + botMoney(minRecharge) + " تومان است");
+  const localId = id("ppay");
+  const sourceAmount = plisioSourceAmount(amount, settings);
+  const urls = centralPlisioUrls(origin);
+  const params = {
+    source_currency: cleanText(settings.plisio_source_currency || "USD", 20).toUpperCase() || "USD",
+    source_amount: sourceAmount.toFixed(2),
+    order_number: localId,
+    order_name: "BluePanel wallet recharge",
+    description: "Wallet recharge " + amount + " toman",
+    callback_url: urls.callback_url,
+    success_invoice_url: urls.return_url + "?status=success",
+    fail_invoice_url: urls.return_url + "?status=failed",
+    email: "telegram" + String(user.telegram_id || user.id).replace(/\D/g, "") + "@bluepanel.local",
+    expire_min: Math.max(5, Math.min(1440, Number(settings.plisio_expire_minutes || 60))),
+    return_existing: "true"
+  };
+  const allowed = cleanText(settings.plisio_allowed_currencies || "", 500).replace(/\s+/g, "");
+  if (allowed) params.allowed_psys_cids = allowed;
+  const provider = await plisioRequest(settings, env, "/invoices/new", params);
+  const providerInvoiceId = cleanText(provider?.txn_id, 160), paymentLink = cleanText(provider?.invoice_url, 1000);
+  if (!providerInvoiceId || !paymentLink) throw new Error("پاسخ Plisio ناقص است");
+  const amountRial = amount * 10, ts = nowIso();
+  await env.PASARGUARD_DB.prepare(`INSERT INTO payment_invoices(id,user_id,provider,provider_invoice_id,amount_rial,amount_toman,final_amount_rial,status,payment_link,card_number,provider_payload,created_at,updated_at) VALUES(?,?,'plisio',?,?,?,?,'PENDING',?,NULL,?,?,?)`)
+    .bind(localId,user.id,providerInvoiceId,amountRial,amount,amountRial,paymentLink,JSON.stringify({request:params,response:provider}),ts,ts).run();
+  await recordCentralPlisioState(env, true);
+  await audit(env,user.id,"bot_plisio_invoice_created",{paymentId:localId,providerInvoiceId,amountToman:amount,sourceAmount});
+  return { id:localId, providerInvoiceId, amount, paymentLink, status:"PENDING", provider:"plisio" };
+}
+
+function centralPaymentProviderChoices(settings) {
+  const out = [];
+  if (plisioConfigured(settings)) out.push("plisio");
+  if (String(settings.blupal_api_key || "").trim()) out.push("blupal");
+  return out;
+}
+
+async function botPromptPaymentProvider(env, account, chatId, amount) {
+  const providers = centralPaymentProviderChoices(account.settings);
+  if (!providers.length) throw new Error("هیچ درگاه آنلاینی توسط مدیریت تنظیم نشده است");
+  if (providers.length === 1) {
+    const payment = providers[0] === "plisio" ? await botCreatePlisioPaymentInvoice(env, account.user, amount, account.public_origin) : await botCreatePaymentInvoice(env, account.user, amount);
+    return botSendInvoice(env, chatId, payment);
+  }
+  const rows = [];
+  if (providers.includes("plisio")) rows.push([{ text:"🪙 پرداخت رمزارزی با Plisio", callback_data:"bot:charge:provider:plisio:"+amount }]);
+  if (providers.includes("blupal")) rows.push([{ text:"💠 پرداخت با بلوپال", callback_data:"bot:charge:provider:blupal:"+amount }]);
+  rows.push([{text:"↩️ کیف پول",callback_data:"bot:wallet"}]);
+  return botPrompt(env,chatId,"مبلغ انتخاب‌شده: <b>"+botMoney(amount)+" تومان</b>\nدرگاه پرداخت را انتخاب کنید.",rows);
 }
 
 async function botCreateAgency(env, user, input = {}) {
@@ -9664,7 +9551,7 @@ async function botAdminAdjustBalance(env, adminUser, targetUserId, operation, am
 async function botSendInvoice(env, chatId, payment) {
   await telegramApi(env, "sendMessage", {
     chat_id: chatId,
-    text: "🧾 <b>فاکتور ساخته شد</b>\n━━━━━━━━━━━━━━\nمبلغ شارژ: <b>" + botMoney(payment.amount) + " تومان</b>\nشماره: <code>" + botEscape(payment.providerInvoiceId) + "</code>\nپس از پرداخت، دکمه استعلام را بزنید.",
+    text: "🧾 <b>فاکتور ساخته شد</b>\n━━━━━━━━━━━━━━\nدرگاه: <b>" + (payment.provider === "plisio" ? "Plisio رمزارزی" : "بلوپال") + "</b>\nمبلغ شارژ: <b>" + botMoney(payment.amount) + " تومان</b>\nشماره: <code>" + botEscape(payment.providerInvoiceId) + "</code>\nپس از پرداخت، دکمه استعلام را بزنید.",
     parse_mode: "HTML",
     reply_markup: { inline_keyboard: [
       [{ text: "💳 پرداخت فاکتور", url: payment.paymentLink }],
@@ -9737,9 +9624,9 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
   }
   const simpleViews = {
     "bot:home": "home", "bot:operations": "operations", "bot:reports": "reports", "bot:assistance": "assistance",
-    "bot:wallet": "wallet", "bot:bitpin": "bitpin", "bot:trial": "trial", "bot:agencies": "agencies", "bot:buy:agency": "buy_agency", "bot:buy:bot": "buy_bot", "bot:sales": "sales_bot",
+    "bot:wallet": "wallet", "bot:trial": "trial", "bot:agencies": "agencies", "bot:buy:agency": "buy_agency", "bot:buy:bot": "buy_bot", "bot:sales": "sales_bot",
     "bot:ledger": "ledger", "bot:invoices": "invoices", "bot:support": "support", "bot:help": "help", "bot:admin": "admin",
-    "bot:admin:central_bot": "admin_central_bot", "bot:admin:trial": "admin_trial", "bot:admin:bitpin": "admin_bitpin", "bot:admin:bitpin:claims": "admin_bitpin_claims", "bot:admin:agency_usage": "admin_agency_usage:0",
+    "bot:admin:central_bot": "admin_central_bot", "bot:admin:trial": "admin_trial", "bot:admin:agency_usage": "admin_agency_usage:0",
     "bot:admin:group:users": "admin_group_users", "bot:admin:group:finance": "admin_group_finance",
     "bot:admin:group:operations": "admin_group_operations", "bot:admin:group:communications": "admin_group_communications",
     "bot:admin:group:system": "admin_group_system", "bot:admin:reseller_ops": "admin_reseller_ops",
@@ -9749,29 +9636,6 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
     await botClearSession(env, account.user.telegram_id);
     await botSendOrEdit(env, { account, chatId, messageId }, simpleViews[data]);
     return;
-  }
-
-
-  if (data === "bot:bitpin:new") {
-    const st=await getSettings(env);if(st.bitpin_enabled!=="true")throw new Error("واریز بیت‌پین غیرفعال است");
-    await botSetSession(env,account.user.telegram_id,"bitpin_claim",{});
-    await botPrompt(env,chatId,"🪙 مقدار رمزارز و TXID را با علامت <code>|</code> ارسال کنید.\nمثال:\n<code>10 | TXID_TRANSACTION</code>\n\nرمزارز: <b>"+botEscape(st.bitpin_asset||"USDT")+"</b> · شبکه: <b>"+botEscape(st.bitpin_network||"TRC20")+"</b>");return;
-  }
-  if (data === "bot:admin:bitpin:api" || data === "bot:admin:bitpin:secret" || data === "bot:admin:bitpin:asset" || data === "bot:admin:bitpin:address" || data === "bot:admin:bitpin:rate") {
-    if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");
-    const map={"bot:admin:bitpin:api":["setting_bitpin_api","🔑 API Key بیت‌پین را ارسال کنید."],"bot:admin:bitpin:secret":["setting_bitpin_secret","🔐 API Secret بیت‌پین را ارسال کنید."],"bot:admin:bitpin:asset":["setting_bitpin_asset","🪙 رمزارز و شبکه را ارسال کنید.\nمثال: <code>USDT | TRC20</code>"],"bot:admin:bitpin:address":["setting_bitpin_address","📍 آدرس واریز را ارسال کنید."],"bot:admin:bitpin:rate":["setting_bitpin_rate","💱 نرخ هر واحد به تومان و حداقل مقدار را ارسال کنید.\nمثال: <code>100000 | 1</code>"]};
-    const item=map[data];await botSetSession(env,account.user.telegram_id,item[0],{});await botPrompt(env,chatId,item[1]);return;
-  }
-  if (data === "bot:admin:bitpin:toggle") {
-    if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");const st=await getSettings(env);const next=st.bitpin_enabled==="true"?"false":"true";
-    if(next==="true"&&(!st.bitpin_api_key||!st.bitpin_api_secret||!st.bitpin_deposit_address))throw new Error("ابتدا API Key، Secret و آدرس واریز را ثبت کنید");
-    await setSettings(env,{bitpin_enabled:next});await audit(env,account.user.id,"central_bitpin_toggled",{enabled:next==="true"});const fresh=await ensureTelegramBotUser(env,callback.from);await botSendOrEdit(env,{account:fresh,chatId,messageId},"admin_bitpin");return;
-  }
-  if (data === "bot:admin:bitpin:test") {
-    if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");const st=await getSettings(env);try{const snap=await fetchBitpinWallets(st,env);await recordBitpinConnectionState(env,true);const asset=String(st.bitpin_asset||"USDT").toUpperCase(),w=snap.wallets.find(x=>x.asset===asset);await botPrompt(env,chatId,"✅ اتصال بیت‌پین برقرار است."+(w?"\nموجودی "+botEscape(asset)+": <b>"+botEscape(w.balance)+"</b>":""),[[{text:"↩️ بیت‌پین",callback_data:"bot:admin:bitpin"}]]);}catch(e){await recordBitpinConnectionState(env,false,e.message);throw e}return;
-  }
-  if (data.startsWith("bot:admin:bitpin:approve:") || data.startsWith("bot:admin:bitpin:reject:")) {
-    if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");const approve=data.includes(":approve:"),claimId=data.split(approve?":approve:":":reject:")[1];await reviewBitpinDepositFromTelegram(env,account.user,claimId,approve?"approve":"reject");await botSendOrEdit(env,{account,chatId,messageId},"admin_bitpin_claims");return;
   }
 
   if (data === "bot:admin:github_zip:start") {
@@ -9843,6 +9707,13 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
     await botSendOrEdit(env, { account, chatId, messageId }, "admin_settings_finance");
     return;
   }
+  if (data === "bot:admin:plisio") { await botSendOrEdit(env,{account,chatId,messageId},"admin_plisio"); return; }
+  if (data === "bot:admin:plisio:key") { if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");await botSetSession(env,account.user.telegram_id,"setting_plisio_key",{});await botPrompt(env,chatId,"🔑 Secret Key دریافتی از Plisio را ارسال کنید. پیام پس از ذخیره حذف می‌شود.");return; }
+  if (data === "bot:admin:plisio:rate") { if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");await botSetSession(env,account.user.telegram_id,"setting_plisio_rate",{});await botPrompt(env,chatId,"💱 ارز مبنا و نرخ تومان را با | ارسال کنید.\nمثال: <code>USD | 100000</code>");return; }
+  if (data === "bot:admin:plisio:currencies") { if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");await botSetSession(env,account.user.telegram_id,"setting_plisio_currencies",{});await botPrompt(env,chatId,"🪙 شناسه رمزارزهای مجاز Plisio را با کاما ارسال کنید.\nبرای استفاده از تنظیمات حساب Plisio، <code>-</code> بفرستید.");return; }
+  if (data === "bot:admin:plisio:expire") { if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");await botSetSession(env,account.user.telegram_id,"setting_plisio_expire",{});await botPrompt(env,chatId,"⏱ مدت انقضای فاکتور را به دقیقه ارسال کنید.\nمثال: <code>60</code>");return; }
+  if (data === "bot:admin:plisio:test") { if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");try{const r=await testCentralPlisioConnection(env);await botPrompt(env,chatId,"✅ تنظیمات Plisio معتبر است.\nارز مبنا: <b>"+botEscape(r.source_currency)+"</b>\nتأیید پرداخت‌ها از Callback امضاشده انجام می‌شود.",[[{text:"↩️ Plisio",callback_data:"bot:admin:plisio"}]]);}catch(e){await recordCentralPlisioState(env,false,e.message);throw e}return; }
+  if (data === "bot:admin:plisio:toggle") { if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");const st=await getSettings(env),next=st.plisio_enabled==="true"?"false":"true";if(next==="true"&&(!st.plisio_api_key||Number(st.plisio_toman_per_source_unit||0)<=0))throw new Error("ابتدا Secret Key و نرخ تبدیل را ثبت کنید");await setSettings(env,{plisio_enabled:next});const fresh=await ensureTelegramBotUser(env,callback.from);fresh.public_origin=origin;await botSendOrEdit(env,{account:fresh,chatId,messageId},"admin_plisio");return; }
   if (data === "bot:admin:settings:access") {
     await botSendOrEdit(env, { account, chatId, messageId }, "admin_settings_access");
     return;
@@ -10278,6 +10149,12 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
     return;
   }
 
+  if (data.startsWith("bot:charge:provider:")) {
+    const parts=data.split(":");const provider=parts[3],amount=botParseInteger(parts[4]);
+    if(!Number.isFinite(amount))throw new Error("مبلغ معتبر نیست");
+    const payment=provider==="plisio"?await botCreatePlisioPaymentInvoice(env,account.user,amount,origin):await botCreatePaymentInvoice(env,account.user,amount);
+    await botSendInvoice(env,chatId,payment);return;
+  }
   if (data.startsWith("bot:charge:")) {
     const raw = data.slice("bot:charge:".length);
     if (raw === "custom") {
@@ -10286,8 +10163,7 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
       return;
     }
     const amount = botParseInteger(raw);
-    const payment = await botCreatePaymentInvoice(env, account.user, amount);
-    await botSendInvoice(env, chatId, payment);
+    await botPromptPaymentProvider(env,account,chatId,amount);
     return;
   }
   if (data.startsWith("bot:invoice:check:")) {
@@ -10530,23 +10406,6 @@ async function botHandleSessionMessage(env, account, message, session, origin, c
     await botClearSession(env, account.user.telegram_id);
     await botPrompt(env, chatId, "⛔ ساخت ربات نمایندگی در حین فرایند توسط مدیریت مرکزی متوقف شد. اطلاعات نیمه‌تمام حذف شد.", [[{ text: "🏠 منوی اصلی", callback_data: "bot:home" }]]);
     return true;
-  }
-
-
-  if (session.state === "bitpin_claim") {
-    const parts=String(text||"").split("|").map(x=>x.trim());if(parts.length<2)throw new Error("قالب صحیح: مقدار | TXID");
-    const claim=await createBitpinDepositClaimForTelegram(env,account.user,await getSettings(env),parts[0],parts.slice(1).join(""));await botClearSession(env,account.user.telegram_id);
-    await notifyAdmins(env,"🪙 <b>درخواست واریز بیت‌پین</b>\nکاربر: <code>"+botEscape(account.user.telegram_id)+"</code>\nمقدار: <b>"+botEscape(claim.crypto_amount+" "+claim.asset)+"</b>\nارزش: <b>"+botMoney(claim.amount_toman)+" تومان</b>\nTXID: <code>"+botEscape(claim.txid)+"</code>");
-    await botPrompt(env,chatId,"✅ درخواست ثبت شد و پس از بررسی مدیر، کیف پول شارژ می‌شود.\nشناسه: <code>"+botEscape(claim.id)+"</code>",[[{text:"🪙 وضعیت واریزها",callback_data:"bot:bitpin"}],[{text:"💳 کیف پول",callback_data:"bot:wallet"}]]);return true;
-  }
-  if (["setting_bitpin_api","setting_bitpin_secret","setting_bitpin_asset","setting_bitpin_address","setting_bitpin_rate"].includes(session.state)) {
-    if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");const values={};
-    if(session.state==="setting_bitpin_api"){if(text.length<8)throw new Error("API Key معتبر نیست");values.bitpin_api_key="enc:"+await encryptSecret(text,env);try{await telegramApi(env,"deleteMessage",{chat_id:chatId,message_id:message.message_id})}catch(_){}}
-    if(session.state==="setting_bitpin_secret"){if(text.length<8)throw new Error("API Secret معتبر نیست");values.bitpin_api_secret="enc:"+await encryptSecret(text,env);try{await telegramApi(env,"deleteMessage",{chat_id:chatId,message_id:message.message_id})}catch(_){}}
-    if(session.state==="setting_bitpin_asset"){const p=text.split("|").map(x=>cleanText(x,40).toUpperCase());if(p.length<2||!p[0]||!p[1])throw new Error("قالب صحیح: USDT | TRC20");values.bitpin_asset=p[0];values.bitpin_network=p[1];}
-    if(session.state==="setting_bitpin_address"){const a=cleanText(text,300).replace(/\s+/g,"");if(a.length<10)throw new Error("آدرس واریز معتبر نیست");values.bitpin_deposit_address=a;}
-    if(session.state==="setting_bitpin_rate"){const p=text.split("|").map(x=>x.trim()),rate=botParseInteger(p[0]),min=Number(p[1]);if(!Number.isFinite(rate)||rate<1||!Number.isFinite(min)||min<=0)throw new Error("قالب صحیح: نرخ تومان | حداقل مقدار");values.bitpin_toman_per_unit=String(rate);values.bitpin_min_crypto_amount=String(min);}
-    await setSettings(env,values);await audit(env,account.user.id,"central_bitpin_setting_saved",{state:session.state});await botClearSession(env,account.user.telegram_id);const fresh=await ensureTelegramBotUser(env,message.from);await botSendOrEdit(env,{account:fresh,chatId},"admin_bitpin");return true;
   }
 
   if (session.state === "setting_github_upload_token") {
@@ -10990,12 +10849,20 @@ async function botHandleSessionMessage(env, account, message, session, origin, c
     await botPrompt(env, chatId, "✅ اطلاعات پنل بروزرسانی شد.\nعنوان: <b>" + botEscape(updated.title) + "</b>\nنام کاربری: <code>" + botEscape(updated.username) + "</code>" + (updated.password_changed ? "\n🔐 رمز جدید با موفقیت ثبت شد." : ""), [[{ text: "🏢 پنل‌های من", callback_data: "bot:agencies" }]]);
     return true;
   }
+
+  if (["setting_plisio_key","setting_plisio_rate","setting_plisio_currencies","setting_plisio_expire"].includes(session.state)) {
+    if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");const values={};
+    if(session.state==="setting_plisio_key"){if(text.length<12)throw new Error("Secret Key معتبر نیست");values.plisio_api_key="enc:"+await encryptSecret(text,env);try{await telegramApi(env,"deleteMessage",{chat_id:chatId,message_id:message.message_id})}catch(_){}}
+    if(session.state==="setting_plisio_rate"){const p=text.split("|").map(x=>x.trim()),currency=cleanText(p[0],20).toUpperCase(),rate=botParseInteger(p[1]);if(!currency||!Number.isFinite(rate)||rate<=0)throw new Error("قالب صحیح: USD | نرخ تومان");values.plisio_source_currency=currency;values.plisio_toman_per_source_unit=String(rate);}
+    if(session.state==="setting_plisio_currencies"){values.plisio_allowed_currencies=text==="-"?"":cleanText(text,500).replace(/\s+/g,"").toUpperCase();}
+    if(session.state==="setting_plisio_expire"){const minutes=botParseInteger(text.split("|")[0]);if(!Number.isFinite(minutes)||minutes<5||minutes>1440)throw new Error("مدت انقضا باید بین ۵ تا ۱۴۴۰ دقیقه باشد");values.plisio_expire_minutes=String(minutes);}
+    await setSettings(env,values);await botClearSession(env,account.user.telegram_id);const fresh=await ensureTelegramBotUser(env,message.from);fresh.public_origin=account.public_origin;await botSendOrEdit(env,{account:fresh,chatId},"admin_plisio");return true;
+  }
   if (session.state === "charge_amount") {
     const amount = botParseInteger(text);
     if (!Number.isFinite(amount)) throw new Error("مبلغ معتبر ارسال کنید");
-    const payment = await botCreatePaymentInvoice(env, account.user, amount);
     await botClearSession(env, account.user.telegram_id);
-    await botSendInvoice(env, chatId, payment);
+    await botPromptPaymentProvider(env, account, chatId, amount);
     return true;
   }
   if (session.state === "agency_title") {
@@ -11531,7 +11398,7 @@ async function centralAdminBootstrap(request, env) {
   }
   const settings = await getSettings(env);
   const today = new Date(); today.setHours(0,0,0,0);
-  const [stats, agencies, bots, users, payments, bitpinDeposits, logs, resellerHealth] = await Promise.all([
+  const [stats, agencies, bots, users, payments, logs, resellerHealth] = await Promise.all([
     env.PASARGUARD_DB.prepare(`SELECT
       (SELECT COUNT(*) FROM users) AS users_count,
       (SELECT COUNT(*) FROM users WHERE status='active') AS active_users,
@@ -11539,13 +11406,13 @@ async function centralAdminBootstrap(request, env) {
       (SELECT COUNT(*) FROM agencies WHERE status='active') AS active_agencies,
       (SELECT COUNT(*) FROM reseller_bots) AS bots_count,
       (SELECT COUNT(*) FROM reseller_bots WHERE status='active') AS active_bots,
-      ((SELECT COUNT(*) FROM payment_invoices WHERE status='PENDING') + (SELECT COUNT(*) FROM bitpin_deposits WHERE status='pending_review')) AS pending_payments,
+      (SELECT COUNT(*) FROM payment_invoices WHERE status='PENDING') AS pending_payments,
       (SELECT COALESCE(SUM(wallet_balance),0) FROM users) AS total_wallet_balance,
       (SELECT COALESCE(SUM(total_charged),0) FROM agencies) AS total_usage_revenue,
-      ((SELECT COALESCE(SUM(amount_toman),0) FROM payment_invoices WHERE credited_at IS NOT NULL) + (SELECT COALESCE(SUM(amount_toman),0) FROM bitpin_deposits WHERE credited_at IS NOT NULL)) AS total_recharge,
-      ((SELECT COALESCE(SUM(amount_toman),0) FROM payment_invoices WHERE credited_at IS NOT NULL AND created_at>=?) + (SELECT COALESCE(SUM(amount_toman),0) FROM bitpin_deposits WHERE credited_at IS NOT NULL AND created_at>=?)) AS today_recharge,
+      (SELECT COALESCE(SUM(amount_toman),0) FROM payment_invoices WHERE credited_at IS NOT NULL) AS total_recharge,
+      (SELECT COALESCE(SUM(amount_toman),0) FROM payment_invoices WHERE credited_at IS NOT NULL AND created_at>=?) AS today_recharge,
       (SELECT COALESCE(SUM(amount_toman),0) FROM sales_orders WHERE status='delivered') AS reseller_total_sales
-    `).bind(today.toISOString(), today.toISOString()).first(),
+    `).bind(today.toISOString()).first(),
     env.PASARGUARD_DB.prepare(`SELECT a.id,a.title,a.panel_username,a.status,a.last_usage_bytes,a.total_charged,a.provisioning_source,a.runtime_version,a.created_at,a.updated_at,
       u.id AS owner_id,u.telegram_id,u.username,u.first_name,u.last_name,u.wallet_balance,u.status AS owner_status,
       rb.id AS bot_id,rb.bot_username,rb.status AS bot_status
@@ -11570,9 +11437,6 @@ async function centralAdminBootstrap(request, env) {
     env.PASARGUARD_DB.prepare(`SELECT p.id,p.provider_invoice_id,p.amount_toman,p.status,p.paid_at,p.credited_at,p.created_at,p.updated_at,
       u.id AS user_id,u.telegram_id,u.username,u.first_name,u.last_name
       FROM payment_invoices p JOIN users u ON u.id=p.user_id ORDER BY p.created_at DESC LIMIT 300`).all(),
-    env.PASARGUARD_DB.prepare(`SELECT d.id,d.asset,d.network,d.txid,d.crypto_amount,d.rate_toman,d.amount_toman,d.status,d.note,d.created_at,d.updated_at,d.reviewed_at,d.credited_at,
-      u.id AS user_id,u.telegram_id,u.username,u.first_name,u.last_name
-      FROM bitpin_deposits d JOIN users u ON u.id=d.user_id ORDER BY d.created_at DESC LIMIT 300`).all(),
     env.PASARGUARD_DB.prepare(`SELECT l.id,l.actor_user_id,l.action,l.details,l.created_at,u.telegram_id,u.username,u.first_name,u.last_name
       FROM audit_logs l LEFT JOIN users u ON u.id=l.actor_user_id ORDER BY l.created_at DESC LIMIT 200`).all(),
     env.PASARGUARD_DB.prepare(`SELECT
@@ -11591,7 +11455,7 @@ async function centralAdminBootstrap(request, env) {
     admin: { id: auth.user.id, telegram_id: auth.user.telegram_id, username: auth.user.username, first_name: auth.user.first_name, last_name: auth.user.last_name },
     stats: stats || {}, configuration,
     sales: { agency_enabled: agencySalesOpen(settings), reseller_bot_enabled: resellerBotSalesOpen(settings) },
-    agencies: agencies.results || [], bots: botRows, users: users.results || [], payments: payments.results || [], bitpin_deposits: bitpinDeposits.results || [], audit_logs: logs.results || [],
+    agencies: agencies.results || [], bots: botRows, users: users.results || [], payments: payments.results || [], audit_logs: logs.results || [],
     links: { customer_app: origin + "/app", advanced_control: origin + "/control-advanced", central_bot: settings.central_bot_username ? "https://t.me/" + String(settings.central_bot_username).replace(/^@/, "") : "" },
     edge: { enabled: liveEdge.connected === true && settings.edge_worker_manual_disabled !== "true", binding_detected: liveEdge.binding_detected === true, core_binding_detected: liveEdge.core_binding_detected === true, processor_binding_detected: liveEdge.processor_binding_detected === true, core_ok: liveEdge.core_ok === true, processor_ok: liveEdge.processor_ok === true, database_query_ok: liveEdge.database_query_ok !== false, mode: "service_binding", status: settings.edge_worker_manual_disabled === "true" ? "disabled" : (liveEdge.status || "disconnected"), script_name: liveEdge.script_name || settings.edge_worker_script_name || "", last_check_at: liveEdge.diagnostics?.checked_at || settings.edge_worker_last_check_at || "", last_error: settings.edge_worker_manual_disabled === "true" ? "تقسیم بار از پنل غیرفعال شده است" : (liveEdge.error || settings.edge_worker_last_error || ""), version: liveEdge.version || settings.edge_worker_last_version || "", pending_jobs: Number(liveEdge.pending_jobs || 0), last_deployed_at: settings.edge_worker_last_deployed_at || "", probe: liveEdge.probe || null, core_probe: liveEdge.core_probe || liveEdge.diagnostics?.edge_to_core || null, processor_probe: liveEdge.processor_probe || liveEdge.diagnostics?.edge_to_processor || null, runtime_bindings: liveEdge.runtime_bindings || liveEdge.diagnostics?.runtime_bindings || null, diagnostics: liveEdge.diagnostics || null },
     processor: { enabled: liveProcessor.connected === true && settings.processor_worker_manual_disabled !== "true", binding_detected: liveProcessor.binding_detected === true, core_binding_detected: liveProcessor.core_binding_detected === true, edge_binding_detected: liveProcessor.edge_binding_detected === true, core_ok: liveProcessor.core_ok === true, edge_ok: liveProcessor.edge_ok === true, database_query_ok: liveProcessor.database_query_ok !== false, mode: "service_binding", status: settings.processor_worker_manual_disabled === "true" ? "disabled" : (liveProcessor.status || "disconnected"), script_name: liveProcessor.script_name || settings.processor_worker_script_name || "", last_check_at: liveProcessor.diagnostics?.checked_at || settings.processor_worker_last_check_at || "", last_error: settings.processor_worker_manual_disabled === "true" ? "پردازش Worker سوم از پنل غیرفعال شده است" : (liveProcessor.error || settings.processor_worker_last_error || ""), version: liveProcessor.version || settings.processor_worker_last_version || "", pending_jobs: Number(liveProcessor.pending_jobs || 0), processed_jobs: Number(liveProcessor.processed_jobs || 0), last_deployed_at: settings.processor_worker_last_deployed_at || "", probe: liveProcessor.probe || null, core_probe: liveProcessor.core_probe || liveProcessor.diagnostics?.processor_to_core || null, edge_probe: liveProcessor.edge_probe || liveProcessor.diagnostics?.processor_to_edge || null, runtime_bindings: liveProcessor.runtime_bindings || liveProcessor.diagnostics?.runtime_bindings || null, diagnostics: liveProcessor.diagnostics || null },
@@ -11599,7 +11463,6 @@ async function centralAdminBootstrap(request, env) {
       database: true,
       central_bot: Boolean(settings.bot_token),
       blupal: Boolean(settings.blupal_api_key),
-      bitpin: settings.bitpin_enabled === "true" && Boolean(settings.bitpin_api_key && settings.bitpin_api_secret && settings.bitpin_deposit_address),
       pasarguard: Boolean(settings.pasarguard_panel_url && (settings.pasarguard_access_token || (settings.pasarguard_admin_username && settings.pasarguard_admin_password))),
       auto_update: Boolean(settings.github_repo && settings.cf_account_id && settings.cf_api_token && settings.cf_worker_name),
       python_helper: Boolean(env.PY_HELPER && typeof env.PY_HELPER.fetch === "function"),
@@ -11821,17 +11684,6 @@ async function centralAdminAction(request, env) {
     if (action === "sync_payments") {
       const result = await pollPendingPayments(env, 200); await audit(env, auth.user.id, "central_dashboard_payment_sync", result); return json({ success: true, message: "پرداخت‌ها استعلام شدند", result });
     }
-    if (action === "bitpin_test") {
-      const settings = await getSettings(env);
-      const snapshot = await fetchBitpinWallets(settings, env);
-      await recordBitpinConnectionState(env, true);
-      const asset = String(settings.bitpin_asset || "USDT").toUpperCase();
-      const selected = snapshot.wallets.find(row => row.asset === asset) || null;
-      await audit(env, auth.user.id, "bitpin_connection_tested", { asset, walletFound: Boolean(selected) });
-      return json({ success: true, message: selected ? "اتصال بیت‌پین برقرار است؛ موجودی " + asset + ": " + selected.balance : "اتصال بیت‌پین برقرار است", selected_wallet: selected, wallets: snapshot.wallets });
-    }
-    if (action === "bitpin_approve") return reviewBitpinDeposit(request, env, cleanText(body.id, 100), "approve", body);
-    if (action === "bitpin_reject") return reviewBitpinDeposit(request, env, cleanText(body.id, 100), "reject", body);
     if (action === "cleanup_payments") {
       const result = await cleanupStalePendingInvoices(env, { settings: await getSettings(env), limit: 500 }); await audit(env, auth.user.id, "central_dashboard_payment_cleanup", result); return json({ success: true, message: "فاکتورهای قدیمی پاک‌سازی شدند", result });
     }
@@ -11875,7 +11727,7 @@ async function routeApiUnsafe(request, env, path) {
   if (path === "/api/admin/control/action" && request.method === "POST") return centralAdminAction(request, env);
   if (path === "/api/usage/live" && request.method === "GET") return liveUsageSnapshot(request, env);
   if (path === "/api/payments/blupal/create" && request.method === "POST") return createPaymentInvoice(request, env);
-  if (path === "/api/payments/bitpin/claim" && request.method === "POST") return createBitpinDepositClaim(request, env);
+  if (path === "/api/payments/plisio/create" && request.method === "POST") return createPlisioPaymentInvoice(request, env);
   if (path === "/api/agencies" && request.method === "POST") return createAgency(request, env);
   if (path === "/api/trial" && request.method === "POST") return createCentralTrial(request, env);
   if (path === "/api/admin/settings" && request.method === "POST") return saveAdminSettings(request, env);
@@ -11883,7 +11735,6 @@ async function routeApiUnsafe(request, env, path) {
   if (path === "/api/admin/payments/sync" && request.method === "POST") return adminPaymentSync(request, env);
   if (path === "/api/admin/payments/cleanup" && request.method === "POST") return adminPaymentCleanup(request, env);
   if (path === "/api/admin/payments/blupal/webhook-url" && request.method === "GET") return getBlupalWebhookUrl(request, env);
-  if (path === "/api/admin/payments/bitpin/test" && request.method === "POST") return testBitpinConnection(request, env);
   if (path === "/api/admin/update/check" && request.method === "POST") return updateAction(request, env, false);
   if (path === "/api/admin/update/deploy" && request.method === "POST") return updateAction(request, env, true);
   if (path === "/api/admin/python/provision" && request.method === "POST") return adminProvisionPythonHelper(request, env);
@@ -11895,15 +11746,13 @@ async function routeApiUnsafe(request, env, path) {
   if (match && request.method === "PUT") return updateAgencyInfo(request, env, decodeURIComponent(match[1]));
   match = path.match(/^\/api\/agencies\/([^/]+)\/credentials$/);
   if (match && request.method === "GET") return getAgencyCredentials(request, env, decodeURIComponent(match[1]));
-  match = path.match(/^\/api\/admin\/payments\/bitpin\/([^/]+)\/(approve|reject)$/);
-  if (match && request.method === "POST") return reviewBitpinDeposit(request, env, decodeURIComponent(match[1]), match[2]);
   match = path.match(/^\/api\/payments\/([^/]+)\/status$/);
   if (match && request.method === "GET") return getPaymentStatus(request, env, decodeURIComponent(match[1]));
   return fail("مسیر API پیدا نشد", 404, "NOT_FOUND");
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.0.8';
+const BLUEPANEL_CORE_VERSION = '3.0.4';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
@@ -12004,9 +11853,11 @@ export default {
       if(path==='/health'){const h=await bluePanelCoreHealth(env);return bluePanelCoreJson(h,h.ok?200:503);}
       if(bluePanelEdgePath(path,request.method)) return bluePanelForwardToEdge(request,env);
       if(['/payments/blupal/return','/return'].includes(path)&&request.method==='GET'){await ensureDb(env);const s=await getSettings(env);return new Response(centralBlupalReturnPage(s,url.origin,url),{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}});}
+      if(path==='/payments/plisio/return'&&request.method==='GET'){await ensureDb(env);const s=await getSettings(env);return new Response(centralPlisioReturnPage(s,url.origin,url),{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}});}
       if(path==='/auth/control/magic'&&request.method==='GET') return Response.redirect(url.origin+'/control',302);
       if(path==='/telegram/webhook'&&request.method==='POST') return telegramWebhook(request,env,ctx);
       if(path==='/payments/blupal/webhook'&&request.method==='POST') return blupalWebhook(request,env,ctx);
+      if(path==='/payments/plisio/callback'&&request.method==='POST') return plisioCallback(request,env);
       if(path.startsWith('/api/')) return routeApi(request,env,path);
       if(request.method==='GET') return bluePanelForwardToEdge(request,env);
       return new Response('Not found',{status:404});

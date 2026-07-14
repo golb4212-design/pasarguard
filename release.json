@@ -1,6 +1,6 @@
 {
-  "version": "3.0.8",
-  "release_id": "3.0.8-20260714-d1-reseller-bitpin-schema-fix",
+  "version": "3.0.9",
+  "release_id": "3.0.9-20260714-plisio-clean",
   "architecture": "fully-split-three-worker",
   "files": {
     "core": "core/worker.js",
@@ -8,13 +8,13 @@
     "processor": "processor/worker.js"
   },
   "sha256": {
-    "core": "0f5ed544aace18c78053d65602b3263eb72ae60f2125256c58eb1884dbd00a9d",
-    "edge": "e15b18fc18b182eb7194153f0ef1c67e574f5e4acfcad4ac1b19792c68e130c2",
-    "processor": "5996df7dea72d93a138e73cba52638bfda908cd11e4704a7b3e9fcc0d01fde81"
+    "core": "91b6c6a835e72b954ef080dffcb37f63867904ccc1e10206d6fa7e26bb332e5d",
+    "edge": "99e40d5f774f95b2a99384b75de304f180f65b0ef011e322ec9f5dbf22ed15c6",
+    "processor": "9e1f2eb6c89e829b4f7dee4fa17d3736dbeff5f2cec431ffcd4534bd7a4b2c13"
   },
   "roles": {
-    "core": "central bot, finance, licenses, central APIs, GitHub publishing and D1 authority",
-    "edge": "web panels, reseller bots, customer miniapps and latency-sensitive request handling",
+    "core": "central bot, finance, licenses, central Plisio invoices and callbacks, central APIs and D1 authority",
+    "edge": "web panels, reseller bots, customer miniapps, reseller Plisio invoices and callbacks, and latency-sensitive request handling",
     "processor": "reports, retry queue, backups and background jobs"
   },
   "bindings": {
@@ -34,31 +34,24 @@
       "EDGE_WORKER"
     ]
   },
-  "performance": {
-    "sales_bootstrap_remote_roundtrips": "12_to_1_batch",
-    "reseller_admin_bootstrap_remote_roundtrips": "18_to_1_batch",
-    "runtime_botfather_sync": "background",
-    "start_session_cleanup": "background",
-    "settings_cache_ttl_seconds": 60,
-    "join_status_cache_ttl_seconds": 120,
-    "reseller_bot_cache_ttl_seconds": 15
-  },
-  "fixes": [
-    "fix D1_ERROR too many columns on sqlite_altertab_reseller_bots",
-    "move reseller Bitpin settings from reseller_bots into reseller_bitpin_configs",
-    "stop all Bitpin ALTER TABLE operations on the already wide reseller_bots table",
-    "hydrate Bitpin configuration transparently in Core, Edge and Processor workers",
-    "write reseller Bitpin API, address, rate and status through atomic UPSERT operations",
-    "restore reseller backups without writing Bitpin fields into reseller_bots",
-    "remain compatible with databases where the failed 3.0.7 migration added one or two legacy Bitpin columns",
-    "retain central and reseller Bitpin menus, TXID review and exactly-once wallet crediting",
+  "features": [
+    "remove the previous exchange integration, menus, settings and database migrations",
+    "add Plisio invoice payment to the central bot wallet recharge flow",
+    "add independent Plisio configuration and wallet recharge to every reseller bot and reseller miniapp",
+    "verify Plisio JSON callbacks using HMAC-SHA1 and the shop Secret Key",
+    "credit wallets exactly once with duplicate callback and duplicate ledger protection",
+    "store reseller Plisio settings in a separate table to avoid the D1 reseller_bots column limit",
+    "encrypt Plisio Secret Keys and delete Telegram messages containing secrets after storage",
+    "use callback-only payment confirmation without Plisio balance or transaction polling",
+    "keep BluePal, card-to-card and internal wallet payment methods unchanged",
     "README files are excluded"
   ],
-  "title": "رفع خطای ورود D1 و جداسازی تنظیمات بیت‌پین نمایندگان",
-  "notes": [
-    "علت خطا محدودیت تعداد ستون‌های D1 بود؛ جدول reseller_bots در نسخه قبلی ۹۸ ستون داشت و افزودن ستون‌های بیت‌پین از سقف ۱۰۰ ستون عبور می‌کرد.",
-    "در این نسخه تنظیمات بیت‌پین هر نماینده در جدول مستقل ذخیره می‌شود و دیگر هیچ ALTER TABLE برای ستون‌های بیت‌پین روی reseller_bots اجرا نمی‌شود.",
-    "اگر اجرای نسخه ۳.۰.۷ چند ستون ناقص ساخته باشد، نسخه جدید آن‌ها را نادیده می‌گیرد و بدون حذف اطلاعات قبلی سامانه بالا می‌آید.",
-    "برای اعمال کامل اصلاح، Core و Edge و Processor هر سه به نسخه ۳.۰.۸ بروزرسانی شوند."
-  ]
+  "validation": {
+    "javascript_syntax": "passed for core, edge and processor",
+    "plisio_callback_hmac_model": "passed",
+    "exactly_once_credit_model": "passed",
+    "d1_schema_and_invoice_sql": "passed",
+    "live_plisio_payment": "not run; a real Plisio shop Secret Key was not supplied",
+    "legacy_exchange_reference_scan": "passed; no legacy exchange references remain"
+  }
 }

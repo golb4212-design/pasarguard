@@ -1,11 +1,11 @@
 /* BLUEPANEL_PROCESSOR_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.0.8
+ * Version: 3.0.9
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = "3.0.8";
+const APP_VERSION = "3.0.9";
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
@@ -15,9 +15,7 @@ const RESELLER_BACKUP_FIELDS = Object.freeze([
   "cashback_enabled","cashback_percent","cashback_min_purchase_toman","cashback_max_toman",
   "notifications_enabled","expiry_reminder_hours","usage_reminder_percent","ticketing_enabled",
   "phone_verification_required","ticket_auto_close_hours","daily_report_enabled","daily_report_hour_utc",
-  "blupal_enabled","blupal_base_url","blupal_card_number",
-  "bitpin_enabled","bitpin_base_url","bitpin_asset","bitpin_network","bitpin_deposit_address","bitpin_toman_per_unit","bitpin_min_crypto_amount",
-  "miniapp_enabled",
+  "blupal_enabled","blupal_base_url","blupal_card_number","miniapp_enabled",
   "sales_automation_enabled","abandoned_reminder_minutes","winback_days","loyalty_enabled","loyalty_profile",
   "fraud_protection_enabled","order_cooldown_seconds","max_pending_orders","daily_order_limit",
   "daily_wallet_charge_limit_toman","duplicate_receipt_protection","auto_block_risk_score",
@@ -652,52 +650,17 @@ async function resolveResellerServiceAgency(env, bot) {
   };
 }
 
-
-const RESELLER_BITPIN_DEFAULTS = Object.freeze({
-  bitpin_enabled: 0,
-  bitpin_base_url: "https://api.bitpin.ir",
-  bitpin_api_key_enc: null,
-  bitpin_api_secret_enc: null,
-  bitpin_asset: "USDT",
-  bitpin_network: "TRC20",
-  bitpin_deposit_address: null,
-  bitpin_toman_per_unit: 100000,
-  bitpin_min_crypto_amount: 1,
-  bitpin_configured_at: null,
-  bitpin_last_verified_at: null,
-  bitpin_last_error: null
-});
-
-async function getResellerBitpinConfig(env, botId) {
-  if (!botId) return { ...RESELLER_BITPIN_DEFAULTS };
-  try {
-    const row = await env.PASARGUARD_DB.prepare(`
-      SELECT bitpin_enabled,bitpin_base_url,bitpin_api_key_enc,bitpin_api_secret_enc,
-             bitpin_asset,bitpin_network,bitpin_deposit_address,bitpin_toman_per_unit,
-             bitpin_min_crypto_amount,bitpin_configured_at,bitpin_last_verified_at,bitpin_last_error
-      FROM reseller_bitpin_configs WHERE bot_id=?
-    `).bind(botId).first();
-    return { ...RESELLER_BITPIN_DEFAULTS, ...(row || {}) };
-  } catch (error) {
-    if (/no such table/i.test(String(error?.message || error))) return { ...RESELLER_BITPIN_DEFAULTS };
-    throw error;
-  }
-}
-
 async function hydrateResellerBotRelations(env, bot) {
   if (!bot) return null;
-  const [relation, bitpin] = await Promise.all([
-    env.PASARGUARD_DB.prepare(`
-      SELECT a.title AS agency_title,a.panel_username,a.panel_password_enc,a.status AS agency_status,a.remote_manager_id,
-             u.telegram_id AS owner_telegram_id,u.username AS owner_username,u.first_name AS owner_first_name,
-             u.last_name AS owner_last_name,u.wallet_balance AS owner_wallet_balance,
-             CASE WHEN a.panel_password_enc IS NULL THEN 0 ELSE 1 END AS agency_has_password
-      FROM users u LEFT JOIN agencies a ON a.id=?
-      WHERE u.id=?
-    `).bind(bot.agency_id, bot.user_id).first(),
-    getResellerBitpinConfig(env, bot.id)
-  ]);
-  return { ...bot, ...RESELLER_BITPIN_DEFAULTS, ...(bitpin || {}), ...(relation || {}) };
+  const relation = await env.PASARGUARD_DB.prepare(`
+    SELECT a.title AS agency_title,a.panel_username,a.panel_password_enc,a.status AS agency_status,a.remote_manager_id,
+           u.telegram_id AS owner_telegram_id,u.username AS owner_username,u.first_name AS owner_first_name,
+           u.last_name AS owner_last_name,u.wallet_balance AS owner_wallet_balance,
+           CASE WHEN a.panel_password_enc IS NULL THEN 0 ELSE 1 END AS agency_has_password
+    FROM users u LEFT JOIN agencies a ON a.id=?
+    WHERE u.id=?
+  `).bind(bot.agency_id, bot.user_id).first();
+  return { ...bot, ...(relation || {}) };
 }
 
 async function getResellerBotById(env, botId) {
@@ -1706,7 +1669,6 @@ async function processResellerAutoBackups(env, limit = 50) {
 }
 
 async function runResellerHealthCheck(env, bot) {
-  bot = { ...bot, ...(await getResellerBitpinConfig(env, bot?.id)) };
   const details=[];
   let score=100;
   const add=(key,label,status,message,penalty=0)=>{ details.push({key,label,status,message}); if(status!=="ok") score-=penalty; };
@@ -1734,11 +1696,6 @@ async function runResellerHealthCheck(env, bot) {
     if(String(bot.blupal_api_key_enc||"").trim()) add("blupal","بلوپال","ok","API رمزگذاری‌شده و درگاه فعال است");
     else add("blupal","بلوپال","error","درگاه فعال است اما API Key ثبت نشده",18);
   } else add("blupal","بلوپال","idle","غیرفعال",0);
-  if(Number(bot.bitpin_enabled||0)===1){
-    const bitpinReady=String(bot.bitpin_api_key_enc||"").trim()&&String(bot.bitpin_api_secret_enc||"").trim()&&String(bot.bitpin_deposit_address||"").trim();
-    if(bitpinReady) add("bitpin","بیت‌پین","ok","API و آدرس واریز رمزگذاری و فعال است");
-    else add("bitpin","بیت‌پین","error","بیت‌پین فعال است اما API یا آدرس ناقص است",18);
-  } else add("bitpin","بیت‌پین","idle","غیرفعال",0);
   if(Number(bot.auto_backup_enabled??1)===1){
     const age=bot.last_backup_at ? Date.now()-new Date(bot.last_backup_at).getTime() : Number.POSITIVE_INFINITY;
     if(age>48*3600000) add("backup","پشتیبان‌گیری","warning","بیش از ۴۸ ساعت پشتیبان موفق ثبت نشده",10);
@@ -1747,9 +1704,8 @@ async function runResellerHealthCheck(env, bot) {
   const pending=await env.PASARGUARD_DB.prepare(`SELECT
     (SELECT COUNT(*) FROM sales_orders WHERE bot_id=? AND status='pending_review') AS orders_count,
     (SELECT COUNT(*) FROM sales_payment_invoices WHERE bot_id=? AND status IN ('PENDING','PAID') AND processed_at IS NULL) AS payments_count,
-    (SELECT COUNT(*) FROM sales_bitpin_deposits WHERE bot_id=? AND status='pending_review') AS bitpin_count,
-    (SELECT COUNT(*) FROM sales_tickets WHERE bot_id=? AND status='waiting_owner') AS tickets_count`).bind(bot.id,bot.id,bot.id,bot.id).first();
-  const queue=Number(pending?.orders_count||0)+Number(pending?.payments_count||0)+Number(pending?.bitpin_count||0)+Number(pending?.tickets_count||0);
+    (SELECT COUNT(*) FROM sales_tickets WHERE bot_id=? AND status='waiting_owner') AS tickets_count`).bind(bot.id,bot.id,bot.id).first();
+  const queue=Number(pending?.orders_count||0)+Number(pending?.payments_count||0)+Number(pending?.tickets_count||0);
   if(queue>30) add("queue","صف عملیاتی","warning","تعداد موارد نیازمند رسیدگی: "+queue,8);
   else add("queue","صف عملیاتی","ok","موارد نیازمند رسیدگی: "+queue);
   score=Math.max(0,Math.min(100,Math.round(score)));
@@ -1979,7 +1935,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_PROCESSOR_VERSION='3.0.8';
+const BLUEPANEL_PROCESSOR_VERSION='3.0.1';
 let processorSchemaPromise=null;
 function processorJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function processorInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
