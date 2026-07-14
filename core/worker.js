@@ -1,23 +1,23 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.0.2
+ * Version: 3.0.3
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.0.2";
+const APP_VERSION = "3.0.3";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
   central: Object.freeze([
-    { emoji: "🧵", text: "تکمیل خودکار موضوع‌های گروه گزارش مرکزی با تمام بخش‌های موجود در ساختار گزارش" },
-    { emoji: "🗂", text: "افزودن موضوع‌های بکاپ ربات، گزارش شبانه، اطلاع‌رسانی‌ها، اکانت تست، مالی، خرید، خطا، پورسانت و خرید خدمات" },
-    { emoji: "🎯", text: "مسیر‌دهی دقیق گزارش‌ها به Topic مرتبط و جلوگیری از تجمیع گزارش‌های نامرتبط" }
+    { emoji: "📦", text: "دریافت مستقیم فایل ZIP بروزرسانی از مدیر در ربات مرکزی" },
+    { emoji: "🗂", text: "استخراج امن ZIP و بارگذاری واقعی فایل‌ها با حفظ ساختار پوشه‌ها در GitHub" },
+    { emoji: "🧾", text: "ثبت همه فایل‌های بروزرسانی در یک Commit مرتب و جلوگیری از آپلود تکراری" },
+    { emoji: "🚀", text: "شروع خودکار استقرار سه Worker بلافاصله پس از ثبت موفق Commit" },
+    { emoji: "🔐", text: "امکان ثبت امن توکن، مخزن و Branch گیت‌هاب از داخل ربات مرکزی" }
   ]),
-  reseller: Object.freeze([
-    { emoji: "🤖", text: "همان فهرست کامل Topicها برای گروه اختصاصی هر ربات نماینده و ساخت موارد جاافتاده بدون موضوع تکراری" }
-  ])
+  reseller: Object.freeze([])
 });
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
@@ -38,34 +38,37 @@ const RESELLER_BACKUP_FIELDS = Object.freeze([
 
 
 const CENTRAL_REPORT_TOPICS = Object.freeze([
-  { key: "overview", title: "⚙️ سایر گزارشات", color: 7322096 },
-  { key: "bots", title: "🤖 گزارش ربات‌های نماینده", color: 13338331 },
-  { key: "backup", title: "🤖 بکاپ ربات", color: 7322096 },
-  { key: "nightly", title: "🌙 گزارش شبانه", color: 9367192 },
-  { key: "system", title: "📝 گزارش اطلاع‌رسانی‌ها", color: 13338331 },
-  { key: "trial_accounts", title: "🔑 گزارش اکانت تست", color: 16478047 },
-  { key: "payments", title: "💰 گزارش مالی", color: 9367192 },
+  { key: "overview", title: "📊 گزارش جامع همه ربات‌ها", color: 7322096 },
+  { key: "nightly", title: "🌙 گزارش شبانه", color: 13338331 },
+  { key: "bots", title: "🤖 گزارش ربات‌های نماینده", color: 9367192 },
   { key: "orders", title: "🛍 گزارش‌های خرید", color: 16766590 },
-  { key: "security", title: "❌ گزارش خطاها", color: 16749490 },
+  { key: "payments", title: "💰 گزارش مالی", color: 16478047 },
+  { key: "service_purchases", title: "📌 گزارش خرید خدمات", color: 7322096 },
+  { key: "trial_accounts", title: "🔑 گزارش اکانت تست", color: 13338331 },
+  { key: "announcements", title: "📝 گزارش اطلاع‌رسانی‌ها", color: 9367192 },
   { key: "commissions", title: "🎁 گزارش پورسانت‌ها", color: 16766590 },
-  { key: "services", title: "📌 گزارش خرید خدمات", color: 16478047 },
-  { key: "customers", title: "👥 گزارش کاربران", color: 13338331 },
-  { key: "support", title: "🎫 گزارش پشتیبانی", color: 13338331 }
+  { key: "backups", title: "🤖 بکاپ ربات", color: 16478047 },
+  { key: "customers", title: "👥 گزارش کاربران", color: 7322096 },
+  { key: "support", title: "🎫 گزارش پشتیبانی", color: 13338331 },
+  { key: "errors", title: "❌ گزارش خطاها", color: 16749490 },
+  { key: "misc", title: "⚙️ سایر گزارشات", color: 9367192 },
+  { key: "system", title: "🛠 گزارش سامانه و بروزرسانی", color: 7322096 }
 ]);
 
 const RESELLER_REPORT_TOPICS = Object.freeze([
-  { key: "overview", title: "⚙️ سایر گزارشات", color: 7322096 },
-  { key: "backup", title: "🤖 بکاپ ربات", color: 7322096 },
-  { key: "nightly", title: "🌙 گزارش شبانه", color: 9367192 },
-  { key: "system", title: "📝 گزارش اطلاع‌رسانی‌ها", color: 13338331 },
-  { key: "trial_accounts", title: "🔑 گزارش اکانت تست", color: 16478047 },
-  { key: "payments", title: "💰 گزارش مالی", color: 9367192 },
+  { key: "overview", title: "📊 گزارش جامع ربات", color: 7322096 },
+  { key: "nightly", title: "🌙 گزارش شبانه", color: 13338331 },
   { key: "orders", title: "🛍 گزارش‌های خرید", color: 16766590 },
-  { key: "security", title: "❌ گزارش خطاها", color: 16749490 },
+  { key: "payments", title: "💰 گزارش مالی", color: 16478047 },
+  { key: "service_purchases", title: "📌 گزارش خرید خدمات", color: 7322096 },
+  { key: "trial_accounts", title: "🔑 گزارش اکانت تست", color: 13338331 },
+  { key: "announcements", title: "📝 گزارش اطلاع‌رسانی‌ها", color: 9367192 },
   { key: "commissions", title: "🎁 گزارش پورسانت‌ها", color: 16766590 },
-  { key: "services", title: "📌 گزارش خرید خدمات", color: 16478047 },
-  { key: "customers", title: "👥 گزارش کاربران", color: 13338331 },
-  { key: "support", title: "🎫 گزارش پشتیبانی", color: 13338331 }
+  { key: "backups", title: "🤖 بکاپ ربات", color: 16478047 },
+  { key: "customers", title: "👥 گزارش کاربران", color: 7322096 },
+  { key: "support", title: "🎫 گزارش پشتیبانی", color: 13338331 },
+  { key: "errors", title: "❌ گزارش خطاها", color: 16749490 },
+  { key: "misc", title: "⚙️ سایر گزارشات", color: 9367192 }
 ]);
 
 const GIB = 1024 * 1024 * 1024;
@@ -114,6 +117,15 @@ const PY_HELPER_INSIGHT_TIMEOUT_MS = 350;
 const RESELLER_TOKEN_CACHE_TTL_MS = 300000;
 
 const JOIN_STATUS_CACHE_TTL_MS = 60000;
+
+const TELEGRAM_GITHUB_ZIP_MAX_BYTES = 20 * 1024 * 1024;
+const GITHUB_ZIP_MAX_UNCOMPRESSED_BYTES = 30 * 1024 * 1024;
+const GITHUB_ZIP_MAX_FILE_BYTES = 10 * 1024 * 1024;
+const GITHUB_ZIP_MAX_FILES = 200;
+const GITHUB_ZIP_REQUIRED_PATHS = Object.freeze([
+  "core/worker.js", "edge/worker.js", "processor/worker.js", "version", "release.json"
+]);
+let ZIP_CRC32_TABLE = null;
 
 const PYTHON_HELPER_VERSION = "1.0.3";
 
@@ -307,6 +319,11 @@ const DEFAULT_SETTINGS = {
   github_worker_file: "core/worker.js",
   github_version_file: "version",
   github_token: "",
+  github_zip_upload_enabled: "true",
+  github_zip_last_commit_sha: "",
+  github_zip_last_version: "",
+  github_zip_last_uploaded_at: "",
+  github_zip_last_error: "",
   cf_account_id: "",
   cf_api_token: "",
   cf_worker_name: "",
@@ -486,6 +503,26 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   details TEXT,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS github_zip_uploads (
+  id TEXT PRIMARY KEY,
+  telegram_id TEXT NOT NULL,
+  file_unique_id TEXT NOT NULL UNIQUE,
+  file_name TEXT NOT NULL,
+  repository TEXT,
+  branch TEXT,
+  version TEXT,
+  file_count INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'processing',
+  commit_sha TEXT,
+  commit_url TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_github_zip_uploads_status
+  ON github_zip_uploads(status, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS reseller_bots (
   id TEXT PRIMARY KEY,
@@ -2550,13 +2587,6 @@ async function sendReleaseAnnouncement(env, options = {}) {
         release_last_announcement_error: ""
       });
       try { await audit(env, null, "release_announcement_sent", { version: APP_VERSION, target, messageId, force, allowRepeat }); } catch (_) {}
-      try {
-        await queueReportEvent(env, null, "system", "اطلاعیه بروزرسانی منتشر شد",
-          "🚀 نسخه: <code>" + botEscape(APP_VERSION) + "</code>\n" +
-          "📣 مقصد: <code>" + botEscape(target) + "</code>\n" +
-          "🧾 شناسه پیام: <code>" + botEscape(messageId || "-") + "</code>",
-          "release-report:" + APP_VERSION);
-      } catch (_) {}
     }
     return { sent: true, test, version: APP_VERSION, target, messageId };
   } catch (error) {
@@ -4972,6 +5002,425 @@ async function githubFetch(env, url, suppliedSettings = null, options = {}) {
   return response;
 }
 
+
+function githubRepoApiPath(repo) {
+  const normalized = normalizeGithubRepo(repo);
+  const parts = normalized.split("/").filter(Boolean);
+  if (parts.length !== 2 || !/^[A-Za-z0-9_.-]+$/.test(parts[0]) || !/^[A-Za-z0-9_.-]+$/.test(parts[1])) {
+    throw new Error("آدرس مخزن GitHub باید به‌صورت owner/repository باشد");
+  }
+  return "/repos/" + encodeURIComponent(parts[0]) + "/" + encodeURIComponent(parts[1]);
+}
+
+async function githubApiRequest(env, suppliedSettings, method, path, body = undefined) {
+  const settings = suppliedSettings || await getSettings(env);
+  const token = String(settings.github_token || "").trim();
+  if (!token) throw new Error("توکن GitHub تنظیم نشده است؛ ابتدا از بخش اتصال GitHub توکن را ثبت کنید");
+  const headers = {
+    accept: "application/vnd.github+json",
+    authorization: "Bearer " + token,
+    "x-github-api-version": "2022-11-28",
+    "user-agent": "Pasargard-MiniApp/" + APP_VERSION + " (Telegram ZIP uploader)"
+  };
+  if (body !== undefined) headers["content-type"] = "application/json";
+  const response = await fetch("https://api.github.com" + path, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+  const raw = await response.text().catch(() => "");
+  let data = {};
+  try { data = raw ? JSON.parse(raw) : {}; } catch (_) { data = { message: raw }; }
+  if (!response.ok) {
+    const detail = cleanText(data?.message || raw || "GitHub API error", 500);
+    let message = "خطای GitHub HTTP " + response.status + ": " + detail;
+    if (response.status === 401) message = "توکن GitHub نامعتبر یا منقضی است";
+    else if (response.status === 403) message = "توکن GitHub اجازه نوشتن ندارد یا محدودیت API فعال شده است: " + detail;
+    else if (response.status === 404) message = "مخزن یا Branch پیدا نشد؛ نام مخزن و دسترسی توکن را بررسی کنید";
+    else if (response.status === 409) message = "Branch گیت‌هاب هم‌زمان تغییر کرده است؛ فایل ZIP را دوباره ارسال کنید";
+    else if (response.status === 422) message = "GitHub تغییرات را نپذیرفت؛ احتمالاً Branch محافظت‌شده است یا داده‌ها معتبر نیستند: " + detail;
+    const error = new Error(message);
+    error.code = "GITHUB_WRITE_HTTP_" + response.status;
+    error.status = response.status;
+    error.payload = data;
+    throw error;
+  }
+  return data;
+}
+
+async function githubConnectionInfo(env, suppliedSettings = null) {
+  const settings = suppliedSettings || await getSettings(env);
+  const repoPath = githubRepoApiPath(settings.github_repo);
+  const repo = await githubApiRequest(env, settings, "GET", repoPath);
+  const branch = String(settings.github_branch || repo.default_branch || "main").trim();
+  await githubApiRequest(env, settings, "GET", repoPath + "/git/ref/heads/" + encodeURIComponent(branch));
+  return {
+    repository: normalizeGithubRepo(settings.github_repo),
+    branch,
+    private: Boolean(repo.private),
+    push_allowed: repo?.permissions?.push !== false,
+    html_url: cleanText(repo.html_url || ("https://github.com/" + normalizeGithubRepo(settings.github_repo)), 500)
+  };
+}
+
+function bytesToBase64Chunked(input) {
+  const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, Math.min(bytes.length, offset + chunkSize)));
+  }
+  return btoa(binary);
+}
+
+async function sha256BytesHex(input) {
+  const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return bytesToHex(digest);
+}
+
+function zipReadU16(view, offset) {
+  if (offset < 0 || offset + 2 > view.byteLength) throw new Error("ساختار ZIP ناقص است");
+  return view.getUint16(offset, true);
+}
+
+function zipReadU32(view, offset) {
+  if (offset < 0 || offset + 4 > view.byteLength) throw new Error("ساختار ZIP ناقص است");
+  return view.getUint32(offset, true);
+}
+
+function zipCrc32(bytes) {
+  if (!ZIP_CRC32_TABLE) {
+    ZIP_CRC32_TABLE = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+      ZIP_CRC32_TABLE[n] = c >>> 0;
+    }
+  }
+  let crc = 0xffffffff;
+  for (const byte of bytes) crc = ZIP_CRC32_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function decodeZipFileName(bytes) {
+  return new TextDecoder("utf-8", { fatal: false }).decode(bytes).replace(/\\/g, "/");
+}
+
+function normalizeZipEntryPath(value) {
+  let path = String(value || "").replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/{2,}/g, "/");
+  if (!path || path.includes("\0") || path.startsWith("/") || /^[A-Za-z]:\//.test(path)) throw new Error("مسیر ناامن داخل ZIP شناسایی شد");
+  const parts = path.split("/");
+  if (parts.some(part => !part || part === "." || part === "..")) throw new Error("مسیر ناامن داخل ZIP شناسایی شد: " + path);
+  return parts.join("/");
+}
+
+function zipEntryShouldBeIgnored(path) {
+  const lower = String(path || "").toLowerCase();
+  if (/(^|\/)__macosx(\/|$)/.test(lower) || /(^|\/)\.git(\/|$)/.test(lower) || /(^|\/)node_modules(\/|$)/.test(lower)) return true;
+  if (/(^|\/)(\.ds_store|thumbs\.db)$/.test(lower)) return true;
+  if (/(^|\/)readme(?:\.[^/]+)?$/.test(lower)) return true;
+  return false;
+}
+
+async function unzipProjectArchive(input) {
+  const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
+  if (bytes.byteLength < 22) throw new Error("فایل ZIP خالی یا ناقص است");
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const minEocd = Math.max(0, bytes.byteLength - 22 - 65535);
+  let eocd = -1;
+  for (let i = bytes.byteLength - 22; i >= minEocd; i--) {
+    if (zipReadU32(view, i) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error("پایان ساختار ZIP پیدا نشد");
+  const diskNo = zipReadU16(view, eocd + 4);
+  const centralDisk = zipReadU16(view, eocd + 6);
+  const entriesOnDisk = zipReadU16(view, eocd + 8);
+  const totalEntries = zipReadU16(view, eocd + 10);
+  const centralSize = zipReadU32(view, eocd + 12);
+  const centralOffset = zipReadU32(view, eocd + 16);
+  if (diskNo !== 0 || centralDisk !== 0 || entriesOnDisk !== totalEntries) throw new Error("ZIP چندبخشی پشتیبانی نمی‌شود");
+  if (totalEntries === 0xffff || centralSize === 0xffffffff || centralOffset === 0xffffffff) throw new Error("ZIP64 پشتیبانی نمی‌شود؛ فایل بروزرسانی را کوچک‌تر بسازید");
+  if (totalEntries < 1 || totalEntries > GITHUB_ZIP_MAX_FILES + 50) throw new Error("تعداد فایل‌های ZIP مجاز نیست");
+  if (centralOffset + centralSize > bytes.byteLength) throw new Error("جدول فایل‌های ZIP ناقص است");
+
+  const entries = [];
+  let cursor = centralOffset;
+  let advertisedTotal = 0;
+  for (let index = 0; index < totalEntries; index++) {
+    if (zipReadU32(view, cursor) !== 0x02014b50) throw new Error("جدول مرکزی ZIP خراب است");
+    const flags = zipReadU16(view, cursor + 8);
+    const method = zipReadU16(view, cursor + 10);
+    const crc32 = zipReadU32(view, cursor + 16);
+    const compressedSize = zipReadU32(view, cursor + 20);
+    const uncompressedSize = zipReadU32(view, cursor + 24);
+    const nameLength = zipReadU16(view, cursor + 28);
+    const extraLength = zipReadU16(view, cursor + 30);
+    const commentLength = zipReadU16(view, cursor + 32);
+    const externalAttrs = zipReadU32(view, cursor + 38);
+    const localOffset = zipReadU32(view, cursor + 42);
+    if ([compressedSize, uncompressedSize, localOffset].includes(0xffffffff)) throw new Error("ZIP64 پشتیبانی نمی‌شود");
+    const nameStart = cursor + 46;
+    const nameEnd = nameStart + nameLength;
+    if (nameEnd + extraLength + commentLength > bytes.byteLength) throw new Error("نام فایل ZIP ناقص است");
+    const rawName = decodeZipFileName(bytes.subarray(nameStart, nameEnd));
+    const directory = rawName.endsWith("/");
+    if (!directory) advertisedTotal += uncompressedSize;
+    if (advertisedTotal > GITHUB_ZIP_MAX_UNCOMPRESSED_BYTES) throw new Error("حجم بازشده ZIP بیش از حد مجاز است");
+    if (!directory && uncompressedSize > GITHUB_ZIP_MAX_FILE_BYTES) throw new Error("یکی از فایل‌های داخل ZIP بیش از حد بزرگ است: " + rawName);
+    const unixMode = (externalAttrs >>> 16) & 0xffff;
+    if ((unixMode & 0xf000) === 0xa000) throw new Error("لینک نمادین داخل ZIP مجاز نیست: " + rawName);
+    entries.push({ rawName, directory, flags, method, crc32, compressedSize, uncompressedSize, localOffset, unixMode });
+    cursor = nameEnd + extraLength + commentLength;
+  }
+
+  const fileEntries = entries.filter(entry => !entry.directory);
+  if (!fileEntries.length) throw new Error("ZIP هیچ فایلی ندارد");
+  const normalizedNames = fileEntries.map(entry => normalizeZipEntryPath(entry.rawName));
+  const firstSegment = normalizedNames[0].split("/")[0];
+  const hasCommonRoot = normalizedNames.every(path => path.startsWith(firstSegment + "/"));
+  const files = [];
+  const seen = new Set();
+  let actualTotal = 0;
+
+  for (let index = 0; index < fileEntries.length; index++) {
+    const entry = fileEntries[index];
+    let path = normalizedNames[index];
+    if (hasCommonRoot) path = normalizeZipEntryPath(path.slice(firstSegment.length + 1));
+    if (zipEntryShouldBeIgnored(path)) continue;
+    if (seen.has(path)) throw new Error("مسیر تکراری داخل ZIP وجود دارد: " + path);
+    seen.add(path);
+    if (entry.flags & 0x1) throw new Error("ZIP رمزگذاری‌شده پشتیبانی نمی‌شود");
+    if (entry.method !== 0 && entry.method !== 8) throw new Error("روش فشرده‌سازی این ZIP پشتیبانی نمی‌شود: " + path);
+    if (zipReadU32(view, entry.localOffset) !== 0x04034b50) throw new Error("هدر فایل ZIP خراب است: " + path);
+    const localNameLength = zipReadU16(view, entry.localOffset + 26);
+    const localExtraLength = zipReadU16(view, entry.localOffset + 28);
+    const dataStart = entry.localOffset + 30 + localNameLength + localExtraLength;
+    const dataEnd = dataStart + entry.compressedSize;
+    if (dataStart < 0 || dataEnd > bytes.byteLength) throw new Error("داده فایل ZIP ناقص است: " + path);
+    const compressed = bytes.subarray(dataStart, dataEnd);
+    let output;
+    if (entry.method === 0) {
+      output = new Uint8Array(compressed);
+    } else {
+      if (typeof DecompressionStream !== "function") throw new Error("Runtime فعلی امکان بازکردن ZIP را ندارد");
+      const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+      output = new Uint8Array(await new Response(stream).arrayBuffer());
+    }
+    if (output.byteLength !== entry.uncompressedSize) throw new Error("اندازه فایل بازشده با ZIP تطبیق ندارد: " + path);
+    if (zipCrc32(output) !== entry.crc32) throw new Error("صحت فایل داخل ZIP تأیید نشد: " + path);
+    actualTotal += output.byteLength;
+    if (actualTotal > GITHUB_ZIP_MAX_UNCOMPRESSED_BYTES) throw new Error("حجم بازشده ZIP بیش از حد مجاز است");
+    files.push({ path, bytes: output, mode: (entry.unixMode & 0o111) ? "100755" : "100644" });
+  }
+  if (!files.length) throw new Error("پس از پاک‌سازی، فایل معتبری داخل ZIP باقی نماند");
+  if (files.length > GITHUB_ZIP_MAX_FILES) throw new Error("تعداد فایل‌های پروژه بیش از حد مجاز است");
+  files.sort((a, b) => a.path.localeCompare(b.path));
+  return files;
+}
+
+async function validateGithubProjectFiles(files) {
+  const byPath = new Map(files.map(file => [file.path, file]));
+  for (const required of GITHUB_ZIP_REQUIRED_PATHS) {
+    if (!byPath.has(required)) throw new Error("فایل ضروری داخل ZIP وجود ندارد: " + required);
+  }
+  const decoder = new TextDecoder("utf-8", { fatal: false });
+  const version = decoder.decode(byPath.get("version").bytes).trim();
+  if (!/^\d+(?:\.\d+){2,3}(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) throw new Error("محتوای فایل version معتبر نیست");
+  if (semverCompare(version, APP_VERSION) < 0) throw new Error("نسخه داخل ZIP قدیمی‌تر از نسخه فعال ربات است: " + version);
+  let release;
+  try { release = JSON.parse(decoder.decode(byPath.get("release.json").bytes)); }
+  catch (_) { throw new Error("فایل release.json معتبر نیست"); }
+  if (String(release?.version || "").trim() !== version) throw new Error("نسخه release.json با فایل version یکسان نیست");
+  const workerDefs = [
+    ["core/worker.js", "BLUEPANEL_CORE_WORKER"],
+    ["edge/worker.js", "BLUEPANEL_EDGE_WORKER"],
+    ["processor/worker.js", "BLUEPANEL_PROCESSOR_WORKER"]
+  ];
+  for (const [path, marker] of workerDefs) {
+    const source = decoder.decode(byPath.get(path).bytes);
+    if (!source.includes(marker) || !source.includes("export default")) throw new Error("فایل Worker معتبر نیست: " + path);
+    const match = source.match(/const\s+APP_VERSION\s*=\s*[\"']([^\"']+)[\"']/);
+    if (!match || match[1] !== version) throw new Error("نسخه " + path + " با بسته یکسان نیست");
+  }
+  const hashMap = release?.sha256 && typeof release.sha256 === "object" ? release.sha256 : {};
+  const releaseFiles = release?.files && typeof release.files === "object" ? release.files : {};
+  for (const role of ["core", "edge", "processor"]) {
+    const path = String(releaseFiles[role] || (role + "/worker.js"));
+    const expected = String(hashMap[role] || "").toLowerCase();
+    if (expected && byPath.has(path)) {
+      const actual = await sha256BytesHex(byPath.get(path).bytes);
+      if (actual !== expected) throw new Error("هش فایل " + path + " با release.json تطبیق ندارد");
+    }
+  }
+  return {
+    files,
+    version,
+    release_id: cleanText(release?.release_id || release?.build_id || version, 160) || version
+  };
+}
+
+async function githubCommitProjectFiles(env, settings, project, progress = null) {
+  const repo = normalizeGithubRepo(settings.github_repo);
+  const branch = String(settings.github_branch || "main").trim();
+  const repoPath = githubRepoApiPath(repo);
+  const refPath = repoPath + "/git/ref/heads/" + encodeURIComponent(branch);
+  if (progress) await progress("🔗 اتصال به مخزن <code>" + botEscape(repo) + "</code> و Branch <code>" + botEscape(branch) + "</code>…");
+  const ref = await githubApiRequest(env, settings, "GET", refPath);
+  const headSha = String(ref?.object?.sha || "");
+  if (!headSha) throw new Error("Commit فعلی Branch از GitHub دریافت نشد");
+  const currentCommit = await githubApiRequest(env, settings, "GET", repoPath + "/git/commits/" + encodeURIComponent(headSha));
+  const baseTree = String(currentCommit?.tree?.sha || "");
+  if (!baseTree) throw new Error("Tree فعلی مخزن دریافت نشد");
+
+  const treeEntries = [];
+  for (let index = 0; index < project.files.length; index++) {
+    const file = project.files[index];
+    if (progress && (index === 0 || index === project.files.length - 1 || index % 5 === 0)) {
+      await progress("☁️ آپلود فایل‌ها در GitHub: <b>" + botMoney(index + 1) + " از " + botMoney(project.files.length) + "</b>\n<code>" + botEscape(file.path) + "</code>");
+    }
+    const blob = await githubApiRequest(env, settings, "POST", repoPath + "/git/blobs", {
+      content: bytesToBase64Chunked(file.bytes),
+      encoding: "base64"
+    });
+    if (!blob?.sha) throw new Error("GitHub فایل را ثبت نکرد: " + file.path);
+    treeEntries.push({ path: file.path, mode: file.mode || "100644", type: "blob", sha: blob.sha });
+  }
+
+  if (progress) await progress("🧩 ساخت Tree مرتب و آماده‌سازی Commit واحد…");
+  const tree = await githubApiRequest(env, settings, "POST", repoPath + "/git/trees", {
+    base_tree: baseTree,
+    tree: treeEntries
+  });
+  const treeSha = String(tree?.sha || "");
+  if (!treeSha) throw new Error("Tree جدید در GitHub ساخته نشد");
+  if (treeSha === baseTree) {
+    return {
+      no_change: true,
+      repository: repo,
+      branch,
+      version: project.version,
+      commit_sha: headSha,
+      commit_url: "https://github.com/" + repo + "/commit/" + headSha,
+      file_count: project.files.length
+    };
+  }
+  const commit = await githubApiRequest(env, settings, "POST", repoPath + "/git/commits", {
+    message: "PasarGuard " + project.version + " — uploaded by central Telegram bot",
+    tree: treeSha,
+    parents: [headSha]
+  });
+  const commitSha = String(commit?.sha || "");
+  if (!commitSha) throw new Error("Commit جدید در GitHub ساخته نشد");
+  await githubApiRequest(env, settings, "PATCH", repoPath + "/git/refs/heads/" + encodeURIComponent(branch), {
+    sha: commitSha,
+    force: false
+  });
+  return {
+    no_change: false,
+    repository: repo,
+    branch,
+    version: project.version,
+    commit_sha: commitSha,
+    commit_url: cleanText(commit?.html_url || ("https://github.com/" + repo + "/commit/" + commitSha), 800),
+    file_count: project.files.length
+  };
+}
+
+async function downloadCentralTelegramDocument(env, document) {
+  const fileSize = Number(document?.file_size || 0);
+  if (fileSize > TELEGRAM_GITHUB_ZIP_MAX_BYTES) throw new Error("حداکثر حجم ZIP قابل دریافت از تلگرام ۲۰ مگابایت است");
+  const settings = await getSettings(env);
+  const info = await telegramApiWithToken(settings.bot_token, "getFile", { file_id: document.file_id });
+  const filePath = String(info?.result?.file_path || "");
+  if (!filePath) throw new Error("مسیر دانلود فایل از تلگرام دریافت نشد");
+  const response = await fetch("https://api.telegram.org/file/bot" + settings.bot_token + "/" + filePath);
+  if (!response.ok) throw new Error("دانلود ZIP از تلگرام ناموفق بود");
+  const contentLength = Number(response.headers.get("content-length") || 0);
+  if (contentLength > TELEGRAM_GITHUB_ZIP_MAX_BYTES) throw new Error("حجم ZIP بیشتر از ۲۰ مگابایت است");
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.byteLength > TELEGRAM_GITHUB_ZIP_MAX_BYTES) throw new Error("حجم ZIP بیشتر از ۲۰ مگابایت است");
+  return bytes;
+}
+
+async function editGithubUploadProgress(env, chatId, messageId, text, rows = undefined) {
+  try {
+    const payload = {
+      chat_id: chatId,
+      message_id: messageId,
+      text: "📦 <b>آپلود بروزرسانی به GitHub</b>\n━━━━━━━━━━━━━━\n" + text,
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    };
+    if (rows) payload.reply_markup = { inline_keyboard: rows };
+    await telegramApi(env, "editMessageText", payload);
+  } catch (error) {
+    if (!String(error?.message || "").toLowerCase().includes("message is not modified")) console.error("github upload progress edit failed", error);
+  }
+}
+
+async function claimGithubZipUpload(env, telegramId, document) {
+  const uniqueId = cleanText(document?.file_unique_id || document?.file_id, 300);
+  if (!uniqueId) throw new Error("شناسه یکتای فایل از تلگرام دریافت نشد");
+  const ts = nowIso();
+  const uploadId = id("ghzip");
+  const inserted = await env.PASARGUARD_DB.prepare(`
+    INSERT OR IGNORE INTO github_zip_uploads(
+      id,telegram_id,file_unique_id,file_name,status,created_at,updated_at
+    ) VALUES(?,?,?,?, 'processing', ?, ?)
+  `).bind(uploadId, String(telegramId), uniqueId, cleanText(document?.file_name || "update.zip", 300), ts, ts).run();
+  if (Number(inserted?.meta?.changes || 0) > 0) return { id: uploadId, duplicate: false };
+  const row = await env.PASARGUARD_DB.prepare("SELECT * FROM github_zip_uploads WHERE file_unique_id=? LIMIT 1").bind(uniqueId).first();
+  if (row?.status === "completed") return { ...row, duplicate: true };
+  const stale = !row?.updated_at || Date.now() - new Date(row.updated_at).getTime() > 10 * 60 * 1000;
+  if (row?.status === "processing" && !stale) return { ...row, duplicate: true, processing: true };
+  await env.PASARGUARD_DB.prepare("UPDATE github_zip_uploads SET status='processing',error=NULL,updated_at=? WHERE id=?").bind(ts, row.id).run();
+  return { id: row.id, duplicate: false, retry: true };
+}
+
+async function markGithubZipUpload(env, uploadId, values = {}) {
+  await env.PASARGUARD_DB.prepare(`
+    UPDATE github_zip_uploads SET
+      repository=COALESCE(?,repository),branch=COALESCE(?,branch),version=COALESCE(?,version),
+      file_count=COALESCE(?,file_count),status=COALESCE(?,status),commit_sha=COALESCE(?,commit_sha),
+      commit_url=COALESCE(?,commit_url),error=?,updated_at=?
+    WHERE id=?
+  `).bind(
+    values.repository ?? null, values.branch ?? null, values.version ?? null,
+    values.file_count ?? null, values.status ?? null, values.commit_sha ?? null,
+    values.commit_url ?? null, values.error ?? null, nowIso(), uploadId
+  ).run();
+}
+
+async function deployUploadedGithubVersion(env, chatId, version) {
+  let lastResult = null;
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 1800));
+    try {
+      lastResult = await automaticUpdateTick(env, { source: "telegram_zip_upload", forceCheck: true, intervalSeconds: 5 });
+      if (String(lastResult?.latest || "") === String(version) && (lastResult?.deployed || lastResult?.reason === "none" || !lastResult?.update_required)) break;
+    } catch (error) { lastError = error; }
+  }
+  try {
+    if (lastResult?.deployed) {
+      await telegramApi(env, "sendMessage", {
+        chat_id: chatId,
+        text: "🚀 <b>استقرار خودکار نسخه " + botEscape(version) + " انجام شد</b>\n\nCore: " + (lastResult.core_deployed ? "✅" : "ℹ️") +
+          "\nEdge: " + (lastResult.edge_update?.deployed ? "✅" : (lastResult.edge_update?.error ? "❌" : "ℹ️")) +
+          "\nProcessor: " + (lastResult.processor_update?.deployed ? "✅" : (lastResult.processor_update?.error ? "❌" : "ℹ️")),
+        parse_mode: "HTML"
+      });
+    } else if (lastError) {
+      await telegramApi(env, "sendMessage", {
+        chat_id: chatId,
+        text: "⚠️ فایل‌ها در GitHub ثبت شدند، اما استقرار خودکار کامل نشد:\n<code>" + botEscape(cleanText(lastError.message || lastError, 700)) + "</code>",
+        parse_mode: "HTML"
+      });
+    }
+  } catch (_) {}
+}
+
 async function githubFileMetadata(env, settings, file) {
   const response = await githubFetch(
     env,
@@ -5729,8 +6178,24 @@ function reportScopeKey(botId = "") {
 }
 
 function reportTopicDefinition(scopeType, topicKey) {
+  const aliases = Object.freeze({
+    services: "service_purchases",
+    service: "service_purchases",
+    security: "errors",
+    error: "errors",
+    trials: "trial_accounts",
+    trial: "trial_accounts",
+    daily: "nightly",
+    backup: "backups",
+    announcement: "announcements",
+    commission: "commissions",
+    finance: "payments",
+    purchases: "orders",
+    other: "misc"
+  });
+  const normalizedKey = aliases[String(topicKey || "")] || String(topicKey || "overview");
   const list = scopeType === "central" ? CENTRAL_REPORT_TOPICS : RESELLER_REPORT_TOPICS;
-  return list.find(item => item.key === topicKey) || list[0];
+  return list.find(item => item.key === normalizedKey) || list[0];
 }
 
 function reportCommandMatch(text, command) {
@@ -5780,6 +6245,13 @@ async function configureReportForum(env, options) {
   const created = [];
   for (const definition of definitions) {
     let threadId = known.get(definition.key) || 0;
+    if (threadId) {
+      const stored = await env.PASARGUARD_DB.prepare("SELECT title FROM report_forum_topics WHERE scope_key=? AND topic_key=?").bind(scopeKey, definition.key).first();
+      if (String(stored?.title || "") !== definition.title) {
+        try { await options.apiCall("editForumTopic", { chat_id: String(options.chatId), message_thread_id: threadId, name: definition.title }); }
+        catch (error) { if (!/not modified/i.test(String(error?.message || error))) throw error; }
+      }
+    }
     if (threadId && options.reset === true) {
       let valid = true;
       try {
@@ -6893,11 +7365,11 @@ async function rewardSalesReferral(env, bot, order, customer) {
     const balance = await adjustSalesCustomerBalance(env, bot.id, customer.referrer_customer_id, reward, "referral_reward", "sales_order", order.id, "پورسانت خرید موفق زیرمجموعه");
     const referrer = await env.PASARGUARD_DB.prepare("SELECT telegram_id FROM sales_customers WHERE id=?").bind(customer.referrer_customer_id).first();
     if (order.origin !== "miniapp" && referrer?.telegram_id) await resellerTelegramApi(env, bot, "sendMessage", { chat_id: referrer.telegram_id, text: "🎉 <b>پورسانت زیرمجموعه دریافت کردید</b>\nمبلغ: <b>" + botMoney(reward) + " تومان</b>\nموجودی جدید: <b>" + botMoney(balance) + " تومان</b>", parse_mode: "HTML" });
-    await queueReportEvent(env, bot.id, "commissions", "پورسانت خرید پرداخت شد",
-      "🎁 مبلغ پورسانت: <b>" + botMoney(reward) + " تومان</b>\n" +
-      "🧾 شناسه سفارش: <code>" + botEscape(order.id) + "</code>\n" +
-      "👤 دریافت‌کننده: <code>" + botEscape(referrer?.telegram_id || customer.referrer_customer_id) + "</code>\n" +
-      "💳 موجودی جدید: <b>" + botMoney(balance) + " تومان</b>",
+    await queueReportEvent(env, bot.id, "commissions", "پورسانت زیرمجموعه پرداخت شد",
+      "سفارش: <code>" + botEscape(order.id) + "</code>\n" +
+      "مبلغ پورسانت: <b>" + botMoney(reward) + " تومان</b>\n" +
+      "دریافت‌کننده: <code>" + botEscape(referrer?.telegram_id || customer.referrer_customer_id) + "</code>\n" +
+      "موجودی جدید: <b>" + botMoney(balance) + " تومان</b>",
       "commission:" + order.id);
   } catch (error) { await env.PASARGUARD_DB.prepare("UPDATE sales_orders SET referral_rewarded=0 WHERE id=?").bind(order.id).run(); throw error; }
 }
@@ -7213,23 +7685,21 @@ async function createResellerSnapshot(env, bot, actorTelegramId = "system", snap
     await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET last_backup_at=?,last_backup_status='success',last_backup_error=NULL,updated_at=? WHERE id=?")
       .bind(createdAt, createdAt, fresh.id).run();
     await pruneResellerSnapshots(env, fresh.id, fresh.backup_retention_days || 14);
-    const snapshotSize = new TextEncoder().encode(raw).length;
-    await queueReportEvent(env, fresh.id, "backup", snapshotType === "auto" ? "بکاپ خودکار ربات ساخته شد" : "بکاپ دستی ربات ساخته شد",
-      "🤖 ربات: <b>" + botEscape(fresh.brand_name || fresh.bot_username) + "</b>\n" +
-      "💾 حجم بکاپ: <b>" + botMoney(snapshotSize) + " بایت</b>\n" +
-      "🕒 زمان: <code>" + botEscape(createdAt) + "</code>",
-      "backup:" + fresh.id + ":" + snapshotId);
-    return { id: snapshotId, created_at: createdAt, size_bytes: snapshotSize, type: snapshotType };
+    await queueReportEvent(env, fresh.id, "backups", snapshotType === "auto" ? "بکاپ خودکار ربات ساخته شد" : "بکاپ دستی ربات ساخته شد",
+      "ربات: <b>" + botEscape(fresh.brand_name || fresh.bot_username) + "</b>\n" +
+      "نوع: <b>" + (snapshotType === "auto" ? "خودکار" : "دستی") + "</b>\n" +
+      "حجم فایل: <b>" + botMoney(new TextEncoder().encode(raw).length) + " بایت</b>\n" +
+      "شناسه بکاپ: <code>" + botEscape(snapshotId) + "</code>",
+      "backup-success:" + snapshotId);
+    return { id: snapshotId, created_at: createdAt, size_bytes: new TextEncoder().encode(raw).length, type: snapshotType };
   } catch (error) {
-    const failedAt = nowIso();
     await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET last_backup_status='failed',last_backup_error=?,updated_at=? WHERE id=?")
-      .bind(cleanText(error.message, 500), failedAt, fresh.id).run();
-    try {
-      await queueReportEvent(env, fresh.id, "backup", "بکاپ ربات ناموفق بود",
-        "🤖 ربات: <b>" + botEscape(fresh.brand_name || fresh.bot_username) + "</b>\n" +
-        "❌ خطا: <code>" + botEscape(cleanText(error.message, 500)) + "</code>",
-        "backup-failed:" + fresh.id + ":" + snapshotType + ":" + failedAt.slice(0,16));
-    } catch (_) {}
+      .bind(cleanText(error.message, 500), nowIso(), fresh.id).run();
+    await queueReportEvent(env, fresh.id, "errors", "خطا در بکاپ ربات",
+      "ربات: <b>" + botEscape(fresh.brand_name || fresh.bot_username) + "</b>\n" +
+      "نوع بکاپ: <b>" + (snapshotType === "auto" ? "خودکار" : "دستی") + "</b>\n" +
+      "خطا: <code>" + botEscape(cleanText(error.message, 700)) + "</code>",
+      "backup-failed:" + fresh.id + ":" + snapshotType + ":" + cleanText(error.message, 80));
     throw error;
   }
 }
@@ -8023,10 +8493,48 @@ async function botAdminView(env, account) {
       [{ text: "🔄 استعلام پرداخت‌ها", callback_data: "bot:admin:sync_payments" }],
       [{ text: "🧹 حذف فاکتورهای معلق", callback_data: "bot:admin:cleanup" }, { text: "📣 کانال آپدیت‌ها", callback_data: "bot:admin:release_channel" }],
       [{ text: "🧭 سلامت نمایندگان", callback_data: "bot:admin:reseller_ops" }, { text: "⚙️ تنظیمات سامانه", callback_data: "bot:admin:settings" }],
+      [{ text: "📦 آپلود ZIP به GitHub", callback_data: "bot:admin:github_zip" }],
       [{ text: "🖥 داشبورد مدیریت وب", url: managementUrl }],
       [{ text: "🤖 ربات مرکزی", callback_data: "bot:admin:central_bot" }, { text: "🐍 Python Helper", callback_data: "bot:admin:python" }],
       [{ text: "🔄 بروزرسانی", callback_data: "bot:admin" }, { text: "🏠 منوی اصلی", callback_data: "bot:home" }]
     ] }
+  };
+}
+
+
+async function botGithubZipView(env, account) {
+  if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+  const settings = await getSettings(env);
+  const last = await env.PASARGUARD_DB.prepare(`
+    SELECT version,file_name,file_count,status,commit_sha,commit_url,error,updated_at
+    FROM github_zip_uploads ORDER BY updated_at DESC LIMIT 1
+  `).first();
+  const repo = normalizeGithubRepo(settings.github_repo || "");
+  const branch = String(settings.github_branch || "main");
+  const tokenReady = Boolean(String(settings.github_token || "").trim());
+  let lastText = "هنوز فایل ZIP از ربات آپلود نشده است.";
+  if (last) {
+    const status = last.status === "completed" ? "✅ موفق" : last.status === "processing" ? "⏳ در حال پردازش" : "❌ ناموفق";
+    lastText = status + (last.version ? " · نسخه <code>" + botEscape(last.version) + "</code>" : "") +
+      "\nفایل: <code>" + botEscape(last.file_name || "-") + "</code>" +
+      (last.commit_sha ? "\nCommit: <code>" + botEscape(String(last.commit_sha).slice(0, 12)) + "</code>" : "") +
+      (last.error ? "\nخطا: <code>" + botEscape(cleanText(last.error, 350)) + "</code>" : "");
+  }
+  const rows = [
+    [{ text: "📦 ارسال ZIP و انتشار", callback_data: "bot:admin:github_zip:start" }],
+    [{ text: tokenReady ? "🔐 تغییر توکن GitHub" : "🔐 ثبت توکن GitHub", callback_data: "bot:admin:github_zip:token" }, { text: "🗂 تنظیم مخزن و Branch", callback_data: "bot:admin:github_zip:repo" }],
+    [{ text: "🧪 تست اتصال GitHub", callback_data: "bot:admin:github_zip:test" }]
+  ];
+  if (last?.commit_url) rows.push([{ text: "🔎 مشاهده آخرین Commit", url: last.commit_url }]);
+  rows.push([{ text: "↩️ مدیریت سامانه", callback_data: "bot:admin" }]);
+  return {
+    text: "📦 <b>آپلود خودکار ZIP به GitHub</b>\n━━━━━━━━━━━━━━\n" +
+      "مخزن: <code>" + botEscape(repo || "تنظیم نشده") + "</code>\n" +
+      "Branch: <code>" + botEscape(branch) + "</code>\n" +
+      "توکن نوشتن: " + (tokenReady ? "✅ ثبت شده" : "❌ ثبت نشده") + "\n\n" +
+      "ZIP پروژه را برای ربات می‌فرستی؛ ربات آن را امن باز می‌کند، ساختار پوشه‌ها را حفظ می‌کند و همه فایل‌ها را در یک Commit واقعی قرار می‌دهد. فایل README به‌صورت خودکار نادیده گرفته می‌شود.\n\n" +
+      "<b>آخرین عملیات</b>\n" + lastText,
+    reply_markup: { inline_keyboard: rows }
   };
 }
 
@@ -8390,7 +8898,8 @@ function botHelpView(account) {
       "• مشاهده پنل‌ها، تراکنش‌ها و فاکتورها\n" +
       "• ساخت ربات فروش اختصاصی؛ مدیریت کامل از داشبورد مستقل مرورگر\n" +
       "• مدیریت موجودی کاربران و ابزارهای سامانه برای مدیر\n\n" +
-      "فرمان‌ها:\n/start /menu /wallet /trial /panels /buy_panel /buy_bot /salesbot /invoices /transactions /id /cancel",
+      "فرمان‌ها:\n/start /menu /wallet /trial /panels /buy_panel /buy_bot /salesbot /invoices /transactions /id /cancel" +
+      (account?.isAdmin ? "\n/upload_update — ارسال ZIP بروزرسانی به GitHub" : ""),
     reply_markup: { inline_keyboard: [[{ text: "🏠 منوی اصلی", callback_data: "bot:home" }]] }
   };
 }
@@ -8437,6 +8946,7 @@ async function botRenderView(env, account, view) {
   if (view === "admin_settings_automation") return botAdminSettingsGroupView(env, account, "automation");
   if (view === "admin_join_channels") return botAdminJoinChannelsView(env, account);
   if (view === "admin_release_channel") return botReleaseChannelView(env, account);
+  if (view === "admin_github_zip") return botGithubZipView(env, account);
   if (view === "admin_reseller_ops") return botAdminResellerOpsView(env, account);
   return botHomeView(env, account);
 }
@@ -8701,11 +9211,55 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
     "bot:admin:group:users": "admin_group_users", "bot:admin:group:finance": "admin_group_finance",
     "bot:admin:group:operations": "admin_group_operations", "bot:admin:group:communications": "admin_group_communications",
     "bot:admin:group:system": "admin_group_system", "bot:admin:reseller_ops": "admin_reseller_ops",
-    "bot:admin:join_channels": "admin_join_channels"
+    "bot:admin:join_channels": "admin_join_channels", "bot:admin:github_zip": "admin_github_zip"
   };
   if (simpleViews[data]) {
     await botClearSession(env, account.user.telegram_id);
     await botSendOrEdit(env, { account, chatId, messageId }, simpleViews[data]);
+    return;
+  }
+
+  if (data === "bot:admin:github_zip:start") {
+    if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+    const settings = await getSettings(env);
+    if (!settings.github_repo) throw new Error("ابتدا مخزن GitHub را تنظیم کنید");
+    if (!settings.github_token) throw new Error("ابتدا توکن GitHub با دسترسی Contents: Read and write را ثبت کنید");
+    await botSetSession(env, account.user.telegram_id, "github_zip_upload", {});
+    await botPrompt(env, chatId,
+      "📦 <b>فایل ZIP بروزرسانی را ارسال کنید</b>\n\n" +
+      "مخزن: <code>" + botEscape(normalizeGithubRepo(settings.github_repo)) + "</code>\n" +
+      "Branch: <code>" + botEscape(settings.github_branch || "main") + "</code>\n\n" +
+      "فایل باید شامل <code>core/worker.js</code>، <code>edge/worker.js</code>، <code>processor/worker.js</code>، <code>version</code> و <code>release.json</code> باشد.\n" +
+      "حداکثر حجم دانلود تلگرام: <b>۲۰ مگابایت</b>."
+    );
+    return;
+  }
+  if (data === "bot:admin:github_zip:token") {
+    if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+    await botSetSession(env, account.user.telegram_id, "setting_github_upload_token", {});
+    await botPrompt(env, chatId,
+      "🔐 <b>توکن GitHub را ارسال کنید</b>\n\n" +
+      "توکن Fine-grained باید برای مخزن موردنظر مجوز <b>Contents: Read and write</b> داشته باشد. پیام حاوی توکن پس از بررسی حذف می‌شود."
+    );
+    return;
+  }
+  if (data === "bot:admin:github_zip:repo") {
+    if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+    await botSetSession(env, account.user.telegram_id, "setting_github_upload_repo", {});
+    await botPrompt(env, chatId,
+      "🗂 <b>مخزن و Branch را ارسال کنید</b>\n\n" +
+      "قالب:\n<code>owner/repository | main</code>\n\n" +
+      "آدرس کامل GitHub نیز پذیرفته می‌شود."
+    );
+    return;
+  }
+  if (data === "bot:admin:github_zip:test") {
+    if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+    const info = await githubConnectionInfo(env);
+    await botPrompt(env, chatId,
+      "✅ <b>اتصال GitHub برقرار است</b>\n\nمخزن: <code>" + botEscape(info.repository) + "</code>\nBranch: <code>" + botEscape(info.branch) + "</code>\nنوع مخزن: " + (info.private ? "خصوصی" : "عمومی") + "\nدسترسی نوشتن: " + (info.push_allowed ? "✅" : "⚠️ نامشخص"),
+      [[{ text: "↩️ آپلود ZIP", callback_data: "bot:admin:github_zip" }]]
+    );
     return;
   }
   if (data === "bot:admin:reseller_backup_all") {
@@ -9407,7 +9961,7 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
   throw new Error("این کلید پشتیبانی نمی‌شود؛ /start را ارسال کنید");
 }
 
-async function botHandleSessionMessage(env, account, message, session, origin) {
+async function botHandleSessionMessage(env, account, message, session, origin, ctx = null) {
   const chatId = message.chat.id;
   const text = String(message.text || "").trim();
   const centralCreationStates = new Set(["sales_bot_token", "sales_bot_agency", "sales_bot_agency_password", "sales_bot_brand", "sales_card_holder", "sales_card_number", "sales_bank_name"]);
@@ -9421,6 +9975,132 @@ async function botHandleSessionMessage(env, account, message, session, origin) {
     await botClearSession(env, account.user.telegram_id);
     await botPrompt(env, chatId, "⛔ ساخت ربات نمایندگی در حین فرایند توسط مدیریت مرکزی متوقف شد. اطلاعات نیمه‌تمام حذف شد.", [[{ text: "🏠 منوی اصلی", callback_data: "bot:home" }]]);
     return true;
+  }
+
+  if (session.state === "setting_github_upload_token") {
+    if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+    const token = String(text || "").trim();
+    if (token.length < 20 || /\s/.test(token)) throw new Error("توکن GitHub معتبر نیست");
+    const current = await getSettings(env);
+    const prospective = { ...current, github_token: token };
+    await githubConnectionInfo(env, prospective);
+    await setSettings(env, { github_token: token, github_zip_last_error: "" });
+    await botClearSession(env, account.user.telegram_id);
+    try { await telegramApi(env, "deleteMessage", { chat_id: chatId, message_id: message.message_id }); } catch (_) {}
+    const refreshed = await ensureTelegramBotUser(env, message.from);
+    refreshed.public_origin = origin;
+    await botSendOrEdit(env, { account: refreshed, chatId }, "admin_github_zip");
+    return true;
+  }
+  if (session.state === "setting_github_upload_repo") {
+    if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+    const pieces = String(text || "").split(/\s*\|\s*|\s+/).map(item => item.trim()).filter(Boolean);
+    const repo = normalizeGithubRepo(pieces[0] || "");
+    const branch = cleanText(pieces[1] || "main", 200);
+    githubRepoApiPath(repo);
+    if (!branch || !/^[A-Za-z0-9._\/-]+$/.test(branch) || branch.includes("..")) throw new Error("نام Branch معتبر نیست");
+    const current = await getSettings(env);
+    const prospective = { ...current, github_repo: repo, github_branch: branch };
+    if (prospective.github_token) await githubConnectionInfo(env, prospective);
+    await setSettings(env, { github_repo: repo, github_branch: branch, github_zip_last_error: "" });
+    await botClearSession(env, account.user.telegram_id);
+    const refreshed = await ensureTelegramBotUser(env, message.from);
+    refreshed.public_origin = origin;
+    await botSendOrEdit(env, { account: refreshed, chatId }, "admin_github_zip");
+    return true;
+  }
+  if (session.state === "github_zip_upload") {
+    if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+    const document = message.document;
+    if (!document?.file_id) {
+      await botPrompt(env, chatId, "فقط فایل ZIP بروزرسانی را به‌صورت Document ارسال کنید.", [[{ text: "لغو", callback_data: "bot:cancel" }]]);
+      return true;
+    }
+    const fileName = String(document.file_name || "update.zip");
+    if (!/\.zip$/i.test(fileName) && String(document.mime_type || "").toLowerCase() !== "application/zip") {
+      await botPrompt(env, chatId, "فرمت فایل باید ZIP باشد.", [[{ text: "لغو", callback_data: "bot:cancel" }]]);
+      return true;
+    }
+    if (Number(document.file_size || 0) > TELEGRAM_GITHUB_ZIP_MAX_BYTES) throw new Error("حجم ZIP بیشتر از ۲۰ مگابایت است");
+    const claim = await claimGithubZipUpload(env, account.user.telegram_id, document);
+    if (claim.duplicate && claim.status === "completed") {
+      await botClearSession(env, account.user.telegram_id);
+      await botPrompt(env, chatId,
+        "ℹ️ این فایل قبلاً با موفقیت در GitHub ثبت شده است." + (claim.commit_sha ? "\nCommit: <code>" + botEscape(String(claim.commit_sha).slice(0, 12)) + "</code>" : ""),
+        claim.commit_url ? [[{ text: "🔎 مشاهده Commit", url: claim.commit_url }], [{ text: "↩️ آپلود ZIP", callback_data: "bot:admin:github_zip" }]] : [[{ text: "↩️ آپلود ZIP", callback_data: "bot:admin:github_zip" }]]
+      );
+      return true;
+    }
+    if (claim.duplicate && claim.processing) {
+      await botPrompt(env, chatId, "⏳ همین فایل در حال پردازش است؛ چند لحظه صبر کنید.", [[{ text: "↩️ وضعیت آپلود", callback_data: "bot:admin:github_zip" }]]);
+      return true;
+    }
+    const started = await telegramApi(env, "sendMessage", {
+      chat_id: chatId,
+      text: "📦 <b>آپلود بروزرسانی به GitHub</b>\n━━━━━━━━━━━━━━\n⬇️ دریافت فایل از تلگرام…",
+      parse_mode: "HTML"
+    });
+    const progressMessageId = started?.result?.message_id;
+    const progress = async content => {
+      if (progressMessageId) await editGithubUploadProgress(env, chatId, progressMessageId, content);
+    };
+    try {
+      const settings = await getSettings(env);
+      if (!settings.github_repo || !settings.github_token) throw new Error("اتصال GitHub کامل نیست");
+      const zipBytes = await downloadCentralTelegramDocument(env, document);
+      await progress("🗜 فایل دریافت شد؛ در حال استخراج امن و بررسی ساختار…");
+      const files = await unzipProjectArchive(zipBytes);
+      const project = await validateGithubProjectFiles(files);
+      await markGithubZipUpload(env, claim.id, {
+        repository: normalizeGithubRepo(settings.github_repo), branch: settings.github_branch || "main",
+        version: project.version, file_count: project.files.length, status: "processing", error: null
+      });
+      await progress("✅ ساختار بسته تأیید شد\nنسخه: <code>" + botEscape(project.version) + "</code>\nفایل‌های قابل آپلود: <b>" + botMoney(project.files.length) + "</b>");
+      const result = await githubCommitProjectFiles(env, settings, project, progress);
+      await markGithubZipUpload(env, claim.id, {
+        repository: result.repository, branch: result.branch, version: result.version,
+        file_count: result.file_count, status: "completed", commit_sha: result.commit_sha,
+        commit_url: result.commit_url, error: null
+      });
+      await setSettings(env, {
+        github_zip_last_commit_sha: result.commit_sha,
+        github_zip_last_version: project.version,
+        github_zip_last_uploaded_at: nowIso(),
+        github_zip_last_error: "",
+        auto_update_last_check_epoch: "0"
+      });
+      await audit(env, account.user.id, "github_zip_uploaded", {
+        fileName, version: project.version, repository: result.repository, branch: result.branch,
+        fileCount: result.file_count, commitSha: result.commit_sha, noChange: result.no_change
+      });
+      await botClearSession(env, account.user.telegram_id);
+      try { await telegramApi(env, "deleteMessage", { chat_id: chatId, message_id: message.message_id }); } catch (_) {}
+      if (progressMessageId) {
+        await editGithubUploadProgress(env, chatId, progressMessageId,
+          (result.no_change ? "ℹ️ همه فایل‌ها از قبل دقیقاً در GitHub موجود بودند." : "✅ <b>فایل‌ها با موفقیت در GitHub ثبت شدند</b>") +
+          "\n\nنسخه: <code>" + botEscape(project.version) + "</code>" +
+          "\nفایل‌ها: <b>" + botMoney(result.file_count) + "</b>" +
+          "\nCommit: <code>" + botEscape(String(result.commit_sha).slice(0, 12)) + "</code>" +
+          "\n\n🚀 استقرار خودکار سه Worker در پس‌زمینه شروع شد.",
+          [[{ text: "🔎 مشاهده Commit", url: result.commit_url }], [{ text: "📦 آپلود بعدی", callback_data: "bot:admin:github_zip" }]]
+        );
+      }
+      if (ctx && typeof ctx.waitUntil === "function") {
+        ctx.waitUntil(deployUploadedGithubVersion(env, chatId, project.version).catch(error => console.error("zip deployment failed", error)));
+      }
+      return true;
+    } catch (error) {
+      await markGithubZipUpload(env, claim.id, { status: "failed", error: cleanText(error.message || error, 1000) });
+      await setSettings(env, { github_zip_last_error: cleanText(error.message || error, 1000) });
+      try { await audit(env, account.user.id, "github_zip_upload_failed", { fileName, message: error.message || String(error) }); } catch (_) {}
+      if (progressMessageId) {
+        await editGithubUploadProgress(env, chatId, progressMessageId,
+          "❌ <b>آپلود ناموفق بود</b>\n\n<code>" + botEscape(cleanText(error.message || error, 900)) + "</code>\n\nمی‌توانید ZIP اصلاح‌شده را دوباره ارسال کنید.",
+          [[{ text: "↩️ تنظیمات GitHub", callback_data: "bot:admin:github_zip" }], [{ text: "لغو", callback_data: "bot:cancel" }]]
+        );
+      }
+      return true;
+    }
   }
   if (String(session.state || "").startsWith("sales_") && !centralCreationStates.has(String(session.state || ""))) {
     await botClearSession(env, account.user.telegram_id);
@@ -9621,7 +10301,7 @@ async function botHandleSessionMessage(env, account, message, session, origin) {
     }
     await botClearSession(env, account.user.telegram_id);
     await audit(env, account.user.id, "sales_bot_created", { botId: bot.id, botUsername: bot.bot_username, agencyId: agency.id, licenseType, assignedRoleId, setupError });
-    await queueReportEvent(env, bot.id, setupError ? "security" : "bots", setupError ? "ثبت ربات با خطای اتصال اولیه" : "ربات نماینده جدید ساخته شد",
+    await queueReportEvent(env, bot.id, setupError ? "errors" : "bots", setupError ? "ثبت ربات با خطای اتصال اولیه" : "ربات نماینده جدید ساخته شد",
       "ربات: <b>@" + botEscape(bot.bot_username || "-") + "</b>\n" +
       "برند: <b>" + botEscape(bot.brand_name || data.brandName) + "</b>\n" +
       "نوع: <b>" + botEscape(resellerLicenseTypeLabel(licenseType)) + "</b>\n" +
@@ -9974,6 +10654,16 @@ async function configureTelegramBotWithToken(env, origin, token, suppliedSetting
   try { await telegramApiWithToken(token, "deleteMyCommands", { scope: { type: "default" } }); } catch (_) {}
   try {
     await telegramApiWithToken(token, "setMyCommands", {
+      scope: { type: "all_private_chats" },
+      commands: [
+        { command: "start", description: "نمایش منوی اصلی" },
+        { command: "admin", description: "ورود به مدیریت مرکزی" },
+        { command: "upload_update", description: "آپلود ZIP بروزرسانی به GitHub" }
+      ]
+    });
+  } catch (_) {}
+  try {
+    await telegramApiWithToken(token, "setMyCommands", {
       scope: { type: "all_group_chats" },
       commands: [
         { command: "setup_reports", description: "ساخت موضوع‌های گروه گزارش مرکزی" },
@@ -10003,7 +10693,7 @@ async function setupTelegramBot(request, env) {
   return json(result);
 }
 
-async function telegramWebhook(request, env) {
+async function telegramWebhook(request, env, ctx = null) {
   const settings = await getSettings(env);
   if (settings.telegram_webhook_secret) {
     const supplied = request.headers.get("x-telegram-bot-api-secret-token");
@@ -10057,10 +10747,15 @@ async function telegramWebhook(request, env) {
     }
     const command = text.startsWith("/");
     const session = !command ? await botGetSession(env, account.user.telegram_id) : null;
-    if (session && await botHandleSessionMessage(env, account, message, session, origin)) return json({ ok: true });
+    if (session && await botHandleSessionMessage(env, account, message, session, origin, ctx)) return json({ ok: true });
     if (account.isAdmin && /^\/(?:admin|panel|dashboard|control)(?:@\w+)?$/i.test(text)) {
       await botClearSession(env, account.user.telegram_id);
       await sendCentralManagementAccess(env, account, message.chat.id, origin, { force: true });
+      return json({ ok: true });
+    }
+    if (account.isAdmin && /^\/(?:upload_update|github_upload)(?:@\w+)?$/i.test(text)) {
+      await botClearSession(env, account.user.telegram_id);
+      await botSendOrEdit(env, { account, chatId: message.chat.id }, "admin_github_zip");
       return json({ ok: true });
     }
 
@@ -10614,7 +11309,7 @@ async function routeApiUnsafe(request, env, path) {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.0.2';
+const BLUEPANEL_CORE_VERSION = '3.0.3';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
@@ -10716,7 +11411,7 @@ export default {
       if(bluePanelEdgePath(path,request.method)) return bluePanelForwardToEdge(request,env);
       if(['/payments/blupal/return','/return'].includes(path)&&request.method==='GET'){await ensureDb(env);const s=await getSettings(env);return new Response(centralBlupalReturnPage(s,url.origin,url),{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}});}
       if(path==='/auth/control/magic'&&request.method==='GET') return Response.redirect(url.origin+'/control',302);
-      if(path==='/telegram/webhook'&&request.method==='POST') return telegramWebhook(request,env);
+      if(path==='/telegram/webhook'&&request.method==='POST') return telegramWebhook(request,env,ctx);
       if(path==='/payments/blupal/webhook'&&request.method==='POST') return blupalWebhook(request,env,ctx);
       if(path.startsWith('/api/')) return routeApi(request,env,path);
       if(request.method==='GET') return bluePanelForwardToEdge(request,env);
