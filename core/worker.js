@@ -1,11 +1,11 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.0.9
+ * Version: 3.1.2
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.1.1";
+const APP_VERSION = "3.1.2";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -6201,6 +6201,41 @@ async function resolveProcessorScriptNameFromCoreBinding(settings) {
   }
 }
 
+async function triggerProcessorBusinessJobs(env, source = "core") {
+  if (!env?.PROCESSOR_WORKER || typeof env.PROCESSOR_WORKER.fetch !== "function") {
+    return { success: false, skipped: true, error: "PROCESSOR_WORKER متصل نیست" };
+  }
+  const started = Date.now();
+  try {
+    const response = await env.PROCESSOR_WORKER.fetch(new Request("https://bluepanel-processor.internal/__bluepanel/service/process", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-bluepanel-service-hop": "core-to-processor", "x-bluepanel-process-source": cleanText(source, 80) },
+      body: "{}"
+    }));
+    const data = await response.json().catch(() => ({}));
+    const ts = nowIso();
+    await env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_processor_trigger_at',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at")
+      .bind(ts, ts).run();
+    if (!response.ok || data?.success === false) {
+      const error = cleanText(data?.error || ("Processor HTTP " + response.status), 500);
+      await env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_processor_trigger_error',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at")
+        .bind(error, ts).run();
+      return { success: false, error, http_status: response.status, duration_ms: Date.now() - started };
+    }
+    await env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_processor_trigger_error','',?) ON CONFLICT(key) DO UPDATE SET value='',updated_at=excluded.updated_at")
+      .bind(ts).run();
+    return { success: true, ...data, duration_ms: Date.now() - started };
+  } catch (error) {
+    const ts = nowIso();
+    const message = cleanText(String(error?.message || error), 500);
+    try {
+      await env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_processor_trigger_error',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at")
+        .bind(message, ts).run();
+    } catch (_) {}
+    return { success: false, error: message, duration_ms: Date.now() - started };
+  }
+}
+
 async function configureResellerRoutingOnly(env, bot, fallbackOrigin = "") {
   const settings = await getSettings(env);
   const publicOrigin = resellerBotOrigin(settings, fallbackOrigin);
@@ -6215,6 +6250,8 @@ async function configureResellerRoutingOnly(env, bot, fallbackOrigin = "") {
       commands: [
         { command: "setup_reports", description: "ساخت موضوع‌های گروه گزارش این ربات" },
         { command: "reports_status", description: "نمایش وضعیت گروه گزارش" },
+        { command: "test_reports", description: "ارسال گزارش آزمایشی فوری" },
+        { command: "flush_reports", description: "پردازش صف گزارش‌ها" },
         { command: "reset_reports", description: "بازسازی موضوع‌های گزارش" },
         { command: "disable_reports", description: "توقف ارسال گزارش به گروه" }
       ]
@@ -6721,15 +6758,90 @@ async function disableReportForum(env, scopeKey) {
   return Number(result?.meta?.changes || 0) > 0;
 }
 
+async function tryImmediateReportDelivery(env, reportId, botId, topicKey, title, messageHtml) {
+  let centralStatus = "pending";
+  let resellerStatus = botId ? "pending" : "skipped";
+  const errors = [];
+  let bot = null;
+  if (botId) {
+    try {
+      bot = await env.PASARGUARD_DB.prepare(`SELECT rb.*,u.telegram_id AS owner_telegram_id
+        FROM reseller_bots rb LEFT JOIN users u ON u.id=rb.user_id WHERE rb.id=?`).bind(botId).first();
+    } catch (error) {
+      errors.push("خواندن ربات: " + String(error?.message || error));
+    }
+  }
+  const centralDefinition = reportTopicDefinition("central", topicKey);
+  const resellerDefinition = reportTopicDefinition("reseller", topicKey);
+  const botHeader = bot
+    ? "🤖 ربات: <b>" + botEscape(bot.brand_name || bot.bot_name || bot.bot_username || bot.id) + "</b>" +
+      (bot.bot_username ? " (@" + botEscape(bot.bot_username) + ")" : "") + "\n👤 مالک: <code>" + botEscape(bot.owner_telegram_id || "-") + "</code>\n"
+    : botId ? "🤖 شناسه ربات: <code>" + botEscape(botId) + "</code>\n" : "";
+  try {
+    const destination = await env.PASARGUARD_DB.prepare(`SELECT rf.chat_id,rft.thread_id
+      FROM report_forums rf LEFT JOIN report_forum_topics rft ON rft.scope_key=rf.scope_key AND rft.topic_key=?
+      WHERE rf.scope_key='central' AND rf.status='active'`).bind(centralDefinition.key).first();
+    if (!destination) centralStatus = "skipped";
+    else if (!destination.thread_id) errors.push("مرکزی: Topic ثبت نشده است");
+    else {
+      await telegramApi(env, "sendMessage", {
+        chat_id: String(destination.chat_id), message_thread_id: Number(destination.thread_id), parse_mode: "HTML",
+        disable_web_page_preview: true,
+        text: cleanText("<b>" + botEscape(title) + "</b>\n━━━━━━━━━━━━━━\n" + botHeader + messageHtml, 3900)
+      });
+      centralStatus = "delivered";
+      await env.PASARGUARD_DB.prepare("UPDATE report_forums SET last_delivery_at=?,last_error=NULL,updated_at=? WHERE scope_key='central'")
+        .bind(nowIso(), nowIso()).run();
+    }
+  } catch (error) {
+    errors.push("مرکزی: " + String(error?.message || error));
+  }
+  if (botId) {
+    try {
+      const scopeKey = reportScopeKey(botId);
+      const destination = await env.PASARGUARD_DB.prepare(`SELECT rf.chat_id,rft.thread_id
+        FROM report_forums rf LEFT JOIN report_forum_topics rft ON rft.scope_key=rf.scope_key AND rft.topic_key=?
+        WHERE rf.scope_key=? AND rf.status='active'`).bind(resellerDefinition.key, scopeKey).first();
+      if (!destination) resellerStatus = "skipped";
+      else if (!destination.thread_id) errors.push("نماینده: Topic ثبت نشده است");
+      else if (!bot) errors.push("نماینده: ربات پیدا نشد");
+      else {
+        await resellerTelegramApi(env, bot, "sendMessage", {
+          chat_id: String(destination.chat_id), message_thread_id: Number(destination.thread_id), parse_mode: "HTML",
+          disable_web_page_preview: true,
+          text: cleanText("<b>" + botEscape(title) + "</b>\n━━━━━━━━━━━━━━\n" + messageHtml, 3900)
+        });
+        resellerStatus = "delivered";
+        await env.PASARGUARD_DB.prepare("UPDATE report_forums SET last_delivery_at=?,last_error=NULL,updated_at=? WHERE scope_key=?")
+          .bind(nowIso(), nowIso(), scopeKey).run();
+      }
+    } catch (error) {
+      errors.push("نماینده: " + String(error?.message || error));
+    }
+  }
+  await env.PASARGUARD_DB.prepare(`UPDATE report_outbox SET central_status=?,reseller_status=?,last_error=?,updated_at=? WHERE id=?`)
+    .bind(centralStatus, resellerStatus, errors.length ? cleanText(errors.join(" | "), 600) : null, nowIso(), reportId).run();
+  return { centralStatus, resellerStatus, errors };
+}
+
 async function queueReportEvent(env, botId, topicKey, title, messageHtml, dedupeKey) {
   const ts = nowIso();
+  const reportId = id("rpt");
   try {
-    await env.PASARGUARD_DB.prepare(`
+    const inserted = await env.PASARGUARD_DB.prepare(`
       INSERT OR IGNORE INTO report_outbox(
         id,bot_id,topic_key,title,message_html,dedupe_key,central_status,reseller_status,attempts,next_attempt_at,created_at,updated_at
       ) VALUES(?,?,?,?,?,?,'pending','pending',0,?,?,?)
-    `).bind(id("rpt"), botId || null, topicKey, cleanText(title,160), cleanText(messageHtml,3500), cleanText(dedupeKey,220), ts, ts, ts).run();
-  } catch (_) {}
+    `).bind(reportId, botId || null, topicKey, cleanText(title,160), cleanText(messageHtml,3500), cleanText(dedupeKey,220), ts, ts, ts).run();
+    let delivery = null;
+    if (Number(inserted?.meta?.changes || 0) > 0) {
+      delivery = await tryImmediateReportDelivery(env, reportId, botId || null, topicKey, cleanText(title,160), cleanText(messageHtml,3500));
+    }
+    return { queued: Number(inserted?.meta?.changes || 0) > 0, id: reportId, delivery };
+  } catch (error) {
+    console.error("queueReportEvent failed", error);
+    return { queued: false, error: String(error?.message || error) };
+  }
 }
 
 async function handleCentralReportGroupCommand(env, message, settings) {
@@ -6738,17 +6850,42 @@ async function handleCentralReportGroupCommand(env, message, settings) {
   const isReset = reportCommandMatch(text, "reset_reports");
   const isStatus = reportCommandMatch(text, "reports_status");
   const isDisable = reportCommandMatch(text, "disable_reports");
-  if (!isSetup && !isReset && !isStatus && !isDisable) return false;
+  const isTest = reportCommandMatch(text, "test_reports");
+  const isFlush = reportCommandMatch(text, "flush_reports") || reportCommandMatch(text, "process_reports");
+  if (!isSetup && !isReset && !isStatus && !isDisable && !isTest && !isFlush) return false;
   if (!isAdminTelegramId(settings, message.from?.id)) throw new Error("این دستور فقط برای مدیران ربات مرکزی است");
   if (isDisable) {
     await disableReportForum(env, "central");
     await telegramApi(env, "sendMessage", { chat_id: message.chat.id, text: "⏸ ارسال گزارش‌های مرکزی به این گروه غیرفعال شد." });
     return true;
   }
+  if (isFlush) {
+    const result = await triggerProcessorBusinessJobs(env, "telegram_flush");
+    await telegramApi(env, "sendMessage", {
+      chat_id: message.chat.id, parse_mode: "HTML",
+      text: result?.success === false
+        ? "❌ <b>پردازش صف گزارش ناموفق بود</b>\n" + botEscape(result.error || "خطای نامشخص")
+        : "✅ <b>صف گزارش پردازش شد</b>\nبررسی‌شده: <b>" + botMoney(result?.business?.outbox?.checked || result?.queue?.checked || 0) + "</b>"
+    });
+    return true;
+  }
+  if (isTest) {
+    const testId = "report-test:central:" + Date.now();
+    const queued = await queueReportEvent(env, null, "misc", "گزارش آزمایشی مرکزی",
+      "✅ اتصال گروه، Topic و ارسال گزارش با موفقیت بررسی شد.\nزمان: <code>" + botEscape(nowIso()) + "</code>", testId);
+    await telegramApi(env, "sendMessage", {
+      chat_id: message.chat.id, parse_mode: "HTML",
+      text: queued?.delivery?.centralStatus === "delivered"
+        ? "✅ گزارش آزمایشی در Topic «سایر گزارشات» ارسال شد."
+        : "⚠️ گزارش آزمایشی وارد صف شد اما ارسال فوری انجام نشد. /reports_status را بررسی کنید."
+    });
+    return true;
+  }
   if (isStatus) {
     const status = await reportForumStatus(env, "central");
+    const pending = await env.PASARGUARD_DB.prepare("SELECT COUNT(*) AS c FROM report_outbox WHERE central_status='pending'").first();
     const textStatus = status
-      ? "📊 <b>وضعیت مرکز گزارش</b>\nگروه: <b>" + botEscape(status.forum.chat_title || status.forum.chat_id) + "</b>\nوضعیت: <b>" + (status.forum.status === "active" ? "فعال" : "غیرفعال") + "</b>\nموضوع‌ها: <b>" + botMoney(status.topics.length) + "</b>"
+      ? "📊 <b>وضعیت مرکز گزارش</b>\nگروه: <b>" + botEscape(status.forum.chat_title || status.forum.chat_id) + "</b>\nوضعیت: <b>" + (status.forum.status === "active" ? "فعال" : "غیرفعال") + "</b>\nموضوع‌ها: <b>" + botMoney(status.topics.length) + "</b>\nصف مرکزی: <b>" + botMoney(pending?.c || 0) + "</b>\nآخرین ارسال: <b>" + botEscape(status.forum.last_delivery_at ? botDate(status.forum.last_delivery_at) : "هنوز ارسال نشده") + "</b>" + (status.forum.last_error ? "\nآخرین خطا: <code>" + botEscape(status.forum.last_error) + "</code>" : "") + "\n\n/test_reports برای تست فوری\n/flush_reports برای پردازش صف"
       : "مرکز گزارش هنوز تنظیم نشده است. در یک گروه Topics دستور /setup_reports را ارسال کنید.";
     await telegramApi(env, "sendMessage", { chat_id: message.chat.id, text: textStatus, parse_mode: "HTML" });
     return true;
@@ -6759,8 +6896,9 @@ async function handleCentralReportGroupCommand(env, message, settings) {
   });
   await telegramApi(env, "sendMessage", {
     chat_id: message.chat.id, parse_mode: "HTML",
-    text: "🧵 <b>گروه گزارش مرکزی آماده شد</b>\nموضوع‌های فعال: <b>" + botMoney(result.topics) + "</b>\nگزارش این گروه شامل اطلاعات تجمیعی همه ربات‌های نماینده است."
+    text: "🧵 <b>گروه گزارش مرکزی آماده شد</b>\nموضوع‌های فعال: <b>" + botMoney(result.topics) + "</b>\nگزارش این گروه شامل اطلاعات تجمیعی همه ربات‌های نماینده است.\n\nبرای بررسی فوری دستور /test_reports را ارسال کنید."
   });
+  try { await triggerProcessorBusinessJobs(env, "report_setup"); } catch (_) {}
   return true;
 }
 
@@ -11301,6 +11439,8 @@ async function configureTelegramBotWithToken(env, origin, token, suppliedSetting
       commands: [
         { command: "setup_reports", description: "ساخت موضوع‌های گروه گزارش مرکزی" },
         { command: "reports_status", description: "نمایش وضعیت گروه گزارش" },
+        { command: "test_reports", description: "ارسال گزارش آزمایشی فوری" },
+        { command: "flush_reports", description: "پردازش صف گزارش‌ها" },
         { command: "reset_reports", description: "بازسازی موضوع‌های گزارش" },
         { command: "disable_reports", description: "توقف ارسال گزارش به گروه" }
       ]
@@ -11975,7 +12115,7 @@ async function routeApiUnsafe(request, env, path) {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.0.4';
+const BLUEPANEL_CORE_VERSION = '3.1.2';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
@@ -12086,5 +12226,5 @@ export default {
       return new Response('Not found',{status:404});
     } catch(error){console.error('core fetch error',error);return bluePanelCoreJson({success:false,ok:false,role:'bluepanel-core',version:APP_VERSION,error:String(error?.message||error),code:'CORE_RUNTIME_ERROR'},500);}
   },
-  async scheduled(controller,env,ctx){ctx.waitUntil((async()=>{try{await ensureDb(env);await env.PASARGUARD_DB.prepare('DELETE FROM web_sessions WHERE expires_at<=?').bind(nowIso()).run();await env.PASARGUARD_DB.prepare('DELETE FROM web_login_codes WHERE expires_at<=? OR (consumed_at IS NOT NULL AND consumed_at<=?)').bind(nowIso(),new Date(Date.now()-3600000).toISOString()).run();await notifyVersionActivation(env);try{await syncPasarguardManagersForAllUsers(env,250)}catch(_){}await syncUsage(env,100);await reconcileAllAgencyBalanceStates(env,250);await processCentralTrialExpirations(env,100);const s=await getSettings(env);if(s.payment_poll_enabled==='true'&&s.blupal_api_key)await pollPendingPayments(env,30);if(s.auto_delete_pending_invoices==='true')await cleanupStalePendingInvoices(env,{settings:s,limit:200});await automaticUpdateTick(env,{source:'cron'});await automaticPythonHelperTick(env,{source:'cron'});await env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_core_cron_at',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(nowIso(),nowIso()).run();}catch(error){console.error('core scheduled error',error)}})());}
+  async scheduled(controller,env,ctx){ctx.waitUntil((async()=>{try{await ensureDb(env);await env.PASARGUARD_DB.prepare('DELETE FROM web_sessions WHERE expires_at<=?').bind(nowIso()).run();await env.PASARGUARD_DB.prepare('DELETE FROM web_login_codes WHERE expires_at<=? OR (consumed_at IS NOT NULL AND consumed_at<=?)').bind(nowIso(),new Date(Date.now()-3600000).toISOString()).run();await notifyVersionActivation(env);try{await syncPasarguardManagersForAllUsers(env,250)}catch(_){}await syncUsage(env,100);await reconcileAllAgencyBalanceStates(env,250);await processCentralTrialExpirations(env,100);const s=await getSettings(env);if(s.payment_poll_enabled==='true'&&s.blupal_api_key)await pollPendingPayments(env,30);if(s.auto_delete_pending_invoices==='true')await cleanupStalePendingInvoices(env,{settings:s,limit:200});await automaticUpdateTick(env,{source:'cron'});await automaticPythonHelperTick(env,{source:'cron'});try{await triggerProcessorBusinessJobs(env,'core_cron_fallback')}catch(error){console.error('processor fallback error',error)}await env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_core_cron_at',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(nowIso(),nowIso()).run();}catch(error){console.error('core scheduled error',error)}})());}
 };

@@ -1,6 +1,6 @@
 {
-  "version": "3.1.1",
-  "release_id": "3.1.1-20260714-central-pasarguard-api-manager",
+  "version": "3.1.2",
+  "release_id": "3.1.2-20260715-report-topics-delivery-fix",
   "architecture": "fully-split-three-worker",
   "files": {
     "core": "core/worker.js",
@@ -8,14 +8,14 @@
     "processor": "processor/worker.js"
   },
   "sha256": {
-    "core": "9e3aa18a5a9637f41cd809439301867410bcfdc24dcb49dabac3da281e8e50c9",
-    "edge": "ccc67f7f3573889e56a53988399316253775e59cd8147baf06adf5c2c4771278",
-    "processor": "80b92ee3170ac0673daff4f3682e66f759a6ac1cb8bc4025b0edaafe371cb30b"
+    "core": "8178352c9bd37565d892ad50394b15670d4b661d546e4f8448da1ddd7bb16602",
+    "edge": "d3de7eb9fefbdc0b416911b9bebbb4287e38a63c6a76421d6eccfbc17c3f76fe",
+    "processor": "859d7aba7ffa400ce47c22762e221960f02ac126e2f396fc1fa1b3a6e8143da6"
   },
   "roles": {
-    "core": "central bot, finance, licenses, PasarGuard owner integration, central Plisio invoices and callbacks, central APIs and D1 authority",
-    "edge": "web panels, reseller bots, customer miniapps, reseller Plisio invoices and callbacks, and latency-sensitive request handling",
-    "processor": "reports, retry queue, backups and background jobs"
+    "core": "central bot, finance, licenses, PasarGuard owner integration, central Plisio invoices and callbacks, central APIs, D1 authority and report processor fallback",
+    "edge": "web panels, reseller bots, customer miniapps, reseller Plisio invoices and callbacks, latency-sensitive request handling and immediate topic reports",
+    "processor": "report retries, topic repair, daily reports, backups and background jobs"
   },
   "bindings": {
     "core": [
@@ -35,23 +35,22 @@
     ]
   },
   "features": [
-    "add a prominent PasarGuard API Key manager to the central web control panel",
-    "add PasarGuard API Key registration, panel URL change, connection test and deletion to the central Telegram bot",
-    "validate pg_key_ credentials against /api/admin before saving",
-    "hide the API key after storage and delete the Telegram message containing it",
-    "record last successful API verification and the last connection error",
-    "preserve legacy username/password and bearer access-token fallback modes",
-    "keep Plisio, BluePal, reseller bots and the fully split three-worker architecture unchanged",
+    "fix report topic groups that were created successfully but received no activity reports",
+    "deliver normal central and reseller report events immediately without waiting for Processor Cron",
+    "retain the D1 outbox and retry path when Telegram delivery fails or a topic was deleted",
+    "invoke Processor business jobs from the Core scheduled handler as a fallback",
+    "flush report events queued by Processor jobs in the same run instead of waiting for the next Cron",
+    "add /test_reports and /flush_reports commands to central and reseller report groups",
+    "show pending queue count, last successful delivery and last report error in /reports_status",
+    "preserve Plisio, PasarGuard 5.1 API keys and the three-worker architecture",
     "README files are excluded"
   ],
   "validation": {
     "javascript_syntax": "passed for core, edge and processor",
-    "embedded_panel_scripts": "passed for central control and advanced management HTML scripts",
-    "central_bot_api_manager": "passed by static route, callback and session assertions",
-    "central_web_api_manager": "passed by static DOM, form-handler and backend-action assertions",
-    "api_key_validation": "pg_key_ format checked and /api/admin is called before saving",
-    "secret_exposure": "API key stays masked in bootstrap, is not returned by save actions, and Telegram source messages are deleted",
-    "legacy_auth_fallback": "username/password and legacy bearer token modes remain available after API-key deletion",
-    "live_pasarguard_call": "not run; no live panel API key was supplied"
+    "immediate_delivery_unit_test": "passed for central and reseller message_thread_id routing",
+    "missing_forum_test": "passed; unconfigured destinations are skipped without breaking user operations",
+    "missing_topic_test": "passed; events remain pending for Processor topic recreation and retry",
+    "processor_fallback": "static assertion passed for Core Cron and manual flush paths",
+    "live_telegram_delivery": "not run; no live bot token or report group was supplied"
   }
 }
