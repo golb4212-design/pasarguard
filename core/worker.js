@@ -5,7 +5,7 @@
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.1.3";
+const APP_VERSION = "3.1.4";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -102,6 +102,10 @@ const SALES_TEXT_LABELS = Object.freeze({
 let schemaReady = false;
 
 let schemaReadyPromise = null;
+
+// Persistent schema marker: avoids replaying the full D1 migration sweep whenever
+// Cloudflare starts a fresh isolate after an idle period.
+const DB_SCHEMA_REVISION = "3.1.4";
 
 let settingsCache = null;
 
@@ -1323,6 +1327,22 @@ async function ensureDb(env) {
 async function ensureDbInternal(env) {
   if (schemaReady) return;
 
+  // Fast cold-isolate path. The old implementation replayed every CREATE TABLE,
+  // PRAGMA table_info, ALTER TABLE and CREATE INDEX check on the first request
+  // handled by each fresh isolate. A single persistent revision lookup is enough
+  // when the database has already been migrated by a previous isolate.
+  try {
+    const marker = await env.PASARGUARD_DB.prepare(
+      "SELECT value FROM app_settings WHERE key=\'db_schema_revision\'"
+    ).first();
+    if (String(marker?.value || "") === DB_SCHEMA_REVISION) {
+      schemaReady = true;
+      return;
+    }
+  } catch (_) {
+    // Fresh installations may not have app_settings yet; continue with bootstrap.
+  }
+
   // Existing D1 databases may already contain an older table without the new
   // columns. Running CREATE INDEX before ALTER TABLE then fails with errors such
   // as "no such column: parent_bot_id". Create/upgrade tables first and defer all
@@ -1669,6 +1689,10 @@ async function ensureDbInternal(env) {
   try {
     await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET miniapp_enabled=1 WHERE COALESCE(miniapp_enabled,1)<>1").run();
   } catch (_) {}
+  await env.PASARGUARD_DB.prepare(`
+    INSERT INTO app_settings(key,value,updated_at) VALUES('db_schema_revision',?,?)
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
+  `).bind(DB_SCHEMA_REVISION, nowIso()).run();
   schemaReady = true;
 }
 
@@ -12294,7 +12318,7 @@ async function routeApiUnsafe(request, env, path) {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.1.3';
+const BLUEPANEL_CORE_VERSION = '3.1.4';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {

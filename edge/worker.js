@@ -5,7 +5,7 @@
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = "3.1.3";
+const APP_VERSION = "3.1.4";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -9652,7 +9652,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_EDGE_VERSION='3.1.3';
+const BLUEPANEL_EDGE_VERSION='3.1.4';
 function bluePanelEdgeJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function bluePanelEdgeInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
 function bluePanelEdgeRuntimeBinding(env,name){const value=env?.[name];return{name,exact_key_present:Object.prototype.hasOwnProperty.call(env||{},name),value_present:value!==undefined&&value!==null,fetch_callable:Boolean(value&&typeof value.fetch==='function'),constructor_name:value?.constructor?.name||''}}

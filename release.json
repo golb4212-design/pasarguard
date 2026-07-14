@@ -1,6 +1,6 @@
 {
-  "version": "3.1.3",
-  "release_id": "3.1.3-20260715-plisio-auto-usd-toman-rate",
+  "version": "3.1.4",
+  "release_id": "3.1.4-20260715-cold-isolate-fast-path",
   "architecture": "fully-split-three-worker",
   "files": {
     "core": "core/worker.js",
@@ -8,13 +8,13 @@
     "processor": "processor/worker.js"
   },
   "sha256": {
-    "core": "e4cf9b432cb5396b4a26658650ba2d8d2deb803ae6a42e0d93bdda68ebf05cbb",
-    "edge": "f72948b2ddb737d2f91fa5880fdf0d87a35cdde54f1d331d94222bc6a33edd16",
-    "processor": "d62dbfae01564f6afcb822b762d70ffe6a1f9f945f2de307c8b357c261aa813d"
+    "core": "9c5bb5ec001268718dae662dab0ad28f23d8cc156d4fa071ad98b58d4f5d0187",
+    "edge": "793e22fa9687e02e860a576f5454179f620da35c05a62f13d4f6d35c0b8fe5ee",
+    "processor": "58f50e8ddf41f2b664cab2f58e29968a2620c247488d173dbcf6d03f52e5f9a5"
   },
   "roles": {
-    "core": "central bot, finance, licenses, PasarGuard owner integration, central Plisio invoices/callbacks, automatic USD-to-toman rate service, central APIs, D1 authority and report processor fallback",
-    "edge": "web panels, reseller bots, customer miniapps, reseller Plisio invoices/callbacks using the shared automatic USD-to-toman rate, latency-sensitive handling and immediate topic reports",
+    "core": "central bot, finance, licenses, PasarGuard integration, Plisio, D1 authority and persistent schema-revision fast path",
+    "edge": "web panels, reseller bots, customer miniapps and latency-sensitive Telegram handling",
     "processor": "report retries, topic repair, daily reports, backups and background jobs"
   },
   "bindings": {
@@ -35,25 +35,18 @@
     ]
   },
   "features": [
-    "fetch USD-to-toman rate automatically for Plisio invoices through the Navasan latest-rate API",
-    "configure the exchange-rate API key securely from the central Telegram bot",
-    "refresh the rate on demand, on invoice creation when stale, and from the Core scheduled handler",
-    "cache the last successful rate and keep using it during temporary provider outages",
-    "fall back to a manually configured central or reseller rate when no safe cached rate is available",
-    "share the central automatic rate with all reseller bots while preserving each reseller manual fallback",
-    "store the exact FX rate and source with every central and reseller Plisio invoice for auditability",
-    "allow configuring refresh interval and rate markup from the central bot",
-    "preserve signed Plisio callbacks, one-time wallet crediting, report topics and PasarGuard 5.1 API support",
+    "prevent the first request of every fresh Cloudflare isolate from replaying the complete D1 schema and migration sweep",
+    "persist a db_schema_revision marker in D1 after a successful migration",
+    "reduce the cold-idle database bootstrap path to one lightweight revision query when the database is current",
+    "keep full migrations available for fresh installs and future schema revisions",
+    "preserve Plisio, automatic USD-to-toman rates, report topics and PasarGuard 5.1 API support",
     "README files are excluded"
   ],
   "validation": {
     "javascript_syntax": "passed for core, edge and processor",
-    "fx_number_parsing": "passed for Persian, Arabic and comma-separated digits",
-    "navasan_response_parsing": "passed for usd_sell.value in toman and rial conversion modes",
-    "plisio_conversion": "passed for central and reseller source_amount calculations",
-    "rate_fallback": "static assertions passed for fresh cache, stale cache and manual fallback paths",
-    "invoice_audit": "static assertion passed; exact FX rate/source is stored with each invoice",
-    "live_rate_request": "not run; no real Navasan API key was supplied",
-    "live_plisio_invoice": "not run; no live Plisio Secret Key was supplied"
+    "cold_schema_fast_path": "static assertion passed; current schema returns after one marker lookup",
+    "fresh_install_fallback": "static assertion passed; missing app_settings falls through to full bootstrap",
+    "migration_marker_write": "static assertion passed; marker is stored only after migration completes",
+    "live_cloudflare_latency": "not run; no deployed Worker environment was supplied"
   }
 }
