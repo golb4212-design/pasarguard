@@ -1,15 +1,26 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.14
+ * Version: 3.3.15
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.14';
+const APP_VERSION = '3.3.15';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.15": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🧯", text: "رفع قطعی برخورد UNIQUE هنگام تغییر وضعیت خطا از باز به رفع‌شده و پاک‌سازی امن رکوردهای قدیمی" },
+      { emoji: "🔄", text: "بازطراحی بروزرسانی خودکار به‌صورت مرحله‌ای و قابل‌ادامه تا هیچ Worker پشت مرحله قبلی گیر نکند" },
+      { emoji: "🧬", text: "تشخیص Build هم‌نسخه با SHA فایل‌ها و همگام‌سازی واقعی Core، Edge و Processor" },
+      { emoji: "⚡", text: "فعال‌سازی بررسی بروزرسانی از درخواست‌های پنل در کنار Cron و آپلود ZIP" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "🖥", text: "آپدیت پایدار پنل‌ها و ربات‌های نماینده حتی وقتی نسخه عددی تغییر نکرده اما کد جدید منتشر شده است" }
+    ])
+  }),
   "3.3.14": Object.freeze({
     central: Object.freeze([
       { emoji: "🧯", text: "ثبت خطای مرکز خطا با UPSERT اتمیک تک‌درخواستی و حذف کامل برخورد UNIQUE" },
@@ -6966,33 +6977,35 @@ async function markGithubZipUpload(env, uploadId, values = {}) {
 }
 
 async function deployUploadedGithubVersion(env, chatId, version) {
-  let lastResult = null;
+  let result = null;
   let lastError = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 1800));
-    try {
-      lastResult = await automaticUpdateTick(env, { source: "telegram_zip_upload", forceCheck: true, intervalSeconds: 5 });
-      if (lastResult?.failed) lastError = new Error(lastResult.error || "استقرار کامل نشد");
-      if (String(lastResult?.latest || "") === String(version) && !lastResult?.failed && (lastResult?.deployed || lastResult?.reason === "none" || !lastResult?.update_required)) break;
-    } catch (error) { lastError = error; }
-  }
   try {
-    if (lastResult?.deployed) {
-      await telegramApi(env, "sendMessage", {
-        chat_id: chatId,
-        text: "🚀 <b>استقرار خودکار نسخه " + botEscape(version) + " انجام شد</b>\n\nCore: " + (lastResult.core_deployed ? "✅" : "ℹ️") +
-          "\nEdge: " + (lastResult.edge_update?.verified ? "✅ نسخه تأیید شد" : (lastResult.edge_update?.deployed ? "⚠️ Deploy بدون تأیید" : (lastResult.edge_update?.error ? "❌" : "ℹ️"))) +
-          "\nProcessor: " + (lastResult.processor_update?.deployed ? "✅" : (lastResult.processor_update?.error ? "❌" : "ℹ️")),
-        parse_mode: "HTML"
-      });
-    } else if (lastError) {
-      await telegramApi(env, "sendMessage", {
-        chat_id: chatId,
-        text: "⚠️ فایل‌ها در GitHub ثبت شدند، اما استقرار خودکار کامل نشد:\n<code>" + botEscape(cleanText(lastError.message || lastError, 700)) + "</code>",
-        parse_mode: "HTML"
-      });
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (attempt > 0) await new Promise(resolve=>setTimeout(resolve,500));
+      result = await automaticUpdateTick(env, { source: "telegram_zip_upload", forceCheck: true, intervalSeconds: 5 });
+      if (result?.failed) lastError = new Error(result.error || "انتشار خودکار ناموفق بود");
+      if (result?.complete || !result?.update_required) break;
     }
-  } catch (_) {}
+    const stageLabel = ({edge:"Edge",processor:"Processor",core:"Core",none:"کامل",deferred:"در انتظار اتصال"})[String(result?.rollout_stage||"")] || "صف انتشار";
+    await telegramApi(env, "sendMessage", {
+      chat_id: chatId,
+      text: (result?.complete ? "✅" : "🔄") + " <b>انتشار خودکار نسخه " + botEscape(version) + "</b>\n\n" +
+        "آخرین مرحله: <b>" + botEscape(stageLabel) + "</b>\n" +
+        (result?.complete ? "Core، Edge و Processor همگام شدند." : "انتشار ذخیره شد و در Cron یا بازشدن پنل از همین مرحله ادامه می‌یابد.") +
+        (lastError ? "\n\n<code>" + botEscape(cleanText(lastError.message,500)) + "</code>" : ""),
+      parse_mode: "HTML"
+    });
+  } catch (error) {
+    try {
+      await setSettings(env,{auto_update_last_check_epoch:"0",auto_update_last_status:"failed",auto_update_last_error:cleanText(error?.message||error,900)});
+      await telegramApi(env, "sendMessage", {
+        chat_id: chatId,
+        text: "⚠️ فایل‌ها در GitHub ثبت شدند، اما انتشار خطا داد:\n<code>" + botEscape(cleanText(error?.message || error, 700)) + "</code>",
+        parse_mode: "HTML"
+      });
+    } catch (_) {}
+  }
+  return result;
 }
 
 async function githubFileMetadata(env, settings, file) {
@@ -7649,7 +7662,6 @@ async function ensureClusterSubrequestLimits(env, force = false) {
 
 async function deployEdgeWorkerFromGithub(env, force = false, targetVersion = "") {
   const settings = await getSettings(env);
-  if (!hasEdgeServiceBinding(env)) return { skipped: true, reason: "edge_service_binding_missing" };
   if (!settings.cf_account_id || !settings.cf_api_token) return { skipped: true, reason: "cloudflare_credentials_required" };
   const scriptName = await resolveEdgeScriptNameFromCoreBinding(settings);
   if (!scriptName) return { skipped: true, reason: "edge_script_name_not_detected", hint: "Binding مرکزی باید دقیقاً EDGE_WORKER نام داشته باشد" };
@@ -7678,7 +7690,7 @@ async function deployEdgeWorkerFromGithub(env, force = false, targetVersion = ""
   if (!response.ok || data.success === false) throw new Error(data?.errors?.[0]?.message || "Cloudflare Edge deploy failed");
   const deploymentReceipt = bluePanelCloudflareUploadReceipt(data, response, deployedVersion, "edge");
   const subrequest_limit = await tryConfigureWorkerSubrequestLimit(settings, scriptName, 50000);
-  const verification = await verifyEdgeDeploymentVersion(env, settings, scriptName, deployedVersion, deploymentReceipt);
+  const verification = await verifyEdgeDeploymentVersion(env, settings, scriptName, deployedVersion, deploymentReceipt, 3);
   await setSettings(env, { edge_worker_script_name: scriptName, edge_worker_last_sha: codeSha, edge_worker_last_version: verification.version, edge_worker_last_deployed_at: nowIso(), edge_worker_last_error: "", github_edge_worker_file: file });
   return { deployed: true, verified: true, runtime_verified: verification.runtime_verified, runtime_pending: verification.runtime_pending, runtime_version: verification.runtime_version, verification_mode: verification.verification_mode || "runtime", source_verification: verification.source_verification, deployment_receipt: deploymentReceipt, subrequest_limit, sha: codeSha, script_name: scriptName, version: verification.version };
 }
@@ -7698,7 +7710,6 @@ async function probeProcessorRuntimeVersion(env, attempt = 0) {
 
 async function deployProcessorWorkerFromGithub(env, force = false, targetVersion = "") {
   const settings = await getSettings(env);
-  if (!hasProcessorServiceBinding(env)) return { skipped: true, reason: "processor_service_binding_missing" };
   if (!settings.cf_account_id || !settings.cf_api_token) return { skipped: true, reason: "cloudflare_credentials_required" };
   const scriptName = await resolveProcessorScriptNameFromCoreBinding(settings);
   if (!scriptName) return { skipped: true, reason: "processor_script_name_not_detected", hint: "Binding مرکزی باید دقیقاً PROCESSOR_WORKER نام داشته باشد" };
@@ -7735,7 +7746,7 @@ async function deployProcessorWorkerFromGithub(env, force = false, targetVersion
     try { sourceVerification = await verifyCloudflareWorkerContent(settings, scriptName, deployedVersion, "BLUEPANEL_PROCESSOR_WORKER", 2); }
     catch (error) { sourceError = cleanText(error?.message || error, 700); }
   }
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < 3; i++) {
     if (i > 0) await new Promise(resolve => setTimeout(resolve, 900 + Math.min(i, 4) * 300));
     runtimeVerification = await probeProcessorRuntimeVersion(env, i);
     if (runtimeVerification?.ok === true && runtimeVerification.version === String(deployedVersion || "")) break;
@@ -7822,10 +7833,25 @@ async function checkUpdate(env) {
   const versionOrder = semverCompare(APP_VERSION, latest);
   const versionAvailable = versionOrder < 0;
   const knownReleaseId = String(settings.auto_update_last_release_id || "");
-  const buildAvailable = Boolean(versionOrder === 0 && knownReleaseId && manifest.release_id && manifest.release_id !== knownReleaseId);
+  const knownCoreSha = String(settings.auto_update_last_worker_sha || "");
+  const coreSha = cleanText(manifest.hashes?.core || "", 128);
+  const edgeSha = cleanText(manifest.hashes?.edge || "", 128);
+  const processorSha = cleanText(manifest.hashes?.processor || "", 128);
+  const releaseChanged = Boolean(manifest.release_id && manifest.release_id !== knownReleaseId);
+  const coreBuildChanged = Boolean(coreSha && coreSha !== knownCoreSha);
+  const buildAvailable = Boolean(versionOrder === 0 && (releaseChanged || coreBuildChanged));
   const canSyncRemote = versionOrder <= 0;
-  const edgeSyncRequired = Boolean(canSyncRemote && hasEdgeServiceBinding(env) && String(settings.edge_worker_last_version || "") !== latest);
-  const processorSyncRequired = Boolean(canSyncRemote && hasProcessorServiceBinding(env) && String(settings.processor_worker_last_version || "") !== latest);
+  const cloudflareConfigured = Boolean(settings.cf_account_id && settings.cf_api_token && settings.cf_worker_name);
+  const edgeTargetConfigured = Boolean(settings.edge_worker_script_name || hasEdgeServiceBinding(env) || cloudflareConfigured);
+  const processorTargetConfigured = Boolean(settings.processor_worker_script_name || hasProcessorServiceBinding(env) || cloudflareConfigured);
+  const edgeSyncRequired = Boolean(canSyncRemote && edgeTargetConfigured && (
+    String(settings.edge_worker_last_version || "") !== latest ||
+    Boolean(edgeSha && String(settings.edge_worker_last_sha || "") !== edgeSha)
+  ));
+  const processorSyncRequired = Boolean(canSyncRemote && processorTargetConfigured && (
+    String(settings.processor_worker_last_version || "") !== latest ||
+    Boolean(processorSha && String(settings.processor_worker_last_sha || "") !== processorSha)
+  ));
   const clusterSyncRequired = edgeSyncRequired || processorSyncRequired;
   const available = versionAvailable || buildAvailable;
   return {
@@ -7837,11 +7863,15 @@ async function checkUpdate(env) {
     release_id: manifest.release_id,
     known_release_id: knownReleaseId,
     manifest_source: manifest.source,
-    worker_sha: cleanText(manifest.hashes?.core || "", 128),
-    known_worker_sha: String(settings.auto_update_last_worker_sha || ""),
+    worker_sha: coreSha,
+    edge_sha: edgeSha,
+    processor_sha: processorSha,
+    known_worker_sha: knownCoreSha,
     edge_sync_required: edgeSyncRequired,
     processor_sync_required: processorSyncRequired,
-    cluster_sync_required: clusterSyncRequired
+    cluster_sync_required: clusterSyncRequired,
+    edge_target_configured: edgeTargetConfigured,
+    processor_target_configured: processorTargetConfigured
   };
 }
 
@@ -7968,8 +7998,7 @@ async function reconcileReleaseRollouts(env) {
   }
   if (completed > 0) {
     try {
-      await env.PASARGUARD_DB.prepare("UPDATE system_error_center SET status='resolved',resolved_at=?,last_seen_at=? WHERE scope='release_rollout' AND error_code='STAGED_DEPLOY_FAILED' AND status='open'")
-        .bind(nowIso(), nowIso()).run();
+      await resolveSystemErrorCenter(env,{scope:"release_rollout",errorCode:"STAGED_DEPLOY_FAILED"});
     } catch (_) {}
   }
   return { completed, superseded };
@@ -8008,22 +8037,51 @@ async function incrementSystemErrorCenter(env, scope, botId, errorCode, message,
   const normalizedMessage = cleanText(message || "خطای نامشخص", 1500);
   const contextJson = JSON.stringify(context || {});
   try {
-    // One atomic statement: duplicate open errors increment the existing row.
-    // This removes the race between INSERT OR IGNORE and a second UPDATE and
-    // halves remote-D1 subrequests when called from the Processor Worker.
-    await env.PASARGUARD_DB.prepare(`INSERT INTO system_error_center(
-      id,scope,bot_id,error_code,message,context_json,occurrence_count,status,first_seen_at,last_seen_at
-    ) VALUES(?,?,?,?,?,?,1,'open',?,?)
-    ON CONFLICT(scope,bot_id,error_code,status) DO UPDATE SET
-      message=excluded.message,
-      context_json=excluded.context_json,
-      occurrence_count=occurrence_count+1,
-      last_seen_at=excluded.last_seen_at`)
-      .bind(rowId,normalizedScope,normalizedBot,normalizedCode,normalizedMessage,contextJson,ts,ts).run();
+    // D1 batch is one remote call and one transaction. INSERT OR IGNORE works
+    // with every historical UNIQUE layout, then the UPDATE increments only
+    // when this batch did not create the row itself.
+    await env.PASARGUARD_DB.batch([
+      env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO system_error_center(
+        id,scope,bot_id,error_code,message,context_json,occurrence_count,status,first_seen_at,last_seen_at
+      ) VALUES(?,?,?,?,?,?,1,'open',?,?)`).bind(
+        rowId,normalizedScope,normalizedBot,normalizedCode,normalizedMessage,contextJson,ts,ts
+      ),
+      env.PASARGUARD_DB.prepare(`UPDATE system_error_center SET
+        message=?,context_json=?,
+        occurrence_count=occurrence_count+CASE WHEN id=? THEN 0 ELSE 1 END,
+        last_seen_at=?
+      WHERE scope=? AND bot_id=? AND error_code=? AND status='open'`).bind(
+        normalizedMessage,contextJson,rowId,ts,normalizedScope,normalizedBot,normalizedCode
+      )
+    ]);
     return { ok: true };
   } catch (error) {
     console.error("error center increment skipped", error);
     return { ok: false, error: cleanText(error?.message || error, 800) };
+  }
+}
+
+async function resolveSystemErrorCenter(env, filters = {}) {
+  if (!env?.PASARGUARD_DB) return { ok: false, skipped: true };
+  const ts = nowIso();
+  const where = ["status=?"];
+  const baseParams = ["resolved"];
+  if (filters.scope) { where.push("scope=?"); baseParams.push(cleanText(filters.scope,80)); }
+  if (filters.errorCode) { where.push("error_code=?"); baseParams.push(cleanText(filters.errorCode,120)); }
+  if (filters.botId !== undefined) { where.push("bot_id=?"); baseParams.push(cleanText(filters.botId || "",120)); }
+  const match = where.slice(1).length ? " AND " + where.slice(1).join(" AND ") : "";
+  try {
+    // The old schema allows one open and one resolved row for the same key.
+    // Delete the stale resolved copy first, otherwise changing open -> resolved
+    // collides with UNIQUE(scope,bot_id,error_code,status).
+    const result = await env.PASARGUARD_DB.batch([
+      env.PASARGUARD_DB.prepare(`DELETE FROM system_error_center WHERE status='resolved'${match}`).bind(...baseParams.slice(1)),
+      env.PASARGUARD_DB.prepare(`UPDATE system_error_center SET status='resolved',resolved_at=?,last_seen_at=? WHERE status='open'${match}`).bind(ts,ts,...baseParams.slice(1))
+    ]);
+    return { ok: true, result };
+  } catch (error) {
+    console.error("error center resolve skipped", error);
+    return { ok: false, error: cleanText(error?.message || error,800) };
   }
 }
 
@@ -8034,74 +8092,82 @@ async function safeRecordStagedDeployError(env, error, context = {}) {
 }
 
 async function deployClusterFromGithub(env, force = false, prechecked = null) {
-  // Rollout tables are optional diagnostics. A missing/locked D1 table can never
-  // block the actual Worker update or the Telegram webhook.
   const trackingReady = await safePrepareDeploymentTracking(env);
   const check = prechecked || await checkUpdate(env);
-  const shouldSync = force || check.available || check.cluster_sync_required;
   const settings = await getSettings(env);
   const rolloutId = id("rollout"), ts = nowIso();
-  let edge_update = { skipped: true, reason: "no_cluster_update_required" };
-  let processor_update = { skipped: true, reason: "no_cluster_update_required" };
+  let edge_update = { skipped: true, reason: "already_synced" };
+  let processor_update = { skipped: true, reason: "already_synced" };
   let core = { ...check, deployed: false };
-  if (!shouldSync && !check.available && !force) return { ...check, deployed: false, edge_update, processor_update };
+  if (!check.update_required && !force) {
+    return { ...check, deployed: false, complete: true, rollout_stage: "none", edge_update, processor_update };
+  }
 
   if (trackingReady) {
     await safeRolloutStatement(env, `INSERT INTO release_rollouts(
       id,version,release_id,mode,status,edge_status,processor_status,core_status,
       previous_core_version,previous_edge_version,previous_processor_version,details_json,created_at,updated_at
-    ) VALUES(?,?,?,'edge_first','running','pending','pending','pending',?,?,?,?,?,?)`, [
+    ) VALUES(?,?,?,'resumable','running','pending','pending','pending',?,?,?,?,?,?)`, [
       rolloutId,check.latest||APP_VERSION,check.release_id||"",APP_VERSION,
-      settings.edge_worker_last_version||"",settings.processor_worker_last_version||"",JSON.stringify({force}),ts,ts
+      settings.edge_worker_last_version||"",settings.processor_worker_last_version||"",JSON.stringify({force,reason:check.reason}),ts,ts
     ]);
   }
 
-  try {
-    if (shouldSync) {
-      edge_update = await deployEdgeWorkerFromGithub(env, true, check.latest || APP_VERSION);
-      const edgeReady = edge_update?.verified === true || edge_update?.deployed === true ||
-        (edge_update?.skipped && edge_update?.reason === "up_to_date" && String(edge_update?.version||"") === String(check.latest||APP_VERSION));
-      if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET edge_status=?,details_json=?,updated_at=? WHERE id=?",[
-        edgeReady?"verified":"failed",JSON.stringify({force,edge_update}),nowIso(),rolloutId
-      ]);
-      if (!edgeReady) throw new Error("نصب Edge کامل نشد؛ Core دست‌نخورده باقی ماند");
-
-      if (hasProcessorServiceBinding(env)) {
-        processor_update = await deployProcessorWorkerFromGithub(env, true, check.latest || APP_VERSION);
-        const processorReady = processor_update?.verified === true || processor_update?.deployed === true ||
-          (processor_update?.skipped && processor_update?.reason === "up_to_date");
-        if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET processor_status=?,details_json=?,updated_at=? WHERE id=?",[
-          processorReady?"deployed":"failed",JSON.stringify({force,edge_update,processor_update}),nowIso(),rolloutId
-        ]);
-        if (!processorReady) throw new Error("نصب Processor کامل نشد؛ Core دست‌نخورده باقی ماند");
-      } else {
-        processor_update={skipped:true,reason:"processor_service_binding_missing"};
-        if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET processor_status='skipped',updated_at=? WHERE id=?",[nowIso(),rolloutId]);
+  // One Worker per invocation keeps ZIP waitUntil and normal panel requests below
+  // Cloudflare's execution window. The next Cron/panel request resumes from SHA.
+  if (force || check.edge_sync_required) {
+    try {
+      edge_update = await deployEdgeWorkerFromGithub(env, force, check.latest || APP_VERSION);
+      const ready = edge_update?.verified === true || edge_update?.deployed === true || edge_update?.reason === "up_to_date";
+      if (ready) {
+        if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET status='running',edge_status='verified',processor_status='pending',core_status='pending',details_json=?,updated_at=? WHERE id=?",[JSON.stringify({edge_update}),nowIso(),rolloutId]);
+        return { ...check, deployed:Boolean(edge_update?.deployed), complete:false, partial:true, rollout_id:rolloutId, rollout_stage:"edge", tracking_ready:trackingReady, core_deployed:false, edge_update, processor_update };
       }
+    } catch (error) {
+      edge_update={deployed:false,verified:false,error:cleanText(error?.message||error,1000)};
+      await incrementSystemErrorCenter(env,"release_rollout","","EDGE_DEPLOY_FAILED",edge_update.error,{rolloutId});
     }
+  }
 
-    if (check.available || force) {
+  if (force || check.processor_sync_required) {
+    try {
+      processor_update = await deployProcessorWorkerFromGithub(env, force, check.latest || APP_VERSION);
+      const ready = processor_update?.verified === true || processor_update?.deployed === true || processor_update?.reason === "up_to_date";
+      if (ready) {
+        if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET status='running',edge_status=?,processor_status='verified',core_status='pending',details_json=?,updated_at=? WHERE id=?",[
+          check.edge_sync_required?"deferred":"verified",JSON.stringify({edge_update,processor_update}),nowIso(),rolloutId
+        ]);
+        return { ...check, deployed:Boolean(processor_update?.deployed), complete:false, partial:true, rollout_id:rolloutId, rollout_stage:"processor", tracking_ready:trackingReady, core_deployed:false, edge_update, processor_update };
+      }
+    } catch (error) {
+      processor_update={deployed:false,verified:false,error:cleanText(error?.message||error,1000)};
+      await incrementSystemErrorCenter(env,"release_rollout","","PROCESSOR_DEPLOY_FAILED",processor_update.error,{rolloutId});
+    }
+  }
+
+  if (check.available || force) {
+    try {
       if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET status='core_deploying',core_status='deploying',details_json=?,updated_at=? WHERE id=?",[
         JSON.stringify({force,edge_update,processor_update}),nowIso(),rolloutId
       ]);
       core = await deploySelfFromGithub(env, force, check);
+      if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET status='completed',core_status='deployed',details_json=?,finished_at=?,updated_at=? WHERE id=?",[
+        JSON.stringify({edge_update,processor_update,core:{deployed:core.deployed,version:check.latest}}),nowIso(),nowIso(),rolloutId
+      ]);
+      await resolveSystemErrorCenter(env,{scope:"release_rollout",errorCode:"STAGED_DEPLOY_FAILED"});
+      return { ...check, ...core, deployed:Boolean(core.deployed), complete:true, partial:false, rollout_id:rolloutId, rollout_stage:"core", rollout_status:"completed", tracking_ready:trackingReady, core_deployed:Boolean(core.deployed), edge_update, processor_update };
+    } catch (error) {
+      if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET status='failed',core_status='failed',details_json=?,finished_at=?,updated_at=? WHERE id=?",[
+        JSON.stringify({edge_update,processor_update,error:cleanText(error?.message||error,1000)}),nowIso(),nowIso(),rolloutId
+      ]);
+      await safeRecordStagedDeployError(env,error,{rolloutId,edge_update,processor_update,trackingReady});
+      throw error;
     }
-    const deployed = Boolean(core.deployed || edge_update?.deployed || processor_update?.deployed);
-    if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET status='completed',core_status=?,details_json=?,finished_at=?,updated_at=? WHERE id=?",[
-      core.deployed?"deployed":"unchanged",JSON.stringify({force,edge_update,processor_update,core:{deployed:core.deployed,version:check.latest}}),nowIso(),nowIso(),rolloutId
-    ]);
-    try {
-      await env.PASARGUARD_DB.prepare("UPDATE system_error_center SET status='resolved',resolved_at=?,last_seen_at=? WHERE scope='release_rollout' AND error_code='STAGED_DEPLOY_FAILED' AND status='open'")
-        .bind(nowIso(), nowIso()).run();
-    } catch (_) {}
-    return { ...check, ...core, deployed, rollout_id:rolloutId, rollout_status:"completed", tracking_ready:trackingReady, core_deployed:Boolean(core.deployed), edge_update, processor_update };
-  } catch (error) {
-    if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET status='failed',core_status='blocked',details_json=?,finished_at=?,updated_at=? WHERE id=?",[
-      JSON.stringify({force,edge_update,processor_update,error:cleanText(error.message,1000)}),nowIso(),nowIso(),rolloutId
-    ]);
-    await safeRecordStagedDeployError(env,error,{rolloutId,edge_update,processor_update,trackingReady});
-    throw error;
   }
+
+  // A missing side-worker target must not permanently block Core recovery.
+  const checkAfter = await checkUpdate(env).catch(()=>check);
+  return { ...checkAfter, deployed:false, complete:!checkAfter.update_required, partial:checkAfter.update_required, rollout_id:rolloutId, rollout_stage:"deferred", tracking_ready:trackingReady, core_deployed:false, edge_update, processor_update };
 }
 
 function autoUpdateConfigurationReady(settings) {
@@ -8151,11 +8217,11 @@ async function automaticUpdateTick(env, options = {}) {
     const result = { ...(await deployClusterFromGithub(env, false, check)), checked: true };
     await setSettings(env, {
       auto_update: "true",
-      auto_update_last_status: result.deployed ? "deployed" : "up_to_date",
-      auto_update_last_version: result.latest || APP_VERSION,
-      auto_update_last_release_id: result.release_id || result.latest || APP_VERSION,
-      auto_update_last_worker_sha: result.worker_sha || settings.auto_update_last_worker_sha || "",
-      auto_update_last_error: "",
+      auto_update_last_status: result.complete ? (result.deployed ? "deployed" : "up_to_date") : "deploying",
+      auto_update_last_version: result.core_deployed ? (result.latest || APP_VERSION) : (settings.auto_update_last_version || APP_VERSION),
+      auto_update_last_release_id: result.core_deployed ? (result.release_id || result.latest || APP_VERSION) : (settings.auto_update_last_release_id || ""),
+      auto_update_last_worker_sha: result.core_deployed ? (result.worker_sha || settings.auto_update_last_worker_sha || "") : (settings.auto_update_last_worker_sha || ""),
+      auto_update_last_error: result.partial ? cleanText(result.edge_update?.error || result.processor_update?.error || "",800) : "",
       auto_update_last_source: source
     });
     try { await audit(env, null, "automatic_update_" + (result.deployed ? "deployed" : "checked"), { source, ...result }); } catch (_) {}
@@ -11939,7 +12005,7 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
   }
   if (data === "bot:admin:errors:resolve") {
     if(!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
-    await env.PASARGUARD_DB.prepare("UPDATE system_error_center SET status='resolved',resolved_at=? WHERE status='open'").bind(nowIso()).run();
+    await resolveSystemErrorCenter(env);
     return botSendOrEdit(env,{account,chatId,messageId},"admin_errors");
   }
   if (data === "bot:admin:repair_all") {
@@ -14128,7 +14194,7 @@ async function centralAdminAction(request, env) {
       const result = await checkUpdate(env); await audit(env, auth.user.id, "central_dashboard_update_check", result); return json({ success: true, message: result.update_required ? "نسخه یا همگام‌سازی جدید پیدا شد" : "آخرین نسخه نصب است", result });
     }
     if (action === "update_deploy") {
-      const result = await deployClusterFromGithub(env, body.force === true); await audit(env, auth.user.id, "central_dashboard_update_deploy", result); return json({ success: true, message: result.deployed ? "نسخه جدید روی هر سه Worker نصب شد" : "تغییری برای نصب وجود نداشت", result });
+      const result = await deployClusterFromGithub(env, body.force === true); await audit(env, auth.user.id, "central_dashboard_update_deploy", result); return json({ success: true, message: result.complete ? (result.deployed ? "انتشار بروزرسانی کامل شد" : "تغییری برای نصب وجود نداشت") : "مرحله " + String(result.rollout_stage||"بعدی") + " انجام شد؛ ادامه انتشار خودکار است", result });
     }
     return fail("عملیات مدیریت مرکزی شناخته نشد", 404, "CENTRAL_ACTION_NOT_FOUND");
   } catch (error) {
@@ -14466,7 +14532,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.3.14';
+const BLUEPANEL_CORE_VERSION = '3.3.15';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
@@ -14544,12 +14610,17 @@ async function bluePanelCoreHealth(env) {
   };
 }
 let bluePanelNextRequestUpdateCheckAt = 0;
-const BLUEPANEL_REQUEST_UPDATE_INTERVAL_MS = 60000;
+const BLUEPANEL_REQUEST_UPDATE_INTERVAL_MS = 30000;
 
 function scheduleRequestTriggeredUpdate(env, ctx, path) {
-  // Recovery rule: never run deployment logic from a normal user request.
-  // Updates run only from the explicit ZIP uploader or the isolated Cron task.
-  return;
+  if (!ctx || typeof ctx.waitUntil !== "function") return;
+  if (/^\/(?:__bluepanel|health|telegram\/webhook|payments\/)/.test(String(path||""))) return;
+  const eligible = path === "/" || ["/app","/miniapp","/control","/admin","/panel","/dashboard","/control-advanced"].includes(path) || String(path||"").startsWith("/api/admin/");
+  if (!eligible) return;
+  const now = Date.now();
+  if (now < bluePanelNextRequestUpdateCheckAt) return;
+  bluePanelNextRequestUpdateCheckAt = now + BLUEPANEL_REQUEST_UPDATE_INTERVAL_MS;
+  ctx.waitUntil(automaticUpdateTick(env,{source:"panel_request",intervalSeconds:30}).catch(error=>console.error("request auto update error",error)));
 }
 
 function bluePanelMaintenancePhase(total = 4) {
@@ -14567,6 +14638,7 @@ async function runBluePanelCoreScheduledJobs(env) {
     env.PASARGUARD_DB.prepare('DELETE FROM web_login_codes WHERE expires_at<=? OR (consumed_at IS NOT NULL AND consumed_at<=?)').bind(ts,new Date(Date.now()-3600000).toISOString())
   ]);
   await notifyVersionActivation(env);
+  try { await automaticUpdateTick(env,{source:'cron',intervalSeconds:30}); } catch (error) { console.error('isolated auto update error',error); }
 
   if (phase === 0) {
     try { await syncPasarguardManagersForAllUsers(env,3); } catch (error) { console.error('manager sync phase error',error); }
@@ -14584,7 +14656,6 @@ async function runBluePanelCoreScheduledJobs(env) {
     if (settings.auto_delete_pending_invoices==='true') await cleanupStalePendingInvoices(env,{settings,limit:10});
   } else {
     try { await ensureClusterSubrequestLimits(env); } catch (error) { console.error('subrequest limit configuration error',error); }
-    try { await automaticUpdateTick(env,{source:'cron'}); } catch (error) { console.error('isolated auto update error',error); }
     await automaticPythonHelperTick(env,{source:'cron'});
     const processorResult = await triggerProcessorBusinessJobs(env,'core_cron_phase_'+phase);
     if (processorResult?.success===false) console.error('processor fallback error',processorResult.error);

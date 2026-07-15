@@ -1,11 +1,11 @@
 /* BLUEPANEL_PROCESSOR_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.14
+ * Version: 3.3.15
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = '3.3.14';
+const APP_VERSION = '3.3.15';
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
@@ -1996,7 +1996,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_PROCESSOR_VERSION='3.3.14';
+const BLUEPANEL_PROCESSOR_VERSION='3.3.15';
 let processorSchemaPromise=null;
 function processorJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 
@@ -2009,15 +2009,14 @@ async function recordSystemError(env, scope, botId, errorCode, message, context 
   const text = cleanText(message || "خطای نامشخص", 1500);
   const contextJson = JSON.stringify(context || {});
   try {
-    await env.PASARGUARD_DB.prepare(`INSERT INTO system_error_center(
-      id,scope,bot_id,error_code,message,context_json,occurrence_count,status,first_seen_at,last_seen_at
-    ) VALUES(?,?,?,?,?,?,1,'open',?,?)
-    ON CONFLICT(scope,bot_id,error_code,status) DO UPDATE SET
-      message=excluded.message,
-      context_json=excluded.context_json,
-      occurrence_count=occurrence_count+1,
-      last_seen_at=excluded.last_seen_at`)
-      .bind(rowId,normalizedScope,normalizedBot,code,text,contextJson,ts,ts).run();
+    await env.PASARGUARD_DB.batch([
+      env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO system_error_center(
+        id,scope,bot_id,error_code,message,context_json,occurrence_count,status,first_seen_at,last_seen_at
+      ) VALUES(?,?,?,?,?,?,1,'open',?,?)`).bind(rowId,normalizedScope,normalizedBot,code,text,contextJson,ts,ts),
+      env.PASARGUARD_DB.prepare(`UPDATE system_error_center SET
+        message=?,context_json=?,occurrence_count=occurrence_count+CASE WHEN id=? THEN 0 ELSE 1 END,last_seen_at=?
+      WHERE scope=? AND bot_id=? AND error_code=? AND status='open'`).bind(text,contextJson,rowId,ts,normalizedScope,normalizedBot,code)
+    ]);
   } catch (error) {
     console.error("processor error center write skipped", error);
   }

@@ -1,7 +1,7 @@
 {
-  "version": "3.3.14",
-  "release_id": "3.3.14-20260716-atomic-error-upsert-phased-subrequests",
-  "architecture": "fully-split-three-worker-atomic-error-center-phased-subrequest-budget",
+  "version": "3.3.15",
+  "release_id": "3.3.15-20260716-error-state-transition-resumable-auto-update",
+  "architecture": "fully-split-three-worker-resumable-sha-aware-auto-update",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -9,15 +9,15 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "roles": {
-    "core": "central bot, D1 authority, phased maintenance, payment callbacks, report outbox, safe update controller and Durable Object live usage engine",
+    "core": "central bot, D1 authority, resumable update controller, payment callbacks, report outbox and Durable Object live usage engine",
     "edge": "reseller bots, customer order/service UI, reseller web dashboard and PasarGuard service lifecycle",
-    "processor": "phased advanced schedules, auto-renewal, service health, reseller tiers, backups, campaigns and background reports"
+    "processor": "advanced schedules, auto-renewal, service health, reseller tiers, backups, campaigns and background reports"
   },
   "bindings": {
     "core": [
       "PASARGUARD_DB",
       "EDGE_WORKER",
-      "PROCESSOR_WORKER (optional)",
+      "PROCESSOR_WORKER (optional for direct Cloudflare deployment fallback)",
       "LIVE_USAGE_COORDINATOR -> class LiveUsageCoordinator"
     ],
     "edge": [
@@ -32,51 +32,52 @@
     ]
   },
   "features": [
-    "replaces the two-request error-center write with one atomic SQLite UPSERT that increments duplicate open errors",
-    "applies the same single-request UPSERT in Core rollout tracking and Processor background error recording",
-    "splits Core Cron maintenance into four rotating bounded phases instead of running every large job in one invocation",
-    "splits Processor business jobs into four rotating bounded phases and limits queue delivery concurrency and batch size",
-    "reduces report flush, repair, health-check, backup and version-activation batches that previously could exhaust one invocation",
-    "tries to configure a 50000 subrequest limit for Core, Edge and Processor on Workers Paid and safely ignores unsupported Free-plan responses",
-    "adds an optional Wrangler limits example while retaining the Durable Object migration configuration",
-    "keeps gift-plan Persian RTL fixes, service deletion, panel cache sync and all previous features",
+    "fixes UNIQUE collisions when an open system_error_center row is changed to resolved while an older resolved row already exists",
+    "uses a transactional D1 batch with INSERT OR IGNORE plus conditional increment for error recording across historical schemas",
+    "detects same-version releases by release_id and SHA-256 instead of relying only on the numeric version",
+    "compares Edge and Processor SHA-256 values so panel and background Worker code is actually synchronized",
+    "changes automatic deployment into resumable Edge, Processor and Core stages so one slow Worker cannot permanently block Core",
+    "continues deployment from ZIP upload, every Cron phase and eligible panel/admin requests",
+    "allows direct Cloudflare deployment by stored or discoverable script name even when a runtime service binding is temporarily unavailable",
+    "reduces runtime verification waits after an accepted Cloudflare upload receipt",
+    "keeps all previous gift-plan Persian RTL, service deletion, reports, billing and live-usage features",
     "README files are excluded"
   ],
   "deployment": {
-    "automatic_provisioning": "upload the ZIP through the central bot; no manual D1 action is required",
+    "automatic_provisioning": "upload the ZIP through the central bot; the uploader commits to GitHub and advances up to four resumable deployment stages",
+    "recovery": "unfinished stages resume on Cron and when the panel/admin interface is opened",
     "required_binding_name": "LIVE_USAGE_COORDINATOR",
     "required_class_name": "LiveUsageCoordinator",
     "migration_tag": "v3.1.9-live-usage (unchanged)",
-    "db_schema_revision": "3.3.5 (unchanged; no new schema migration)",
-    "cron": "existing schedules may remain; work is now rotated across four phases",
-    "subrequest_limit": "best-effort PATCH to 50000 on paid plans plus code-level phased fallback for free plans",
-    "error_center_write": "single INSERT ... ON CONFLICT DO UPDATE counter increment"
+    "db_schema_revision": "3.3.5 (unchanged; runtime-safe error-center repair requires no manual SQL)",
+    "cron": "automatic update check now runs on every scheduled invocation with a D1 claim throttle",
+    "error_center_write": "single transactional batch; resolution deletes stale resolved duplicates before status transition"
   },
   "validation": {
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "atomic_error_upsert": "passed by 50-writer SQLite concurrency simulation",
-    "phased_core_cron_static_assertion": "passed",
-    "phased_processor_static_assertion": "passed",
-    "bounded_manual_flush_and_repair_limits": "passed",
+    "error_resolution_collision_reproduction": "passed; old UPDATE reproduced SQLITE_CONSTRAINT_UNIQUE and new delete-plus-update completed",
+    "concurrent_error_counter": "passed with 50 writers producing one open row and occurrence_count=50",
+    "same_version_sha_detection_static_assertion": "passed",
+    "request_triggered_update_static_assertion": "passed",
+    "resumable_rollout_static_assertion": "passed",
     "release_manifest_hashes": "recalculated",
-    "zip_integrity": "passed",
     "live_cloudflare_deployment": "not run without production credentials"
   },
   "limitations": [
-    "production Cloudflare, Telegram and PasarGuard calls were not executed without account credentials"
+    "production Cloudflare, Telegram, GitHub and PasarGuard calls were not executed without account credentials"
   ],
   "sha256": {
-    "core": "fe953597610d6a733958b3a427a31ce9198f4828ec6b9c658a887e7ae6861dcc",
-    "edge": "204c6ec663f00de417ed990264f63cbb34f6b5a8b16cb11f20243e566414e24b",
-    "processor": "5c277d3fef726e9c6077a11eff51099adcdfcd30057da3cf32df951e3b426fe1",
+    "core": "86de722ea9723f5ffcdf0f4be5a562933ce0317472b2b3fa79a2651eebace866",
+    "edge": "f7028ca115cb73fda07b6af24e5ba22bf851b46fd80f0aebf2ceba6ded67657e",
+    "processor": "034ad2f718613941e0b71747fa9a3872897fd8fa40cda55eac2a4920273542b8",
     "durable_object_config": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "fe953597610d6a733958b3a427a31ce9198f4828ec6b9c658a887e7ae6861dcc",
-    "edge/worker.js": "204c6ec663f00de417ed990264f63cbb34f6b5a8b16cb11f20243e566414e24b",
-    "processor/worker.js": "5c277d3fef726e9c6077a11eff51099adcdfcd30057da3cf32df951e3b426fe1",
+    "core/worker.js": "86de722ea9723f5ffcdf0f4be5a562933ce0317472b2b3fa79a2651eebace866",
+    "edge/worker.js": "f7028ca115cb73fda07b6af24e5ba22bf851b46fd80f0aebf2ceba6ded67657e",
+    "processor/worker.js": "034ad2f718613941e0b71747fa9a3872897fd8fa40cda55eac2a4920273542b8",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }
