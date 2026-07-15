@@ -8,3 +8,7 @@ class_name = "LiveUsageCoordinator"
 [[migrations]]
 tag = "v3.1.9-live-usage"
 new_sqlite_classes = ["LiveUsageCoordinator"]
+
+# Optional on Workers Paid. The runtime also uses phased jobs so Free plans stay safe.
+[limits]
+subrequests = 50_000

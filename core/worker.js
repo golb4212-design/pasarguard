@@ -1,15 +1,25 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.13
+ * Version: 3.3.14
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.13';
+const APP_VERSION = '3.3.14';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.14": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🧯", text: "ثبت خطای مرکز خطا با UPSERT اتمیک تک‌درخواستی و حذف کامل برخورد UNIQUE" },
+      { emoji: "🧩", text: "تقسیم کارهای سنگین Cron و Processor به فازهای چرخشی برای جلوگیری از Too many subrequests" },
+      { emoji: "☁️", text: "تنظیم خودکار سقف Subrequest روی ۵۰هزار برای Workerهای پلن پولی بدون توقف نصب در پلن رایگان" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "⚡", text: "پردازش پایدارتر اعلان‌ها، گزارش‌ها و اتوماسیون‌ها با حفظ همه قابلیت‌های قبلی" }
+    ])
+  }),
   "3.3.13": Object.freeze({
     central: Object.freeze([
       { emoji: "🗄", text: "رفع کامل خطای UNIQUE در مرکز خطا با ثبت اتمیک و بدون وابستگی به ON CONFLICT" },
@@ -3248,7 +3258,7 @@ async function notifyVersionActivation(env) {
       "📣 ارسال خودکار اطلاعیه کانال: <code>" + (settings.release_channel_enabled === "true" ? "فعال" : "غیرفعال") + "</code>\n" +
       "🐍 وضعیت Python: <code>" + botEscape(pythonState) + "</code>"
     );
-    try { resellerSync = await syncAllResellerBotMenus(env, false); } catch (_) {}
+    try { resellerSync = await syncAllResellerBotMenus(env, false, 5); } catch (_) {}
     try { await audit(env, null, "runtime_version_activated", { version: APP_VERSION, independentBot: true, resellerSalesBots: true, resellerSync, agencySync }); } catch (_) {}
   }
 
@@ -3881,7 +3891,7 @@ async function syncPasarguardManagersForAllUsers(env, limit = 100) {
 
 async function applyCurrentReleaseToAllAgencies(env) {
   const ts = nowIso();
-  const manualSync = await syncPasarguardManagersForAllUsers(env, 250);
+  const manualSync = await syncPasarguardManagersForAllUsers(env, 5);
   const result = await env.PASARGUARD_DB.prepare(`
     UPDATE agencies SET runtime_version=?,update_applied_at=?,updated_at=CASE WHEN updated_at IS NULL THEN ? ELSE updated_at END
     WHERE COALESCE(runtime_version,'')<>?
@@ -7592,6 +7602,51 @@ async function verifyEdgeDeploymentVersion(env, settings, scriptName, expectedVe
   throw new Error(sourceError || ("نسخه فعال Worker دوم تأیید نشد؛ نسخه مورد انتظار " + expectedVersion + " و نسخه پاسخ‌گو " + (last?.version || "نامشخص") + " است"));
 }
 
+async function tryConfigureWorkerSubrequestLimit(settings, scriptName, subrequests = 50000) {
+  if (!settings?.cf_account_id || !settings?.cf_api_token || !scriptName) return { configured: false, skipped: true };
+  const value = Math.max(50, Math.min(10000000, Number(subrequests || 50000)));
+  try {
+    const response = await fetch("https://api.cloudflare.com/client/v4/accounts/" + settings.cf_account_id + "/workers/scripts/" + encodeURIComponent(scriptName) + "/settings", {
+      method: "PATCH",
+      headers: { authorization: "Bearer " + settings.cf_api_token, "content-type": "application/json" },
+      body: JSON.stringify({ limits: { subrequests: value } })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.success === false) {
+      return { configured: false, unsupported: true, http_status: response.status, error: cleanText(data?.errors?.[0]?.message || "Subrequest limit update failed", 500) };
+    }
+    return { configured: true, subrequests: value };
+  } catch (error) {
+    return { configured: false, unsupported: true, error: cleanText(error?.message || error, 500) };
+  }
+}
+
+async function ensureClusterSubrequestLimits(env, force = false) {
+  const settings = await getSettings(env);
+  const lastAttempt = Date.parse(settings.cluster_subrequest_limits_last_attempt_at || 0);
+  if (!force && Number.isFinite(lastAttempt) && Date.now() - lastAttempt < 12 * 3600000) {
+    return { skipped: true, reason: "recent_attempt" };
+  }
+  const targets = [
+    { role: "core", name: settings.cf_worker_name || "" },
+    { role: "edge", name: settings.edge_worker_script_name || "" },
+    { role: "processor", name: settings.processor_worker_script_name || "" }
+  ].filter(item => item.name);
+  const results = await Promise.all(targets.map(async item => ({
+    role: item.role,
+    name: item.name,
+    ...(await tryConfigureWorkerSubrequestLimit(settings, item.name, 50000))
+  })));
+  const ts = nowIso();
+  try {
+    await setSettings(env, {
+      cluster_subrequest_limits_last_attempt_at: ts,
+      cluster_subrequest_limits_last_result: JSON.stringify(results)
+    });
+  } catch (_) {}
+  return { attempted: targets.length, results };
+}
+
 async function deployEdgeWorkerFromGithub(env, force = false, targetVersion = "") {
   const settings = await getSettings(env);
   if (!hasEdgeServiceBinding(env)) return { skipped: true, reason: "edge_service_binding_missing" };
@@ -7622,9 +7677,10 @@ async function deployEdgeWorkerFromGithub(env, force = false, targetVersion = ""
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.success === false) throw new Error(data?.errors?.[0]?.message || "Cloudflare Edge deploy failed");
   const deploymentReceipt = bluePanelCloudflareUploadReceipt(data, response, deployedVersion, "edge");
+  const subrequest_limit = await tryConfigureWorkerSubrequestLimit(settings, scriptName, 50000);
   const verification = await verifyEdgeDeploymentVersion(env, settings, scriptName, deployedVersion, deploymentReceipt);
   await setSettings(env, { edge_worker_script_name: scriptName, edge_worker_last_sha: codeSha, edge_worker_last_version: verification.version, edge_worker_last_deployed_at: nowIso(), edge_worker_last_error: "", github_edge_worker_file: file });
-  return { deployed: true, verified: true, runtime_verified: verification.runtime_verified, runtime_pending: verification.runtime_pending, runtime_version: verification.runtime_version, verification_mode: verification.verification_mode || "runtime", source_verification: verification.source_verification, deployment_receipt: deploymentReceipt, sha: codeSha, script_name: scriptName, version: verification.version };
+  return { deployed: true, verified: true, runtime_verified: verification.runtime_verified, runtime_pending: verification.runtime_pending, runtime_version: verification.runtime_version, verification_mode: verification.verification_mode || "runtime", source_verification: verification.source_verification, deployment_receipt: deploymentReceipt, subrequest_limit, sha: codeSha, script_name: scriptName, version: verification.version };
 }
 
 async function probeProcessorRuntimeVersion(env, attempt = 0) {
@@ -7670,6 +7726,7 @@ async function deployProcessorWorkerFromGithub(env, force = false, targetVersion
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.success === false) throw new Error(data?.errors?.[0]?.message || "Cloudflare Processor deploy failed");
   const deploymentReceipt = bluePanelCloudflareUploadReceipt(data, response, deployedVersion, "processor");
+  const subrequest_limit = await tryConfigureWorkerSubrequestLimit(settings, scriptName, 50000);
   let sourceVerification = deploymentReceipt.accepted === true
     ? { verified: true, source: "cloudflare_upload_receipt", deployment_id: deploymentReceipt.deployment_id || "", expected_version: deployedVersion }
     : null;
@@ -7696,6 +7753,7 @@ async function deployProcessorWorkerFromGithub(env, force = false, targetVersion
     source_verification: sourceVerification || { verified: false, diagnostic_only: true, error: sourceError },
     runtime_verification: runtimeVerification,
     deployment_receipt: deploymentReceipt,
+    subrequest_limit,
     sha: codeSha,
     script_name: scriptName,
     version: deployedVersion
@@ -7834,6 +7892,7 @@ async function deploySelfFromGithub(env, force = false, prechecked = null) {
   if (!response.ok || data.success === false) {
     throw new Error(data?.errors?.[0]?.message || "Cloudflare deploy failed");
   }
+  const subrequest_limit = await tryConfigureWorkerSubrequestLimit(settings, settings.cf_worker_name, 50000);
   await setSettings(env, {
     auto_update_last_worker_sha: codeSha,
     auto_update_last_version: check.latest || APP_VERSION,
@@ -7841,7 +7900,7 @@ async function deploySelfFromGithub(env, force = false, prechecked = null) {
     auto_update_last_status: "deployed",
     auto_update_last_error: ""
   });
-  return { ...check, worker_sha: codeSha, deployed: true };
+  return { ...check, worker_sha: codeSha, deployed: true, subrequest_limit };
 }
 
 async function ensureDeploymentTrackingTables(env) {
@@ -7949,16 +8008,18 @@ async function incrementSystemErrorCenter(env, scope, botId, errorCode, message,
   const normalizedMessage = cleanText(message || "خطای نامشخص", 1500);
   const contextJson = JSON.stringify(context || {});
   try {
-    // Start a new row at zero, then increment it below. INSERT OR IGNORE is
-    // concurrency-safe and cannot surface the composite UNIQUE constraint.
-    await env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO system_error_center(
+    // One atomic statement: duplicate open errors increment the existing row.
+    // This removes the race between INSERT OR IGNORE and a second UPDATE and
+    // halves remote-D1 subrequests when called from the Processor Worker.
+    await env.PASARGUARD_DB.prepare(`INSERT INTO system_error_center(
       id,scope,bot_id,error_code,message,context_json,occurrence_count,status,first_seen_at,last_seen_at
-    ) VALUES(?,?,?,?,?,?,0,'open',?,?)`)
+    ) VALUES(?,?,?,?,?,?,1,'open',?,?)
+    ON CONFLICT(scope,bot_id,error_code,status) DO UPDATE SET
+      message=excluded.message,
+      context_json=excluded.context_json,
+      occurrence_count=occurrence_count+1,
+      last_seen_at=excluded.last_seen_at`)
       .bind(rowId,normalizedScope,normalizedBot,normalizedCode,normalizedMessage,contextJson,ts,ts).run();
-    await env.PASARGUARD_DB.prepare(`UPDATE system_error_center SET
-      message=?,context_json=?,occurrence_count=occurrence_count+1,last_seen_at=?
-      WHERE scope=? AND bot_id=? AND error_code=? AND status='open'`)
-      .bind(normalizedMessage,contextJson,ts,normalizedScope,normalizedBot,normalizedCode).run();
     return { ok: true };
   } catch (error) {
     console.error("error center increment skipped", error);
@@ -8592,7 +8653,7 @@ async function handleCentralReportGroupCommand(env, message, settings) {
     return true;
   }
   if (isFlush) {
-    const local = await processReportOutboxOnCore(env, 300);
+    const local = await processReportOutboxOnCore(env, 12);
     const processor = await triggerProcessorBusinessJobs(env, "telegram_flush");
     await telegramApi(env, "sendMessage", {
       chat_id: message.chat.id, parse_mode: "HTML",
@@ -9295,10 +9356,10 @@ async function configureResellerBot(env, bot, origin = "") {
   return webhookUrl;
 }
 
-async function syncAllResellerBotMenus(env, notifyManagementLinks = false) {
+async function syncAllResellerBotMenus(env, notifyManagementLinks = false, limit = 5) {
   await ensureDb(env);
   const settings = await getSettings(env);
-  const rows = await env.PASARGUARD_DB.prepare("SELECT id FROM reseller_bots").all();
+  const rows = await env.PASARGUARD_DB.prepare("SELECT id FROM reseller_bots WHERE COALESCE(bot_version,'')<>? OR status='error' ORDER BY updated_at ASC LIMIT ?").bind(RESELLER_BOT_VERSION,Math.max(1,Math.min(25,Number(limit||5)))).all();
   let success = 0;
   let failed = 0;
   let linksSent = 0;
@@ -10197,10 +10258,10 @@ async function runCentralRepairAll(env, account) {
     await env.PASARGUARD_DB.prepare("INSERT INTO repair_runs(id,scope,action,status,result_json,created_at) VALUES(?,'central','repair_all','running','{}',?)").bind(runId,ts).run();
     tracking=true;
   } catch(error){console.error("repair tracking unavailable",error);}
-  try{await syncAllResellerBotMenus(env,false);result.menus=true;}catch(error){console.error("repair menus",error);}
-  try{await runAllResellerHealthChecks(env,100);result.health=true;}catch(error){console.error("repair health",error);}
-  try{await createAllResellerBackups(env,100);result.backups=true;}catch(error){console.error("repair backups",error);}
-  try{await processReportOutboxOnCore(env,300);result.reports=true;}catch(error){console.error("repair reports",error);}
+  try{await syncAllResellerBotMenus(env,false,5);result.menus=true;}catch(error){console.error("repair menus",error);}
+  try{await runAllResellerHealthChecks(env,5);result.health=true;}catch(error){console.error("repair health",error);}
+  try{await createAllResellerBackups(env,5);result.backups=true;}catch(error){console.error("repair backups",error);}
+  try{await processReportOutboxOnCore(env,8);result.reports=true;}catch(error){console.error("repair reports",error);}
   try{
     const repaired=await repairProcessorRuntime(env);
     result.processor=repaired?.success===true;
@@ -11903,14 +11964,14 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
   }
   if (data === "bot:admin:reseller_backup_all") {
     if(!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
-    const result=await createAllResellerBackups(env,100);
+    const result=await createAllResellerBackups(env,8);
     await audit(env,account.user.id,"central_reseller_backup_all",result);
     await botPrompt(env,chatId,"🗄 پشتیبان‌گیری گروهی پایان یافت.\nموفق: <b>"+botMoney(result.success)+"</b> · ناموفق: <b>"+botMoney(result.failed)+"</b>",[[{text:"↩️ مرکز پایداری",callback_data:"bot:admin:reseller_ops"}]]);
     return;
   }
   if (data === "bot:admin:reseller_health_all") {
     if(!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
-    const result=await runAllResellerHealthChecks(env,50);
+    const result=await runAllResellerHealthChecks(env,8);
     await audit(env,account.user.id,"central_reseller_health_all",result);
     await botPrompt(env,chatId,"🩺 پایش گروهی پایان یافت.\nبررسی‌شده: <b>"+botMoney(result.checked)+"</b> · ناموفق: <b>"+botMoney(result.failed)+"</b>",[[{text:"↩️ مرکز پایداری",callback_data:"bot:admin:reseller_ops"}]]);
     return;
@@ -13932,10 +13993,10 @@ async function centralAdminAction(request, env) {
       await audit(env,auth.user.id,action,result);return json({success:true,message:action==="release_test"?"پیام آزمایشی ارسال شد":"اطلاعیه نسخه منتشر شد",result});
     }
     if (action === "reseller_health_all") {
-      const result=await runAllResellerHealthChecks(env,100);await audit(env,auth.user.id,"central_web_reseller_health_all",result);return json({success:true,message:"پایش همه ربات‌های نماینده انجام شد",result});
+      const result=await runAllResellerHealthChecks(env,8);await audit(env,auth.user.id,"central_web_reseller_health_all",result);return json({success:true,message:"یک مرحله پایش ربات‌های نماینده انجام شد",result});
     }
     if (action === "reseller_backup_all") {
-      const result=await createAllResellerBackups(env,200);await audit(env,auth.user.id,"central_web_reseller_backup_all",result);return json({success:true,message:"پشتیبان‌گیری همه ربات‌های نماینده انجام شد",result});
+      const result=await createAllResellerBackups(env,8);await audit(env,auth.user.id,"central_web_reseller_backup_all",result);return json({success:true,message:"یک مرحله پشتیبان‌گیری ربات‌های نماینده انجام شد",result});
     }
     if (action === "cluster_diagnose") {
       const result = await inspectThreeWorkerCluster(env);
@@ -14405,7 +14466,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.3.13';
+const BLUEPANEL_CORE_VERSION = '3.3.14';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
@@ -14491,6 +14552,55 @@ function scheduleRequestTriggeredUpdate(env, ctx, path) {
   return;
 }
 
+function bluePanelMaintenancePhase(total = 4) {
+  const date = new Date();
+  const seed = Math.floor(Date.now() / 86400000) + date.getUTCHours() + date.getUTCMinutes();
+  return ((seed % total) + total) % total;
+}
+
+async function runBluePanelCoreScheduledJobs(env) {
+  await ensureDb(env);
+  const ts = nowIso();
+  const phase = bluePanelMaintenancePhase(4);
+  await env.PASARGUARD_DB.batch([
+    env.PASARGUARD_DB.prepare('DELETE FROM web_sessions WHERE expires_at<=?').bind(ts),
+    env.PASARGUARD_DB.prepare('DELETE FROM web_login_codes WHERE expires_at<=? OR (consumed_at IS NOT NULL AND consumed_at<=?)').bind(ts,new Date(Date.now()-3600000).toISOString())
+  ]);
+  await notifyVersionActivation(env);
+
+  if (phase === 0) {
+    try { await syncPasarguardManagersForAllUsers(env,3); } catch (error) { console.error('manager sync phase error',error); }
+    try { await syncAllResellerBotMenus(env,false,3); } catch (error) { console.error('reseller menu sync phase error',error); }
+  } else if (phase === 1) {
+    if (!liveUsageNamespaceAvailable(env)) await syncUsage(env,10);
+    await reconcileAllAgencyBalanceStates(env,8);
+  } else if (phase === 2) {
+    await processCentralTrialExpirations(env,8);
+    const settings = await getSettings(env);
+    if (plisioRateMode(settings)==='auto' && String(settings.plisio_fx_api_key||'').trim()) {
+      try { await refreshCentralPlisioFxRate(env); } catch (error) { console.error('fx refresh error',error); }
+    }
+    if (settings.payment_poll_enabled==='true' && settings.blupal_api_key) await pollPendingPayments(env,5);
+    if (settings.auto_delete_pending_invoices==='true') await cleanupStalePendingInvoices(env,{settings,limit:10});
+  } else {
+    try { await ensureClusterSubrequestLimits(env); } catch (error) { console.error('subrequest limit configuration error',error); }
+    try { await automaticUpdateTick(env,{source:'cron'}); } catch (error) { console.error('isolated auto update error',error); }
+    await automaticPythonHelperTick(env,{source:'cron'});
+    const processorResult = await triggerProcessorBusinessJobs(env,'core_cron_phase_'+phase);
+    if (processorResult?.success===false) console.error('processor fallback error',processorResult.error);
+  }
+
+  // Small flush on every phase keeps reports timely without allowing one Cron
+  // invocation to consume the complete Worker subrequest budget.
+  try { await processReportOutboxOnCore(env,4); } catch (error) { console.error('core report flush error',error); }
+  const finished = nowIso();
+  await env.PASARGUARD_DB.batch([
+    env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_core_cron_at',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(finished,finished),
+    env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_core_cron_phase',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(String(phase),finished)
+  ]);
+  return { phase, finished_at: finished };
+}
+
 export default {
   async fetch(request,env,ctx){
     const url=new URL(request.url),path=url.pathname.replace(/\/+$/,'')||'/';
@@ -14500,7 +14610,7 @@ export default {
       if(request.method==='OPTIONS') return new Response(null,{status:204,headers:{'access-control-allow-origin':'*','access-control-allow-methods':'GET,POST,OPTIONS','access-control-allow-headers':'content-type,x-telegram-init-data,x-web-session,authorization,x-bluepanel-public-origin'}});
       if(path==='/__bluepanel/internal/d1'&&request.method==='POST') return bluePanelCoreD1Rpc(request,env);
       if((path==='/__bluepanel/service/core-local-health'||path==='/__bluepanel/service/core-health')&&bluePanelInternalHost(request)){const h=await bluePanelCoreLocalHealth(env);return bluePanelCoreJson(h,h.ok?200:503,{'x-bluepanel-role':'bluepanel-core','x-bluepanel-version':APP_VERSION});}
-      if(path==='/__bluepanel/service/reports/flush'&&request.method==='POST'&&bluePanelInternalHost(request)){await ensureDb(env);const result=await processReportOutboxOnCore(env,300);return bluePanelCoreJson({success:true,result});}
+      if(path==='/__bluepanel/service/reports/flush'&&request.method==='POST'&&bluePanelInternalHost(request)){await ensureDb(env);const result=await processReportOutboxOnCore(env,12);return bluePanelCoreJson({success:true,result});}
       if(path==='/health'){const h=await bluePanelCoreHealth(env);return bluePanelCoreJson(h,h.ok?200:503);}
       if(bluePanelEdgePath(path,request.method)) return bluePanelForwardToEdge(request,env);
       if(['/payments/blupal/return','/return'].includes(path)&&request.method==='GET'){await ensureDb(env);const s=await getSettings(env);return new Response(centralBlupalReturnPage(s,url.origin,url),{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}});}
@@ -14515,5 +14625,5 @@ export default {
       return new Response('Not found',{status:404});
     } catch(error){console.error('core fetch error',error);return bluePanelCoreJson({success:false,ok:false,role:'bluepanel-core',version:APP_VERSION,error:String(error?.message||error),code:'CORE_RUNTIME_ERROR'},500);}
   },
-  async scheduled(controller,env,ctx){scheduleLiveUsageBootstrap(env,ctx,true);ctx.waitUntil((async()=>{try{await ensureDb(env);await env.PASARGUARD_DB.prepare('DELETE FROM web_sessions WHERE expires_at<=?').bind(nowIso()).run();await env.PASARGUARD_DB.prepare('DELETE FROM web_login_codes WHERE expires_at<=? OR (consumed_at IS NOT NULL AND consumed_at<=?)').bind(nowIso(),new Date(Date.now()-3600000).toISOString()).run();await notifyVersionActivation(env);try{await processReportOutboxOnCore(env,300)}catch(error){console.error('core report flush before jobs error',error)}try{await syncPasarguardManagersForAllUsers(env,250)}catch(_){}if(!liveUsageNamespaceAvailable(env))await syncUsage(env,100);await reconcileAllAgencyBalanceStates(env,250);await processCentralTrialExpirations(env,100);const s=await getSettings(env);if(plisioRateMode(s)==='auto'&&String(s.plisio_fx_api_key||'').trim()){try{await refreshCentralPlisioFxRate(env)}catch(error){console.error('fx refresh error',error)}}if(s.payment_poll_enabled==='true'&&s.blupal_api_key)await pollPendingPayments(env,30);if(s.auto_delete_pending_invoices==='true')await cleanupStalePendingInvoices(env,{settings:s,limit:200});try{await automaticUpdateTick(env,{source:'cron'})}catch(error){console.error('isolated auto update error',error)}await automaticPythonHelperTick(env,{source:'cron'});const processorResult=await triggerProcessorBusinessJobs(env,'core_cron_fallback');if(processorResult?.success===false)console.error('processor fallback error',processorResult.error);try{await processReportOutboxOnCore(env,300)}catch(error){console.error('core report flush after jobs error',error)}await env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_core_cron_at',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(nowIso(),nowIso()).run();}catch(error){console.error('core scheduled error',error)}})());}
+  async scheduled(controller,env,ctx){scheduleLiveUsageBootstrap(env,ctx,true);ctx.waitUntil(runBluePanelCoreScheduledJobs(env).catch(error=>console.error('core scheduled error',error)));}
 };

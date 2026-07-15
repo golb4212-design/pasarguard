@@ -1,7 +1,7 @@
 {
-  "version": "3.3.13",
-  "release_id": "3.3.13-20260716-error-center-concurrency-gift-rtl",
-  "architecture": "fully-split-three-worker-concurrency-safe-error-center-gift-rtl",
+  "version": "3.3.14",
+  "release_id": "3.3.14-20260716-atomic-error-upsert-phased-subrequests",
+  "architecture": "fully-split-three-worker-atomic-error-center-phased-subrequest-budget",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -9,9 +9,9 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "roles": {
-    "core": "central bot, D1 authority, payment callbacks, report outbox, safe update controller and Durable Object live usage engine",
+    "core": "central bot, D1 authority, phased maintenance, payment callbacks, report outbox, safe update controller and Durable Object live usage engine",
     "edge": "reseller bots, customer order/service UI, reseller web dashboard and PasarGuard service lifecycle",
-    "processor": "advanced schedules, auto-renewal, service health, reseller tiers, backups, campaigns and background reports"
+    "processor": "phased advanced schedules, auto-renewal, service health, reseller tiers, backups, campaigns and background reports"
   },
   "bindings": {
     "core": [
@@ -32,11 +32,14 @@
     ]
   },
   "features": [
-    "records concurrent system errors with INSERT OR IGNORE followed by an atomic counter increment, avoiding D1 UNIQUE constraint failures",
-    "applies the same concurrency-safe error recording in Core rollout tracking and Processor background jobs",
-    "renders gift plan volume, duration and price with Persian digits and Persian units in stable RTL order",
-    "removes the Latin GB token from gift plan buttons and recipient confirmation text",
-    "keeps Cloudflare upload receipt verification, service deletion, panel cache sync and all previous features",
+    "replaces the two-request error-center write with one atomic SQLite UPSERT that increments duplicate open errors",
+    "applies the same single-request UPSERT in Core rollout tracking and Processor background error recording",
+    "splits Core Cron maintenance into four rotating bounded phases instead of running every large job in one invocation",
+    "splits Processor business jobs into four rotating bounded phases and limits queue delivery concurrency and batch size",
+    "reduces report flush, repair, health-check, backup and version-activation batches that previously could exhaust one invocation",
+    "tries to configure a 50000 subrequest limit for Core, Edge and Processor on Workers Paid and safely ignores unsupported Free-plan responses",
+    "adds an optional Wrangler limits example while retaining the Durable Object migration configuration",
+    "keeps gift-plan Persian RTL fixes, service deletion, panel cache sync and all previous features",
     "README files are excluded"
   ],
   "deployment": {
@@ -45,17 +48,18 @@
     "required_class_name": "LiveUsageCoordinator",
     "migration_tag": "v3.1.9-live-usage (unchanged)",
     "db_schema_revision": "3.3.5 (unchanged; no new schema migration)",
-    "cron": "existing schedules may remain",
-    "pasarguard_delete_permission": "the connected panel administrator must have users.delete permission",
-    "verification_flow": "Cloudflare PUT success receipt -> repeated runtime probe; Content API is diagnostic only",
-    "error_center_write": "INSERT OR IGNORE row at zero -> atomic UPDATE increment"
+    "cron": "existing schedules may remain; work is now rotated across four phases",
+    "subrequest_limit": "best-effort PATCH to 50000 on paid plans plus code-level phased fallback for free plans",
+    "error_center_write": "single INSERT ... ON CONFLICT DO UPDATE counter increment"
   },
   "validation": {
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "concurrent_error_upsert_without_on_conflict": "passed by SQLite concurrency simulation",
-    "gift_button_persian_rtl": "passed by static assertion",
+    "atomic_error_upsert": "passed by 50-writer SQLite concurrency simulation",
+    "phased_core_cron_static_assertion": "passed",
+    "phased_processor_static_assertion": "passed",
+    "bounded_manual_flush_and_repair_limits": "passed",
     "release_manifest_hashes": "recalculated",
     "zip_integrity": "passed",
     "live_cloudflare_deployment": "not run without production credentials"
@@ -64,15 +68,15 @@
     "production Cloudflare, Telegram and PasarGuard calls were not executed without account credentials"
   ],
   "sha256": {
-    "core": "17aac83dd1fffeb8c818d103c794ffdb66799227ca6218c74cf648a9ea6cf580",
-    "edge": "74ec1517143fcb50079bf21a934e1b9a15d780f639a4418579cfc297e041c655",
-    "processor": "2face5642005c3f15cfff8c67af14c5838da662874c6d213a2f4e976216e6e5f",
-    "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
+    "core": "fe953597610d6a733958b3a427a31ce9198f4828ec6b9c658a887e7ae6861dcc",
+    "edge": "204c6ec663f00de417ed990264f63cbb34f6b5a8b16cb11f20243e566414e24b",
+    "processor": "5c277d3fef726e9c6077a11eff51099adcdfcd30057da3cf32df951e3b426fe1",
+    "durable_object_config": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "17aac83dd1fffeb8c818d103c794ffdb66799227ca6218c74cf648a9ea6cf580",
-    "edge/worker.js": "74ec1517143fcb50079bf21a934e1b9a15d780f639a4418579cfc297e041c655",
-    "processor/worker.js": "2face5642005c3f15cfff8c67af14c5838da662874c6d213a2f4e976216e6e5f",
-    "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
+    "core/worker.js": "fe953597610d6a733958b3a427a31ce9198f4828ec6b9c658a887e7ae6861dcc",
+    "edge/worker.js": "204c6ec663f00de417ed990264f63cbb34f6b5a8b16cb11f20243e566414e24b",
+    "processor/worker.js": "5c277d3fef726e9c6077a11eff51099adcdfcd30057da3cf32df951e3b426fe1",
+    "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }
