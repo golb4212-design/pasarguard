@@ -1,6 +1,6 @@
 {
-  "version": "3.2.10",
-  "release_id": "3.2.10-20260715-subscription-alt-https-port-fix",
+  "version": "3.2.11",
+  "release_id": "3.2.11-20260715-pasarguard-signed-subscription-token-fix",
   "architecture": "fully-split-three-worker-subscription-alt-https-port-fixed",
   "files": {
     "core": "core/worker.js",
@@ -32,10 +32,10 @@
     ]
   },
   "features": [
-    "accepts valid PasarGuard subscription links served on HTTPS alternate ports such as 2053",
-    "keeps hostname ownership validation and rejects unknown or non-HTTPS subscription endpoints",
-    "configured PasarGuard panel/subscription ports are automatically allowed",
-    "single-location, product deduplication and RTL duration fixes remain preserved",
+    "accepts current PasarGuard signed subscription tokens containing dot-separated URL-safe segments",
+    "keeps strict HTTPS, allowed-port and representative-panel host validation",
+    "rejects slashes, query injection and non-URL-safe token characters after decoding",
+    "all previous single-location, product display, live usage and wallet collection fixes remain included",
     "README files are excluded"
   ],
   "deployment": {
@@ -51,21 +51,23 @@
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "sample_subscription_port_2053": "passed",
-    "unknown_subscription_port_rejection": "passed",
+    "screenshot_token_with_dot": "passed",
+    "underscore_hyphen_token": "passed",
+    "slash_and_query_injection_rejection": "passed",
     "release_manifest_hashes": "recalculated",
-    "zip_integrity": "passed"
+    "zip_integrity": "passed",
+    "live_panel_import": "not run without production credentials"
   },
   "sha256": {
-    "core": "e79b51c493c03f8c9a84bc65f621fa0cf12e74f78ec26f8e6634e4c90778e018",
-    "edge": "cbe44f5b6020a28b246a9fe895b7917700a7c2b7481558d593ed1963487d7bee",
-    "processor": "1a4017b65bfd34f668b44bfed08f6dac381995fa3c63cf3d6c9660e7e8c0977e",
+    "core": "8b1b188e561c843591da0bec4dd8496adb106e2762cceed5e2b6b976ae9bcfe8",
+    "edge": "3b901725f51efa0450862011f62e3e680608355054f3665df5de38dbd473fff5",
+    "processor": "4d1dac09cfdb430f892cbe2030c06c8e4b2cf3ffbed432057fb3303a06bc78eb",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "hashes": {
-    "core/worker.js": "e79b51c493c03f8c9a84bc65f621fa0cf12e74f78ec26f8e6634e4c90778e018",
-    "edge/worker.js": "cbe44f5b6020a28b246a9fe895b7917700a7c2b7481558d593ed1963487d7bee",
-    "processor/worker.js": "1a4017b65bfd34f668b44bfed08f6dac381995fa3c63cf3d6c9660e7e8c0977e",
+    "core/worker.js": "8b1b188e561c843591da0bec4dd8496adb106e2762cceed5e2b6b976ae9bcfe8",
+    "edge/worker.js": "3b901725f51efa0450862011f62e3e680608355054f3665df5de38dbd473fff5",
+    "processor/worker.js": "4d1dac09cfdb430f892cbe2030c06c8e4b2cf3ffbed432057fb3303a06bc78eb",
     "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   }
 }
