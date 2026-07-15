@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.2.13
+ * Version: 3.2.14
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = "3.2.13";
+const APP_VERSION = "3.2.14";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -3452,7 +3452,7 @@ async function salesCustomerServiceDetailView(env, bot, customer, serviceId) {
     "تمدیدها: <b>" + botMoney(service.renewals_count) + "</b> · افزایش حجم: <b>" + botMoney(service.volume_orders_count) + "</b>";
   const buttons = [];
   if (service.subscription_url) buttons.push([{ text: "📋 کپی لینک اشتراک", copy_text: { text: service.subscription_url } }]);
-  buttons.push([{ text: "🔄 بروزرسانی اطلاعات", callback_data: "sale:service:refresh:" + service.id }, { text: "🔐 تعویض لینک", callback_data: "sale:service:revoke_confirm:" + service.id }]);
+  buttons.push([{ text: "🔄 بروزرسانی اطلاعات", callback_data: "svc:rf:" + service.id }, { text: "🔐 تعویض لینک", callback_data: "svc:rc:" + service.id }]);
   buttons.push([{ text: "♻️ تمدید", callback_data: "sale:renew:" + service.id }, { text: "➕ افزایش حجم", callback_data: "sale:volume:" + service.id }]);
   buttons.push([{ text: "↩️ سرویس‌های من", callback_data: "sale:services" }]);
   return { text, reply_markup: { inline_keyboard: buttons } };
@@ -4978,22 +4978,22 @@ async function salesHandleCustomerCallback(env, bot, callback) {
       reply_markup: { inline_keyboard: [[{ text: "لغو", callback_data: "sale:services" }]] }
     });
   }
-  if (data.startsWith("sale:service:refresh:")) {
-    const serviceId = data.slice("sale:service:refresh:".length);
+  if (data.startsWith("svc:rf:") || data.startsWith("sale:service:refresh:")) {
+    const serviceId = data.startsWith("svc:rf:") ? data.slice("svc:rf:".length) : data.slice("sale:service:refresh:".length);
     await syncSalesService(env, bot, customer, serviceId);
     return salesCustomerSendOrEdit(env, bot, target, "service_detail", { serviceId });
   }
-  if (data.startsWith("sale:service:revoke_confirm:")) {
-    const serviceId = data.slice("sale:service:revoke_confirm:".length);
+  if (data.startsWith("svc:rc:") || data.startsWith("sale:service:revoke_confirm:")) {
+    const serviceId = data.startsWith("svc:rc:") ? data.slice("svc:rc:".length) : data.slice("sale:service:revoke_confirm:".length);
     const service = await getSalesServiceOrder(env, bot, customer, serviceId);
     return resellerTelegramApi(env, bot, "editMessageText", {
       chat_id: chatId, message_id: callback.message.message_id, parse_mode: "HTML",
       text: "🔐 <b>تعویض لینک اشتراک</b>\n━━━━━━━━━━━━━━\nلینک فعلی سرویس <code>" + botEscape(service.remote_username) + "</code> از اعتبار خارج می‌شود و لینک جدید ساخته خواهد شد. ادامه می‌دهید؟",
-      reply_markup: { inline_keyboard: [[{ text: "✅ بله، تعویض شود", callback_data: "sale:service:revoke:" + serviceId }], [{ text: "لغو", callback_data: "sale:service:" + serviceId }]] }
+      reply_markup: { inline_keyboard: [[{ text: "✅ بله، تعویض شود", callback_data: "svc:rv:" + serviceId }], [{ text: "لغو", callback_data: "sale:service:" + serviceId }]] }
     });
   }
-  if (data.startsWith("sale:service:revoke:")) {
-    const serviceId = data.slice("sale:service:revoke:".length);
+  if (data.startsWith("svc:rv:") || data.startsWith("sale:service:revoke:")) {
+    const serviceId = data.startsWith("svc:rv:") ? data.slice("svc:rv:".length) : data.slice("sale:service:revoke:".length);
     await revokeSalesServiceSubscription(env, bot, customer, serviceId);
     return salesCustomerSendOrEdit(env, bot, target, "service_detail", { serviceId });
   }
@@ -10596,7 +10596,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_EDGE_VERSION='3.2.13';
+const BLUEPANEL_EDGE_VERSION='3.2.14';
 function bluePanelEdgeJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function bluePanelEdgeInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
 function bluePanelEdgeRuntimeBinding(env,name){const value=env?.[name];return{name,exact_key_present:Object.prototype.hasOwnProperty.call(env||{},name),value_present:value!==undefined&&value!==null,fetch_callable:Boolean(value&&typeof value.fetch==='function'),constructor_name:value?.constructor?.name||''}}
