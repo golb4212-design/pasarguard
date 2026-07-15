@@ -1,15 +1,26 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.10
+ * Version: 3.3.11
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.10';
+const APP_VERSION = '3.3.11';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.11": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🖥", text: "همگام‌سازی نسخه پنل وب با Runtime فعال و حذف نمایش نسخه قدیمی ذخیره‌شده" },
+      { emoji: "🔄", text: "شکستن خودکار کش پنل، Service Worker و درخواست‌های API پس از هر بروزرسانی" },
+      { emoji: "🧩", text: "هماهنگ‌سازی نشانگر نسخه Core، Edge و Processor برای استقرار و عیب‌یابی دقیق" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "✨", text: "نمایش نسخه واقعی و جدید داشبورد نماینده بدون نیاز به پاک‌کردن دستی کش مرورگر" },
+      { emoji: "🔗", text: "نسخه‌دارشدن لینک مدیریت نماینده برای بازشدن مستقیم آخرین رابط کاربری" }
+    ])
+  }),
   "3.3.10": Object.freeze({
     central: Object.freeze([
       { emoji: "🧰", text: "اصلاح نتیجه تعمیر خودکار؛ وضعیت completed فقط با سلامت واقعی Processor نمایش داده می‌شود" },
@@ -8750,12 +8761,12 @@ function resellerBotOrigin(settings, fallbackOrigin = "") {
 }
 
 function centralManagementUrl(settings, fallbackOrigin = "") {
-  return corePublicOrigin(settings, fallbackOrigin) + "/control";
+  return corePublicOrigin(settings, fallbackOrigin) + "/control?v=" + encodeURIComponent(APP_VERSION);
 }
 
 function resellerManagementUrl(bot, settings, fallbackOrigin = "") {
   if (!bot?.id) throw new Error("شناسه ربات نماینده در دسترس نیست");
-  return resellerBotOrigin(settings, fallbackOrigin) + "/reseller-control/" + encodeURIComponent(bot.id);
+  return resellerBotOrigin(settings, fallbackOrigin) + "/reseller-control/" + encodeURIComponent(bot.id) + "?v=" + encodeURIComponent(APP_VERSION);
 }
 
 function parseJoinChannels(value) {
@@ -14295,7 +14306,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.3.9';
+const BLUEPANEL_CORE_VERSION = '3.3.11';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {

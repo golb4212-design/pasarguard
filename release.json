@@ -1,7 +1,7 @@
 {
-  "version": "3.3.10",
-  "release_id": "3.3.10-20260716-service-delete-and-repair-truth-fix",
-  "architecture": "fully-split-three-worker-service-delete-repair-truth-fixed",
+  "version": "3.3.11",
+  "release_id": "3.3.11-20260716-panel-runtime-cache-sync",
+  "architecture": "fully-split-three-worker-panel-runtime-version-cache-synced",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -32,17 +32,16 @@
     ]
   },
   "features": [
-    "adds a two-step permanent service deletion button inside the customer service detail screen",
-    "deletes the remote PasarGuard user while preserving local order and payment history",
-    "stops auto renewal, health monitoring, guarantee and failover jobs after service deletion",
-    "verifies Processor through direct health, runtime version and business execution paths",
-    "never reports repair completed when Processor or another required group failed",
-    "edits the original error-center message during repair to prevent duplicate Telegram result messages",
-    "keeps all previous service-list simplification, normalized D1 schema and recovery protections",
+    "shows the embedded active Edge build version in central and reseller web panels instead of stale persisted values",
+    "adds versioned management URLs and build-aware API cache-busting after every release",
+    "forces service-worker update, removes legacy browser caches and uses network-only navigation",
+    "adds no-store/no-cache headers and x-bluepanel-version to every panel HTML response",
+    "aligns APP_VERSION with BLUEPANEL_CORE_VERSION, BLUEPANEL_EDGE_VERSION and BLUEPANEL_PROCESSOR_VERSION",
+    "keeps service deletion, service-name-only lists and Processor repair fixes from previous releases",
     "README files are excluded"
   ],
   "deployment": {
-    "automatic_provisioning": "upload the ZIP through the central bot; no manual D1 action is required",
+    "automatic_provisioning": "upload the ZIP through the central bot; Edge is deployed first and the new management links include the release version",
     "required_binding_name": "LIVE_USAGE_COORDINATOR",
     "required_class_name": "LiveUsageCoordinator",
     "migration_tag": "v3.1.9-live-usage (unchanged)",
@@ -54,30 +53,29 @@
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "service_delete_button_present": "passed by static assertion",
-    "service_delete_two_step_callbacks": "passed by static assertion",
-    "repair_status_requires_processor": "passed by static assertion",
-    "repair_message_edit_in_place": "passed by static assertion",
-    "telegram_callback_size": "passed",
+    "panel_embedded_build_version": "passed by static assertion",
+    "panel_api_client_version": "passed by static assertion",
+    "panel_cache_headers": "passed by static assertion",
+    "service_worker_cache_reset": "passed by static assertion",
+    "dedicated_runtime_markers": "passed by static assertion",
     "release_manifest_hashes": "recalculated",
     "zip_integrity": "passed",
     "live_cloudflare_deployment": "not run without production credentials"
   },
   "limitations": [
     "production Cloudflare, Telegram and PasarGuard calls were not executed without account credentials",
-    "the list intentionally shows active delivered services only; cancelled orders are not repeated in the service selector",
-    "remote service deletion still requires users.delete permission on the connected PasarGuard administrator"
+    "an already-open browser tab may need to be closed once; all newly opened versioned management links load the current panel build"
   ],
   "sha256": {
-    "core": "42973d71f9c8d815ea70790dd9604acba185b823fbb7d1450eb7240d22d266d0",
-    "edge": "5ecd39b76952d31a67b1599af020d217c4a9c5d59a6e9859e5e89cca9026c163",
-    "processor": "cfcfcf784a5c9aec6e57816c995561851045992099cc2579a46aae3204954ec6",
+    "core": "78d00f7cc1a60a0b81b056f89d379a8c8bc23e82448b33d289f76018e480ca41",
+    "edge": "e29581be2f7b30d06967f983e6883a6567530ee5c361e422c40a4aa62edb024f",
+    "processor": "e4be031f5dc2ac00e8ba2b292c072dd241087ccd04ff84a44ef5eabaa46dcdf5",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "hashes": {
-    "core/worker.js": "42973d71f9c8d815ea70790dd9604acba185b823fbb7d1450eb7240d22d266d0",
-    "edge/worker.js": "5ecd39b76952d31a67b1599af020d217c4a9c5d59a6e9859e5e89cca9026c163",
-    "processor/worker.js": "cfcfcf784a5c9aec6e57816c995561851045992099cc2579a46aae3204954ec6",
+    "core/worker.js": "78d00f7cc1a60a0b81b056f89d379a8c8bc23e82448b33d289f76018e480ca41",
+    "edge/worker.js": "e29581be2f7b30d06967f983e6883a6567530ee5c361e422c40a4aa62edb024f",
+    "processor/worker.js": "e4be031f5dc2ac00e8ba2b292c072dd241087ccd04ff84a44ef5eabaa46dcdf5",
     "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   }
 }
