@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.12
+ * Version: 3.3.13
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = '3.3.12';
+const APP_VERSION = '3.3.13';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -1032,6 +1032,21 @@ function botMoney(value) {
 
 function botGb(value) {
   return (Number(value || 0) / GIB).toLocaleString("fa-IR", { maximumFractionDigits: 2 }) + " GB";
+}
+
+function botLocalizedDataSize(value) {
+  const bytes = Math.max(0, Number(value || 0));
+  if (!bytes) return "نامحدود";
+  if (bytes < GIB) return (bytes / (1024 * 1024)).toLocaleString("fa-IR", { maximumFractionDigits: 1 }) + " مگابایت";
+  return (bytes / GIB).toLocaleString("fa-IR", { maximumFractionDigits: 2 }) + " گیگ";
+}
+
+function salesGiftPlanButtonText(plan, customer) {
+  const size = botLocalizedDataSize(plan?.data_limit_bytes);
+  const duration = salesPlanDurationLabel(plan?.duration_days, "sale");
+  const amount = botMoney(salesCustomerPlanPrice(plan, customer)) + " تومان";
+  // All segments are Persian/RTL; no Latin GB token is left to reorder Telegram buttons.
+  return "‏🎁 " + size + " • " + duration + " • " + amount;
 }
 
 function botDate(value) {
@@ -3098,7 +3113,7 @@ async function salesRecommendationView(env, bot, customer) {
 async function salesGiftPlansView(env, bot, customer) {
   if (!resellerFeatureEnabled(bot,"gift_service_enabled",true)) throw new Error("هدیه سرویس در این ربات غیرفعال است");
   const rows = await env.PASARGUARD_DB.prepare(`SELECT * FROM sales_plans WHERE bot_id=? AND status='active' AND plan_type='sale' ORDER BY sort_order,price_toman LIMIT 15`).bind(bot.id).all();
-  const buttons=(rows.results||[]).map(plan=>[{text:"🎁 "+botGb(plan.data_limit_bytes)+" • "+salesPlanDurationLabel(plan.duration_days,"sale")+" • "+botMoney(salesCustomerPlanPrice(plan,customer))+" تومان",callback_data:"sale:gift:"+plan.id}]);
+  const buttons=(rows.results||[]).map(plan=>[{text:salesGiftPlanButtonText(plan,customer),callback_data:"sale:gift:"+plan.id}]);
   buttons.push([{text:"🏠 منوی اصلی",callback_data:"sale:home"}]);
   return {text:"🎁 <b>هدیه‌دادن سرویس</b>\n━━━━━━━━━━━━━━\nپلن را انتخاب کنید. مبلغ از کیف پول شما کم می‌شود و سرویس برای شناسه تلگرام دریافت‌کننده ساخته خواهد شد.",reply_markup:{inline_keyboard:buttons}};
 }
@@ -5229,7 +5244,7 @@ async function salesHandleCustomerCallback(env, bot, callback) {
     const plan=await env.PASARGUARD_DB.prepare(`SELECT id,title,data_limit_bytes,duration_days,price_toman FROM sales_plans WHERE id=? AND bot_id=? AND status='active'`).bind(planId,bot.id).first();
     if(!plan)throw new Error("پلن هدیه فعال نیست");
     await salesSessionSet(env,bot.id,customer.telegram_id,"gift_recipient",{planId});
-    return resellerTelegramApi(env,bot,"editMessageText",{chat_id:chatId,message_id:callback.message.message_id,parse_mode:"HTML",text:"🎁 <b>دریافت‌کننده هدیه</b>\n━━━━━━━━━━━━━━\nشناسه عددی تلگرام دریافت‌کننده را ارسال کنید.\n\nپلن: "+botGb(plan.data_limit_bytes)+" · "+salesPlanDurationLabel(plan.duration_days,"sale")+" · "+botMoney(salesCustomerPlanPrice(plan,customer))+" تومان",reply_markup:{inline_keyboard:[[{text:"لغو",callback_data:"sale:home"}]]}});
+    return resellerTelegramApi(env,bot,"editMessageText",{chat_id:chatId,message_id:callback.message.message_id,parse_mode:"HTML",text:"🎁 <b>دریافت‌کننده هدیه</b>\n━━━━━━━━━━━━━━\nشناسه عددی تلگرام دریافت‌کننده را ارسال کنید.\n\nپلن: "+botLocalizedDataSize(plan.data_limit_bytes)+" • "+salesPlanDurationLabel(plan.duration_days,"sale")+" • "+botMoney(salesCustomerPlanPrice(plan,customer))+" تومان",reply_markup:{inline_keyboard:[[{text:"لغو",callback_data:"sale:home"}]]}});
   }
   if (data === "sale:wallet:card" || data === "sale:wallet:online" || data === "sale:wallet:plisio" || data === "sale:wallet:cubepay") {
     const method = data.endsWith(":cubepay") ? "cubepay" : data.endsWith(":plisio") ? "plisio" : data.endsWith(":online") ? "blupal" : "card";
@@ -11182,7 +11197,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_EDGE_VERSION='3.3.12';
+const BLUEPANEL_EDGE_VERSION='3.3.13';
 function bluePanelEdgeJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function bluePanelEdgeInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
 function bluePanelEdgeRuntimeBinding(env,name){const value=env?.[name];return{name,exact_key_present:Object.prototype.hasOwnProperty.call(env||{},name),value_present:value!==undefined&&value!==null,fetch_callable:Boolean(value&&typeof value.fetch==='function'),constructor_name:value?.constructor?.name||''}}
@@ -11210,7 +11225,7 @@ export default {
   if(path==='/manifest.webmanifest'&&request.method==='GET'){await ensureDb(runtime);const s=await getSettings(runtime);return bluePanelEdgeJson({name:s.brand_name||'BluePanel',short_name:'BluePanel',start_url:'/app',scope:'/',display:'standalone',dir:'rtl',lang:'fa',background_color:'#07111f',theme_color:'#1976f3',icons:[{src:'/assets/bluepanel-icon.svg',sizes:'any',type:'image/svg+xml',purpose:'any maskable'}]},200,{'content-type':'application/manifest+json; charset=utf-8'});}
   const salesManifest=path.match(/^\/sales-manifest\/([^/]+)\.webmanifest$/);if(salesManifest&&request.method==='GET'){await ensureDb(runtime);const bot=await getResellerBotById(runtime,decodeURIComponent(salesManifest[1]));if(!bot)return new Response('Not found',{status:404});return bluePanelEdgeJson({name:bot.brand_name||'BluePanel',short_name:cleanText(bot.brand_name||'BluePanel',20),start_url:'/sales-app/'+encodeURIComponent(bot.id),scope:'/',display:'standalone',dir:'rtl',lang:'fa',background_color:'#07111f',theme_color:'#1976f3',icons:[{src:'/assets/bluepanel-icon.svg',sizes:'any',type:'image/svg+xml',purpose:'any maskable'}]},200,{'content-type':'application/manifest+json; charset=utf-8'});}
   if(path==='/assets/bluepanel-icon.svg'&&request.method==='GET'){const svg='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="116" fill="#07111f"/><circle cx="256" cy="256" r="196" fill="#1976f3"/><path fill="white" d="M151 151h116c62 0 98 27 98 72 0 26-14 46-39 57 34 9 53 33 53 66 0 51-40 80-110 80H151V151zm80 65v45h38c27 0 40-8 40-23 0-15-13-22-40-22h-38zm0 105v47h44c30 0 45-8 45-24 0-15-15-23-45-23h-44z"/></svg>';return new Response(svg,{headers:{'content-type':'image/svg+xml; charset=utf-8','cache-control':'public,max-age=86400'}})}
-  if(path==='/sw.js'&&request.method==='GET')return new Response('const V="3.3.12";self.addEventListener("install",e=>self.skipWaiting());self.addEventListener("activate",e=>e.waitUntil((async()=>{for(const k of await caches.keys())await caches.delete(k);await self.clients.claim()})()));self.addEventListener("fetch",e=>{if(e.request.mode==="navigate")e.respondWith(fetch(e.request,{cache:"no-store"}))});',{headers:{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store','service-worker-allowed':'/'}});
+  if(path==='/sw.js'&&request.method==='GET')return new Response('const V="3.3.13";self.addEventListener("install",e=>self.skipWaiting());self.addEventListener("activate",e=>e.waitUntil((async()=>{for(const k of await caches.keys())await caches.delete(k);await self.clients.claim()})()));self.addEventListener("fetch",e=>{if(e.request.mode==="navigate")e.respondWith(fetch(e.request,{cache:"no-store"}))});',{headers:{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store','service-worker-allowed':'/'}});
   if(['/control','/admin','/panel','/dashboard'].includes(path)&&request.method==='GET')return new Response(CENTRAL_CONTROL_HTML.replaceAll('__APP_VERSION__',APP_VERSION),{headers:bluePanelStaticHeaders()});
   if(path==='/control-advanced'&&request.method==='GET')return new Response(MINI_APP_HTML.replaceAll('__APP_VERSION__',APP_VERSION).replaceAll('__CONTROL_MODE__','true'),{headers:bluePanelStaticHeaders()});
   if(['/', '/app','/miniapp'].includes(path)&&request.method==='GET')return new Response(MINI_APP_HTML.replaceAll('__APP_VERSION__',APP_VERSION).replaceAll('__CONTROL_MODE__','false'),{headers:bluePanelStaticHeaders()});

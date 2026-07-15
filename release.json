@@ -1,7 +1,7 @@
 {
-  "version": "3.3.12",
-  "release_id": "3.3.12-20260716-cloudflare-upload-receipt-verification",
-  "architecture": "fully-split-three-worker-upload-receipt-runtime-verification",
+  "version": "3.3.13",
+  "release_id": "3.3.13-20260716-error-center-concurrency-gift-rtl",
+  "architecture": "fully-split-three-worker-concurrency-safe-error-center-gift-rtl",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -32,11 +32,11 @@
     ]
   },
   "features": [
-    "treats a successful Cloudflare Worker upload response as the authoritative source acceptance receipt",
-    "keeps Content API parsing as diagnostics only so multipart or minified responses cannot create a false deployment failure",
-    "polls Edge and Processor runtime independently and reports propagation as pending instead of failing the update",
-    "fixes Version regex escaping for plain source responses",
-    "keeps panel cache sync, safe service deletion, Processor repair isolation and all previous features",
+    "records concurrent system errors with INSERT OR IGNORE followed by an atomic counter increment, avoiding D1 UNIQUE constraint failures",
+    "applies the same concurrency-safe error recording in Core rollout tracking and Processor background jobs",
+    "renders gift plan volume, duration and price with Persian digits and Persian units in stable RTL order",
+    "removes the Latin GB token from gift plan buttons and recipient confirmation text",
+    "keeps Cloudflare upload receipt verification, service deletion, panel cache sync and all previous features",
     "README files are excluded"
   ],
   "deployment": {
@@ -47,33 +47,32 @@
     "db_schema_revision": "3.3.5 (unchanged; no new schema migration)",
     "cron": "existing schedules may remain",
     "pasarguard_delete_permission": "the connected panel administrator must have users.delete permission",
-    "verification_flow": "Cloudflare PUT success receipt -> repeated runtime probe; Content API is diagnostic only"
+    "verification_flow": "Cloudflare PUT success receipt -> repeated runtime probe; Content API is diagnostic only",
+    "error_center_write": "INSERT OR IGNORE row at zero -> atomic UPDATE increment"
   },
   "validation": {
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "upload_receipt_fail_open": "passed by static assertion",
-    "runtime_pending_nonblocking": "passed by static assertion",
-    "version_regex_escape": "passed by static assertion",
+    "concurrent_error_upsert_without_on_conflict": "passed by SQLite concurrency simulation",
+    "gift_button_persian_rtl": "passed by static assertion",
     "release_manifest_hashes": "recalculated",
     "zip_integrity": "passed",
     "live_cloudflare_deployment": "not run without production credentials"
   },
   "limitations": [
-    "production Cloudflare, Telegram and PasarGuard calls were not executed without account credentials",
-    "a successful Cloudflare upload can be followed by a short runtime propagation delay, which is reported as pending rather than a failed deployment"
+    "production Cloudflare, Telegram and PasarGuard calls were not executed without account credentials"
   ],
   "sha256": {
-    "core": "e9429d769cc5dfc79a4f031339e3654de6f017bf75e9961d6fd9f3e350fa9cc2",
-    "edge": "5ddd8623904b5e8383042dc80f5ed883935ac31a180f67ba8fe366f41759be83",
-    "processor": "fd20e99959db3791c94565d2c0791ae5b67442e1ed9adb85a476d0fee215194e",
+    "core": "17aac83dd1fffeb8c818d103c794ffdb66799227ca6218c74cf648a9ea6cf580",
+    "edge": "74ec1517143fcb50079bf21a934e1b9a15d780f639a4418579cfc297e041c655",
+    "processor": "2face5642005c3f15cfff8c67af14c5838da662874c6d213a2f4e976216e6e5f",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "hashes": {
-    "core/worker.js": "e9429d769cc5dfc79a4f031339e3654de6f017bf75e9961d6fd9f3e350fa9cc2",
-    "edge/worker.js": "5ddd8623904b5e8383042dc80f5ed883935ac31a180f67ba8fe366f41759be83",
-    "processor/worker.js": "fd20e99959db3791c94565d2c0791ae5b67442e1ed9adb85a476d0fee215194e",
+    "core/worker.js": "17aac83dd1fffeb8c818d103c794ffdb66799227ca6218c74cf648a9ea6cf580",
+    "edge/worker.js": "74ec1517143fcb50079bf21a934e1b9a15d780f639a4418579cfc297e041c655",
+    "processor/worker.js": "2face5642005c3f15cfff8c67af14c5838da662874c6d213a2f4e976216e6e5f",
     "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   }
 }

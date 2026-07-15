@@ -1,15 +1,24 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.12
+ * Version: 3.3.13
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.12';
+const APP_VERSION = '3.3.13';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.13": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🗄", text: "رفع کامل خطای UNIQUE در مرکز خطا با ثبت اتمیک و بدون وابستگی به ON CONFLICT" },
+      { emoji: "🔁", text: "شمارش مطمئن خطاهای هم‌زمان بدون توقف Cron، تعمیر خودکار یا Webhook" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "🎁", text: "فارسی‌سازی کامل عنوان پلن‌های هدیه و اصلاح ترتیب حجم، مدت و مبلغ در تلگرام" }
+    ])
+  }),
   "3.3.12": Object.freeze({
     central: Object.freeze([
       { emoji: "☁️", text: "حذف وابستگی استقرار به استخراج متن فایل Worker از Content API کلادفلر" },
@@ -7930,15 +7939,37 @@ async function safePrepareDeploymentTracking(env) {
   }
 }
 
+async function incrementSystemErrorCenter(env, scope, botId, errorCode, message, context = {}) {
+  if (!env?.PASARGUARD_DB) return { ok: false, skipped: true };
+  const ts = nowIso();
+  const rowId = id("err");
+  const normalizedScope = cleanText(scope || "system", 80);
+  const normalizedBot = cleanText(botId || "", 120);
+  const normalizedCode = cleanText(errorCode || "UNKNOWN_ERROR", 120);
+  const normalizedMessage = cleanText(message || "خطای نامشخص", 1500);
+  const contextJson = JSON.stringify(context || {});
+  try {
+    // Start a new row at zero, then increment it below. INSERT OR IGNORE is
+    // concurrency-safe and cannot surface the composite UNIQUE constraint.
+    await env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO system_error_center(
+      id,scope,bot_id,error_code,message,context_json,occurrence_count,status,first_seen_at,last_seen_at
+    ) VALUES(?,?,?,?,?,?,0,'open',?,?)`)
+      .bind(rowId,normalizedScope,normalizedBot,normalizedCode,normalizedMessage,contextJson,ts,ts).run();
+    await env.PASARGUARD_DB.prepare(`UPDATE system_error_center SET
+      message=?,context_json=?,occurrence_count=occurrence_count+1,last_seen_at=?
+      WHERE scope=? AND bot_id=? AND error_code=? AND status='open'`)
+      .bind(normalizedMessage,contextJson,ts,normalizedScope,normalizedBot,normalizedCode).run();
+    return { ok: true };
+  } catch (error) {
+    console.error("error center increment skipped", error);
+    return { ok: false, error: cleanText(error?.message || error, 800) };
+  }
+}
+
 async function safeRecordStagedDeployError(env, error, context = {}) {
   const message = cleanText(error?.message || error, 1500);
   try { await setSettings(env,{auto_update_last_status:"failed_staged",auto_update_last_error:cleanText(message,800)}); } catch (_) {}
-  try {
-    await env.PASARGUARD_DB.prepare(`INSERT INTO system_error_center(id,scope,bot_id,error_code,message,context_json,occurrence_count,status,first_seen_at,last_seen_at)
-      VALUES(?,'release_rollout','','STAGED_DEPLOY_FAILED',?,?,1,'open',?,?)
-      ON CONFLICT(scope,bot_id,error_code,status) DO UPDATE SET message=excluded.message,context_json=excluded.context_json,occurrence_count=system_error_center.occurrence_count+1,last_seen_at=excluded.last_seen_at`)
-      .bind(id("err"),message,JSON.stringify(context),nowIso(),nowIso()).run();
-  } catch (trackingError) { console.error("error center write skipped", trackingError); }
+  await incrementSystemErrorCenter(env,"release_rollout","","STAGED_DEPLOY_FAILED",message,context);
 }
 
 async function deployClusterFromGithub(env, force = false, prechecked = null) {
@@ -14374,7 +14405,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.3.12';
+const BLUEPANEL_CORE_VERSION = '3.3.13';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
