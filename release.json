@@ -1,7 +1,7 @@
 {
-  "version": "3.3.7",
-  "release_id": "3.3.7-20260715-service-center-safe-delete-ui",
-  "architecture": "fully-split-three-worker-compact-service-management-safe-delete",
+  "version": "3.3.8",
+  "release_id": "3.3.8-20260715-cloudflare-content-version-processor-repair-fix",
+  "architecture": "fully-split-three-worker-runtime-version-verification-and-processor-repair-fixed",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -32,15 +32,14 @@
     ]
   },
   "features": [
-    "replaces the customer raw order/link dump with a compact order list and a separate order detail view",
-    "adds an active-service center to the reseller Telegram management bot with view, refresh and two-step deletion",
-    "adds an active-service page to the reseller web dashboard with search, link copy and confirmed deletion",
-    "deletes the remote PasarGuard user through DELETE /api/user/{username} while treating HTTP 404 as already removed",
-    "keeps financial and order history, marks the service deleted locally and removes it from all customer service views",
-    "cleans auto-renewal, health, failover, guarantee and imported-service claim records with fail-open compatibility",
-    "shows a clear permission error when the connected PasarGuard admin lacks users.delete permission",
-    "keeps every new Telegram callback_data below the 64-byte Bot API limit",
-    "does not add or alter D1 schema and excludes README files"
+    "parses Cloudflare Worker content from multipart, JSON-escaped and plain-text responses",
+    "detects APP_VERSION from single or double quotes, header comments and nested response strings",
+    "falls back to verified Edge or Processor runtime version when Cloudflare content propagation is delayed",
+    "marks Processor repair successful when the runtime and database are healthy even if one optional business execution is partial",
+    "shows non-blocking Processor warnings separately from real repair failures",
+    "keeps service center and safe two-step service deletion from 3.3.7",
+    "uses single-quoted APP_VERSION and explicit role version constants for compatibility with older bootstrap verifiers",
+    "README files are excluded"
   ],
   "deployment": {
     "automatic_provisioning": "upload the ZIP through the central bot; no manual D1 action is required",
@@ -55,13 +54,12 @@
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "embedded_reseller_dashboard_javascript_syntax": "passed",
-    "service_query_sqlite_smoke_test": "passed",
-    "service_deleted_filter": "passed by static and SQLite assertions",
-    "telegram_callback_data_max_64_bytes": "passed",
-    "release_manifest_hashes": "recalculated and verified",
+    "cloudflare_multipart_version_parser": "passed by fixture tests",
+    "json_escaped_worker_version_parser": "passed by fixture tests",
+    "processor_health_success_with_optional_warning": "passed by static assertion",
+    "release_manifest_hashes": "recalculated",
     "zip_integrity": "passed",
-    "live_cloudflare_telegram_pasarguard_deployment": "not run without production credentials"
+    "live_cloudflare_deployment": "not run without production credentials"
   },
   "limitations": [
     "production Cloudflare, Telegram and PasarGuard calls were not executed without account credentials",
@@ -69,15 +67,15 @@
     "deleting a service is irreversible on the remote panel; BluePanel intentionally preserves its payment history"
   ],
   "sha256": {
-    "core": "445a6a02d46c6e5f0099874003f0075aa317e16f522e986e28ab30b4f8fc2923",
-    "edge": "f74c1fe2c1c0dbf8542cd5274a5cbf56086a95b9847423e55473a682a360cbf6",
-    "processor": "e9a9c2d2b7f39b7fc740e6127f5b1563de07a8e890d93050eead2de41d9bacba",
+    "core": "50ecfa92257691ca9809b4bf23935f84ce1f459ee2b03cc55b5b2af6660a8ae7",
+    "edge": "59f7bc25cafdeed0aadb105b8c88c3b3f83b147d55050acf3e96f3266defb417",
+    "processor": "6f5c1094baf967c316191b1bb4ba70f61b61174c76d3f09d51a9fcbb45aaa6f0",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "hashes": {
-    "core/worker.js": "445a6a02d46c6e5f0099874003f0075aa317e16f522e986e28ab30b4f8fc2923",
-    "edge/worker.js": "f74c1fe2c1c0dbf8542cd5274a5cbf56086a95b9847423e55473a682a360cbf6",
-    "processor/worker.js": "e9a9c2d2b7f39b7fc740e6127f5b1563de07a8e890d93050eead2de41d9bacba",
+    "core/worker.js": "50ecfa92257691ca9809b4bf23935f84ce1f459ee2b03cc55b5b2af6660a8ae7",
+    "edge/worker.js": "59f7bc25cafdeed0aadb105b8c88c3b3f83b147d55050acf3e96f3266defb417",
+    "processor/worker.js": "6f5c1094baf967c316191b1bb4ba70f61b61174c76d3f09d51a9fcbb45aaa6f0",
     "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   }
 }

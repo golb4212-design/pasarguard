@@ -1,15 +1,25 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.7
+ * Version: 3.3.8
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.3.7";
+const APP_VERSION = '3.3.8';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.8": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🧪", text: "رفع تشخیص نامشخص نسخه فایل Worker در پاسخ multipart و JSON-escaped کلادفلر" },
+      { emoji: "⚙️", text: "اصلاح تعمیر Processor و جلوگیری از نمایش خطای کاذب هنگام سالم‌بودن Runtime" },
+      { emoji: "🔁", text: "افزودن تأیید جایگزین Runtime برای Edge و Processor هنگام تأخیر یا خطای Content API" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "✅", text: "پایداری بیشتر Worker سوم و پردازش‌های زمان‌بندی‌شده بدون خطای کاذب تعمیر" }
+    ])
+  }),
   "3.3.7": Object.freeze({
     central: Object.freeze([
       { emoji: "🧾", text: "مرتب‌سازی سفارش‌ها و سرویس‌ها به‌صورت کارت‌های خلاصه و جزئیات جداگانه" },
@@ -7388,10 +7398,50 @@ async function verifyEdgeCoreRequest(request, env) {
   return json({ success: true, role: "bluepanel-core", version: APP_VERSION, core_url: new URL(request.url).origin, edge_url: edgeUrl });
 }
 
-function bluePanelVersionFromWorkerContent(source) {
-  const text = String(source || "");
-  const match = text.match(/const\s+(?:APP_VERSION|EDGE_VERSION|PROCESSOR_VERSION|BLUEPANEL_EDGE_VERSION|BLUEPANEL_PROCESSOR_VERSION)\s*=\s*["']([^"']+)["']/);
-  return cleanText(match?.[1] || "", 80);
+function bluePanelWorkerContentCandidates(source, contentType = "") {
+  const raw = String(source || "");
+  const candidates = [raw];
+  const seen = new Set(candidates);
+  const add = value => {
+    const text = typeof value === "string" ? value : "";
+    if (text && !seen.has(text)) { seen.add(text); candidates.push(text); }
+  };
+
+  const boundary = String(contentType || "").match(/boundary=(?:"([^"]+)"|([^;\s]+))/i);
+  const boundaryValue = boundary?.[1] || boundary?.[2] || "";
+  if (boundaryValue) {
+    for (const part of raw.split("--" + boundaryValue)) {
+      const separator = part.includes("\r\n\r\n") ? "\r\n\r\n" : "\n\n";
+      const index = part.indexOf(separator);
+      if (index >= 0) add(part.slice(index + separator.length).replace(/\r?\n--?$/, ""));
+    }
+  }
+
+  const collect = (value, depth = 0) => {
+    if (depth > 5 || value == null) return;
+    if (typeof value === "string") { add(value); return; }
+    if (Array.isArray(value)) { for (const item of value) collect(item, depth + 1); return; }
+    if (typeof value === "object") for (const item of Object.values(value)) collect(item, depth + 1);
+  };
+  try { collect(JSON.parse(raw)); } catch (_) {}
+  add(raw.replace(/\\"/g, '"').replace(/\\'/g, "'").replace(/\\n/g, "\n").replace(/\\r/g, "\r"));
+  return candidates;
+}
+
+function bluePanelVersionFromWorkerContent(source, contentType = "") {
+  const version = "v?\\d+(?:\\.\\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?";
+  const patterns = [
+    new RegExp("\\b(?:const|let|var)\\s+(?:APP_VERSION|CORE_VERSION|EDGE_VERSION|PROCESSOR_VERSION|BLUEPANEL_CORE_VERSION|BLUEPANEL_EDGE_VERSION|BLUEPANEL_PROCESSOR_VERSION)\\s*=\\s*[\"'](" + version + ")[\"']"),
+    new RegExp("\\bVersion\\s*:\s*(" + version + ")", "i"),
+    new RegExp("[\"']version[\"']\\s*:\s*[\"'](" + version + ")[\"']", "i")
+  ];
+  for (const text of bluePanelWorkerContentCandidates(source, contentType)) {
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (match?.[1]) return cleanText(match[1], 80);
+    }
+  }
+  return "";
 }
 
 async function verifyCloudflareWorkerContent(settings, scriptName, expectedVersion, roleMarker, attempts = 5) {
@@ -7401,20 +7451,26 @@ async function verifyCloudflareWorkerContent(settings, scriptName, expectedVersi
     if (i > 0) await new Promise(resolve => setTimeout(resolve, 1000 + i * 250));
     try {
       const response = await fetch(apiBase + "/content?_bp_deploy_check=" + Date.now() + "_" + i, {
-        headers: { authorization: "Bearer " + settings.cf_api_token, accept: "text/plain, multipart/form-data, */*", "cache-control": "no-cache" },
+        headers: { authorization: "Bearer " + settings.cf_api_token, accept: "text/plain, multipart/form-data, application/json, */*", "cache-control": "no-cache" },
         cache: "no-store"
       });
       const raw = await response.text();
-      const version = bluePanelVersionFromWorkerContent(raw);
-      last = { version, status: response.status, marker_found: raw.includes(roleMarker), bytes: raw.length, error: response.ok ? "" : ("HTTP " + response.status) };
-      if (response.ok && last.marker_found && version === String(expectedVersion || "")) {
+      const contentType = response.headers.get("content-type") || "";
+      const candidates = bluePanelWorkerContentCandidates(raw, contentType);
+      let version = "";
+      for (const candidate of candidates) { version = bluePanelVersionFromWorkerContent(candidate) || version; if (version) break; }
+      const markerFound = candidates.some(candidate => candidate.includes(roleMarker));
+      const expectedPresent = Boolean(expectedVersion) && candidates.some(candidate => candidate.includes(String(expectedVersion)));
+      if (!version && markerFound && expectedPresent) version = String(expectedVersion);
+      last = { version, status: response.status, marker_found: markerFound, expected_literal_found: expectedPresent, content_type: contentType, candidate_count: candidates.length, bytes: raw.length, error: response.ok ? "" : ("HTTP " + response.status) };
+      if (response.ok && markerFound && version === String(expectedVersion || "")) {
         return { verified: true, source: "cloudflare_content_api", ...last };
       }
     } catch (error) {
       last = { ...last, error: cleanText(error?.message || error, 500) };
     }
   }
-  throw new Error("فایل Worker در Cloudflare با نسخه مورد انتظار تأیید نشد؛ نسخه مورد انتظار " + expectedVersion + " و نسخه فایل " + (last.version || "نامشخص") + " است");
+  throw new Error("فایل Worker در Cloudflare با نسخه مورد انتظار تأیید نشد؛ نسخه مورد انتظار " + expectedVersion + " و نسخه فایل " + (last.version || "نامشخص") + " است" + (last.error ? "؛ " + last.error : ""));
 }
 
 async function probeEdgeRuntimeVersion(env, attempt = 0) {
@@ -7431,19 +7487,21 @@ async function probeEdgeRuntimeVersion(env, attempt = 0) {
 }
 
 async function verifyEdgeDeploymentVersion(env, settings, scriptName, expectedVersion, attempts = 10) {
-  const sourceVerification = await verifyCloudflareWorkerContent(settings, scriptName, expectedVersion, "BLUEPANEL_EDGE_WORKER", 6);
+  let sourceVerification = null, sourceError = "";
+  try { sourceVerification = await verifyCloudflareWorkerContent(settings, scriptName, expectedVersion, "BLUEPANEL_EDGE_WORKER", 6); }
+  catch (error) { sourceError = cleanText(error?.message || error, 700); }
   let last = null;
   for (let i = 0; i < Math.max(1, attempts); i++) {
     if (i > 0) await new Promise(resolve => setTimeout(resolve, 1200 + Math.min(i, 4) * 300));
     last = await probeEdgeRuntimeVersion(env, i);
     if (last?.ok === true && last.version === String(expectedVersion || "")) {
-      return { verified: true, version: expectedVersion, runtime_verified: true, runtime_pending: false, runtime_version: last.version, source_verification: sourceVerification, diagnostics: last };
+      return { verified: true, version: expectedVersion, runtime_verified: true, runtime_pending: false, runtime_version: last.version, source_verification: sourceVerification || { verified: false, runtime_fallback: true, error: sourceError }, diagnostics: last };
     }
   }
-  // The script-content API is authoritative for the uploaded code. A Service
-  // Binding can keep answering from the previous runtime for a short period
-  // during propagation, especially inside the same Core request that deployed it.
-  return { verified: true, version: expectedVersion, runtime_verified: false, runtime_pending: true, runtime_version: String(last?.version || "unknown"), source_verification: sourceVerification, diagnostics: last };
+  if (sourceVerification?.verified === true) {
+    return { verified: true, version: expectedVersion, runtime_verified: false, runtime_pending: true, runtime_version: String(last?.version || "unknown"), source_verification: sourceVerification, diagnostics: last };
+  }
+  throw new Error(sourceError || ("نسخه فعال Worker دوم تأیید نشد؛ نسخه مورد انتظار " + expectedVersion + " و نسخه پاسخ‌گو " + (last?.version || "نامشخص") + " است"));
 }
 
 async function deployEdgeWorkerFromGithub(env, force = false, targetVersion = "") {
@@ -7480,6 +7538,19 @@ async function deployEdgeWorkerFromGithub(env, force = false, targetVersion = ""
   return { deployed: true, verified: true, runtime_verified: verification.runtime_verified, runtime_pending: verification.runtime_pending, runtime_version: verification.runtime_version, source_verification: verification.source_verification, sha: codeSha, script_name: scriptName, version: verification.version };
 }
 
+async function probeProcessorRuntimeVersion(env, attempt = 0) {
+  if (!env?.PROCESSOR_WORKER || typeof env.PROCESSOR_WORKER.fetch !== "function") return { reachable: false, version: "", error: "PROCESSOR_WORKER متصل نیست" };
+  try {
+    const response = await env.PROCESSOR_WORKER.fetch(new Request("https://bluepanel-processor.internal/__bluepanel/service/processor-local-health?_bp_deploy_check=" + Date.now() + "_" + attempt, {
+      headers: { "x-bluepanel-service-hop": "core-deployment-check", accept: "application/json", "cache-control": "no-cache" }
+    }));
+    const data = await response.json().catch(() => ({}));
+    return { reachable: true, ok: response.ok && String(data?.role || "") === "bluepanel-processor" && data?.database_query_ok !== false, version: String(data?.version || response.headers.get("x-bluepanel-version") || ""), status: response.status, data };
+  } catch (error) {
+    return { reachable: false, version: "", error: cleanText(error?.message || error, 500) };
+  }
+}
+
 async function deployProcessorWorkerFromGithub(env, force = false, targetVersion = "") {
   const settings = await getSettings(env);
   if (!hasProcessorServiceBinding(env)) return { skipped: true, reason: "processor_service_binding_missing" };
@@ -7509,9 +7580,18 @@ async function deployProcessorWorkerFromGithub(env, force = false, targetVersion
   const response = await fetch(apiBase + "?bindings_inherit=strict", { method: "PUT", headers: { authorization: "Bearer " + settings.cf_api_token }, body: form });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.success === false) throw new Error(data?.errors?.[0]?.message || "Cloudflare Processor deploy failed");
-  const sourceVerification = await verifyCloudflareWorkerContent(settings, scriptName, deployedVersion, "BLUEPANEL_PROCESSOR_WORKER", 6);
+  let sourceVerification = null, sourceError = "", runtimeVerification = null;
+  try { sourceVerification = await verifyCloudflareWorkerContent(settings, scriptName, deployedVersion, "BLUEPANEL_PROCESSOR_WORKER", 6); }
+  catch (error) { sourceError = cleanText(error?.message || error, 700); }
+  for (let i = 0; i < 8; i++) {
+    if (i > 0) await new Promise(resolve => setTimeout(resolve, 900 + Math.min(i, 4) * 300));
+    runtimeVerification = await probeProcessorRuntimeVersion(env, i);
+    if (runtimeVerification?.ok === true && runtimeVerification.version === String(deployedVersion || "")) break;
+  }
+  const verified = sourceVerification?.verified === true || (runtimeVerification?.ok === true && runtimeVerification.version === String(deployedVersion || ""));
+  if (!verified) throw new Error(sourceError || ("نسخه Processor تأیید نشد؛ نسخه مورد انتظار " + deployedVersion + " و نسخه پاسخ‌گو " + (runtimeVerification?.version || "نامشخص") + " است"));
   await setSettings(env, { processor_worker_script_name: scriptName, processor_worker_last_sha: codeSha, processor_worker_last_version: deployedVersion, processor_worker_last_deployed_at: nowIso(), processor_worker_last_error: "", github_processor_worker_file: file });
-  return { deployed: true, verified: true, source_verification: sourceVerification, sha: codeSha, script_name: scriptName, version: deployedVersion };
+  return { deployed: true, verified: true, source_verification: sourceVerification || { verified: false, runtime_fallback: true, error: sourceError }, runtime_verification: runtimeVerification, sha: codeSha, script_name: scriptName, version: deployedVersion };
 }
 
 async function repairProcessorRuntime(env) {
@@ -7522,14 +7602,17 @@ async function repairProcessorRuntime(env) {
     try { health = await inspectProcessorServiceBinding(env); }
     catch (error) { health = { connected: false, error: cleanText(error?.message || error, 500) }; }
     const run = await triggerProcessorBusinessJobs(env, "central_repair_" + stage);
-    const success = run?.success === true;
+    const healthReady = health?.connected === true || Boolean(health?.binding_detected === true && health?.probe?.reachable === true && health?.database_query_ok !== false && String(health?.role || health?.probe?.response_role || "") === "bluepanel-processor");
+    const businessReady = run?.success === true;
+    const success = businessReady || healthReady;
+    const warning = success && !businessReady ? cleanText(run?.error || "Runtime سالم است اما اجرای دوره‌ای در این تلاش کامل نشد", 700) : cleanText(run?.business?.partial ? ((run.business.errors || []).slice(0, 2).map(x => x.step + ": " + x.error).join(" | ") || "برخی کارهای اختیاری با خطا پایان یافت") : "", 700);
     lastError = success ? "" : cleanText(run?.error || health?.error || "Processor پاسخ سالم نداد", 700);
-    attempts.push({ stage, success, health_status: health?.status || "", health_version: health?.version || health?.probe?.response_version || "", error: lastError, http_status: run?.http_status || null });
-    return { success, health, run };
+    attempts.push({ stage, success, health_ready: healthReady, business_ready: businessReady, warning, health_status: health?.status || "", health_version: health?.version || health?.probe?.response_version || "", error: lastError, http_status: run?.http_status || null });
+    return { success, health, run, warning };
   };
 
   const current = await testRuntime("existing");
-  if (current.success) return { success: true, action: "existing_runtime", deployed: false, version: current.health?.version || "", attempts, run: current.run };
+  if (current.success) return { success: true, action: "existing_runtime", deployed: false, version: current.health?.version || current.health?.probe?.response_version || "", warning: current.warning || "", attempts, run: current.run };
 
   let deployment = null;
   try {
@@ -7551,7 +7634,7 @@ async function repairProcessorRuntime(env) {
     const checked = await testRuntime("after_deploy_" + (i + 1));
     if (checked.success) {
       try { await persistProcessorServiceState(env, checked.health, { enable: true }); } catch (_) {}
-      return { success: true, action: "deployed_and_restarted", deployed: true, version: deployment?.version || checked.health?.version || APP_VERSION, deployment, attempts, run: checked.run };
+      return { success: true, action: "deployed_and_restarted", deployed: true, version: deployment?.version || checked.health?.version || APP_VERSION, warning: checked.warning || "", deployment, attempts, run: checked.run };
     }
   }
   return { success: false, action: "runtime_not_ready", deployed: true, version: deployment?.version || APP_VERSION, error: lastError || "کد Processor نصب شد اما Runtime هنوز پاسخ سالم نداد", deployment, attempts };
@@ -9970,7 +10053,7 @@ async function botAdminErrorCenterView(env, account) {
 }
 
 async function runCentralRepairAll(env, account) {
-  const runId=id("repair"),ts=nowIso(),result={menus:false,health:false,backups:false,reports:false,processor:false,processor_error:"",processor_action:"",processor_version:"",processor_deployed:false};
+  const runId=id("repair"),ts=nowIso(),result={menus:false,health:false,backups:false,reports:false,processor:false,processor_error:"",processor_warning:"",processor_action:"",processor_version:"",processor_deployed:false};
   let tracking=false;
   try {
     await ensureDeploymentTrackingTables(env);
@@ -9985,6 +10068,7 @@ async function runCentralRepairAll(env, account) {
     const repaired=await repairProcessorRuntime(env);
     result.processor=repaired?.success===true;
     result.processor_error=result.processor?"":cleanText(repaired?.error||"Processor ترمیم نشد",700);
+    result.processor_warning=result.processor?cleanText(repaired?.warning||"",700):"";
     result.processor_action=cleanText(repaired?.action||"",120);
     result.processor_version=cleanText(repaired?.version||"",80);
     result.processor_deployed=repaired?.deployed===true;
@@ -11662,7 +11746,7 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
   if (data === "bot:admin:repair_all") {
     if(!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
     const result=await runCentralRepairAll(env,account);
-    await botPrompt(env,chatId,"🧰 <b>تعمیر خودکار پایان یافت</b>\nوضعیت: <b>"+botEscape(result.status)+"</b>\nمنوها: "+(result.menus?"✅":"❌")+" · سلامت: "+(result.health?"✅":"❌")+" · بکاپ: "+(result.backups?"✅":"❌")+" · گزارش: "+(result.reports?"✅":"❌")+" · Processor: "+(result.processor?"✅":"❌")+(result.processor_version?"\nنسخه Processor: <code>"+botEscape(result.processor_version)+"</code>":"")+(result.processor_deployed?" · Deploy خودکار: ✅":"")+(result.processor_error?"\n⚠️ علت: <code>"+botEscape(result.processor_error)+"</code>":""),[[{text:"↩️ مرکز خطا",callback_data:"bot:admin:errors"}]]);
+    await botPrompt(env,chatId,"🧰 <b>تعمیر خودکار پایان یافت</b>\nوضعیت: <b>"+botEscape(result.status)+"</b>\nمنوها: "+(result.menus?"✅":"❌")+" · سلامت: "+(result.health?"✅":"❌")+" · بکاپ: "+(result.backups?"✅":"❌")+" · گزارش: "+(result.reports?"✅":"❌")+" · Processor: "+(result.processor?"✅":"❌")+(result.processor_version?"\nنسخه Processor: <code>"+botEscape(result.processor_version)+"</code>":"")+(result.processor_deployed?" · Deploy خودکار: ✅":"")+(result.processor_warning?"\n⚠️ هشدار غیرمسدودکننده: <code>"+botEscape(result.processor_warning)+"</code>":"")+(result.processor_error?"\n⚠️ علت: <code>"+botEscape(result.processor_error)+"</code>":""),[[{text:"↩️ مرکز خطا",callback_data:"bot:admin:errors"}]]);
     return;
   }
   if (data === "bot:admin:reseller_backup_all") {
@@ -14169,7 +14253,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.3.7';
+const BLUEPANEL_CORE_VERSION = '3.3.8';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
