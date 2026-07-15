@@ -1,11 +1,11 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.2.0
+ * Version: 3.2.1
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.2.0";
+const APP_VERSION = "3.2.1";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -3439,7 +3439,7 @@ async function applyCurrentReleaseToAllAgencies(env) {
 }
 
 async function refreshImportedAgency(env, agency) {
-  const admin = await pasarguardGetManager(env, agency.remote_manager_id);
+  const admin = await pasargadGetManager(env, agency.remote_manager_id);
   const usage = extractUsageBytes(admin);
   const remoteStatus = normalizePasarguardAdminStatus(admin.status);
   const username = cleanText(admin.username, 64) || agency.panel_username;
@@ -13342,7 +13342,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.2.0';
+const BLUEPANEL_CORE_VERSION = '3.2.1';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {

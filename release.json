@@ -1,7 +1,7 @@
 {
-  "version": "3.2.0",
-  "release_id": "3.2.0-20260715-live-usage-diagnostics-auth-fallback-manifest-fix",
-  "architecture": "fully-split-three-worker-durable-live-usage-resilient-pasarguard",
+  "version": "3.2.1",
+  "release_id": "3.2.1-20260715-live-usage-manager-function-scope-fix",
+  "architecture": "fully-split-three-worker-durable-live-usage-manager-scope-fixed",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -32,13 +32,11 @@
     ]
   },
   "features": [
-    "live usage remains autonomous through Durable Object alarms and does not depend on user activity or cron triggers",
-    "PasarGuard requests have a 12-second timeout and one retry for temporary GET failures",
-    "an under-scoped PasarGuard API key automatically falls back to configured owner credentials without stopping billing",
-    "API key validation now verifies admins.read because representative usage requires the admins list endpoint",
-    "manager usage lookup has a compatibility fallback and explicit manager-not-found diagnostics",
-    "the central miniapp shows the exact representative and upstream error instead of only a generic partial failure badge",
-    "billing idempotency, zero-balance suspension, subscription import, CubePay, Plisio, automatic USD rates and report topics are preserved",
+    "fixes live usage failure caused by the undefined pasarguardGetManager symbol",
+    "refreshImportedAgency now calls the existing pasargadGetManager implementation used by billing",
+    "all representative panels continue autonomous usage calculation through Durable Object alarms without cron or user activity",
+    "PasarGuard request retries, API-key permission fallback, exact error diagnostics and billing idempotency are preserved",
+    "subscription import, CubePay, Plisio, automatic USD rates and report topics are preserved",
     "README files are excluded"
   ],
   "deployment": {
@@ -47,30 +45,29 @@
     "migration_tag": "v3.1.9-live-usage (unchanged; no new Durable Object migration)",
     "automatic_provisioning": "supported when cf_account_id, cf_api_token and cf_worker_name are already saved and the token can update Workers scripts",
     "manual_config_file": "core/wrangler.live-usage.example.toml",
-    "activation": "deploy all three workers; LIVE_USAGE_COORDINATOR continues using the existing Durable Object class and alarm state",
+    "activation": "deploy core, edge and processor; the existing LIVE_USAGE_COORDINATOR binding and alarm state are reused",
     "cron": "the existing 10-minute central cron can remain; it is not used for live usage while the Durable Object binding is active"
   },
   "validation": {
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "api_key_permission_probe": "static verified",
-    "password_fallback_path": "static verified",
-    "live_error_ui": "static verified",
+    "undefined_manager_symbol": "fixed and static verified",
+    "live_usage_call_chain": "refreshImportedAgency -> pasargadGetManager -> pasarguardRequest",
+    "release_manifest_hashes": "recalculated from packaged bytes and uploader-compatible validation passed",
     "zip_integrity": "passed",
-    "live_pasarguard_call": "not run without production credentials",
-    "release_manifest_hashes": "recalculated from packaged bytes and passed uploader-compatible validation"
+    "live_pasarguard_call": "not run without production credentials"
   },
   "sha256": {
-    "core": "08ee8686ef9ee98e6a1c8345cd559d64319dc055333354a49f020c9bfa2afe9c",
-    "edge": "93f1baae09464b748271edaa139a44aa7293a185314b7196de9c30d8d8a5e66e",
-    "processor": "102ab393ab7dba40a97763351228cb71d2b840a9c5bb8f274d6831f7c097bd6c",
+    "core": "f5181e9887eb1a1c374e5fcb962f8d249a230a5d29ebc9de6e4454d2fa503d06",
+    "edge": "07edf8ab7e5c028c2a3c9a346849f8901b1a9bb3f6e1c8b2f8316b846994aaa9",
+    "processor": "73db6a5f52e20c42929c3587f60eebc31fdd418360e825d90d645acc49287cc5",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "hashes": {
-    "core/worker.js": "08ee8686ef9ee98e6a1c8345cd559d64319dc055333354a49f020c9bfa2afe9c",
-    "edge/worker.js": "93f1baae09464b748271edaa139a44aa7293a185314b7196de9c30d8d8a5e66e",
-    "processor/worker.js": "102ab393ab7dba40a97763351228cb71d2b840a9c5bb8f274d6831f7c097bd6c",
+    "core/worker.js": "f5181e9887eb1a1c374e5fcb962f8d249a230a5d29ebc9de6e4454d2fa503d06",
+    "edge/worker.js": "07edf8ab7e5c028c2a3c9a346849f8901b1a9bb3f6e1c8b2f8316b846994aaa9",
+    "processor/worker.js": "73db6a5f52e20c42929c3587f60eebc31fdd418360e825d90d645acc49287cc5",
     "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   }
 }
