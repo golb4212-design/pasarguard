@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.1.9
+ * Version: 3.2.0
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = "3.1.9";
+const APP_VERSION = "3.2.0";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -10246,10 +10246,16 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       state.ledger=d.ledger||state.ledger||[];
       renderLiveUsage();
       var stamp=new Date(d.server_time||Date.now()).toLocaleTimeString('fa-IR',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
-      if(d.errors&&d.errors.length)setLiveUsageStatus('error','بخشی ناموفق','آخرین بروزرسانی '+stamp+' · '+money(d.errors.length)+' خطا');
-      else setLiveUsageStatus('','زنده','آخرین بروزرسانی '+stamp+(Number(d.charged||0)>0?' · کسر '+money(d.charged)+' تومان':''));
+      if(d.errors&&d.errors.length){
+        var first=d.errors[0]||{},detail=String(first.message||first.error||'خطای نامشخص'),title=String(first.agencyTitle||'یک پنل');
+        setLiveUsageStatus('error',money(d.errors.length)+' پنل ناموفق','آخرین بروزرسانی '+stamp+' · '+title+': '+detail.slice(0,92));
+        var liveBox=el('liveUsageStatus');if(liveBox){liveBox.title=(d.errors||[]).map(function(x){return (x.agencyTitle||x.agencyId||'پنل')+': '+(x.message||x.error||'خطا')}).join('\n');liveBox.onclick=function(){toast(liveBox.title||detail)}}
+      } else {
+        var liveBox=el('liveUsageStatus');if(liveBox){liveBox.title='';liveBox.onclick=null}
+        setLiveUsageStatus('','زنده','آخرین بروزرسانی '+stamp+(Number(d.charged||0)>0?' · کسر '+money(d.charged)+' تومان':''));
+      }
     }catch(e){
-      setLiveUsageStatus('error','اتصال مجدد','نمایش اطلاعات ذخیره‌شده · تلاش دوباره تا چند ثانیه دیگر');
+      setLiveUsageStatus('error','اتصال مجدد','نمایش اطلاعات ذخیره‌شده · '+String(e.message||'خطای اتصال').slice(0,105));
     }finally{liveUsageBusy=false}
   }
   function startLiveUsage(){
@@ -10338,7 +10344,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_EDGE_VERSION='3.1.9';
+const BLUEPANEL_EDGE_VERSION='3.2.0';
 function bluePanelEdgeJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function bluePanelEdgeInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
 function bluePanelEdgeRuntimeBinding(env,name){const value=env?.[name];return{name,exact_key_present:Object.prototype.hasOwnProperty.call(env||{},name),value_present:value!==undefined&&value!==null,fetch_callable:Boolean(value&&typeof value.fetch==='function'),constructor_name:value?.constructor?.name||''}}

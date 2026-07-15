@@ -1,16 +1,17 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.1.9
+ * Version: 3.2.0
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.1.9";
+const APP_VERSION = "3.2.0";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
   central: Object.freeze([
+    { emoji: "🩺", text: "رفع خطای پنهان همگام‌سازی مصرف، fallback خودکار احراز هویت و نمایش علت دقیق هر خطا" },
     { emoji: "⚡", text: "کاهش رفت‌وبرگشت بین Workerها در مسیرهای پرتکرار" },
     { emoji: "🚀", text: "ارسال سریع‌تر منوی شروع با انتقال ثبت گزارش و پاک‌سازی نشست به پس‌زمینه" },
     { emoji: "🧠", text: "کش کوتاه‌مدت تنظیمات و وضعیت عضویت برای پاسخ سریع‌تر" },
@@ -2885,36 +2886,104 @@ async function getPasarguardToken(env, forceRefresh = false, suppliedSettings = 
   return pasarguardTokenCache.token;
 }
 
-async function pasargadRequest(env, method, path, body, retry = true) {
-  const settings = await getSettings(env);
-  const auth = await pasarguardRequestAuth(env, settings);
-  const response = await fetch(pasarguardBaseUrl(settings) + path, {
-    method,
-    headers: {
-      ...auth.headers,
-      ...(body === undefined ? {} : { "content-type": "application/json" })
-    },
-    body: body === undefined ? undefined : JSON.stringify(body)
-  });
-  if (response.status === 401 && retry && auth.mode === "password") {
-    pasarguardTokenCache = { token: "", expiresAt: 0 };
-    return pasargadRequest(env, method, path, body, false);
+async function pasarguardHttpRequest(settings, authHeaders, method, path, body, timeoutMs = 12000) {
+  try {
+    return await fetchWithTimeout(pasarguardBaseUrl(settings) + path, {
+      method,
+      headers: {
+        "accept": "application/json",
+        ...authHeaders,
+        ...(body === undefined ? {} : { "content-type": "application/json" })
+      },
+      body: body === undefined ? undefined : JSON.stringify(body)
+    }, timeoutMs);
+  } catch (error) {
+    const wrapped = new Error(String(error?.name || "") === "AbortError"
+      ? "مهلت پاسخ PasarGuard تمام شد"
+      : "ارتباط با PasarGuard برقرار نشد: " + cleanText(error?.message || error, 220));
+    wrapped.status = 0;
+    wrapped.retryable = true;
+    wrapped.cause = error;
+    throw wrapped;
   }
+}
+
+async function pasarguardRequest(env, method, path, body, retry = true) {
+  const settings = await getSettings(env);
+  let auth = await pasarguardRequestAuth(env, settings);
+  let response;
+  let fallbackMode = "";
+  let transientRetry = 0;
+
+  while (true) {
+    try {
+      response = await pasarguardHttpRequest(settings, auth.headers, method, path, body);
+    } catch (error) {
+      if (String(method).toUpperCase() === "GET" && transientRetry < 1 && error?.retryable === true) {
+        transientRetry += 1;
+        await new Promise(resolve => setTimeout(resolve, 250));
+        continue;
+      }
+      throw error;
+    }
+
+    // Password tokens can expire. Refresh once without changing the public API.
+    if (response.status === 401 && retry && auth.mode === "password") {
+      pasarguardTokenCache = { token: "", expiresAt: 0 };
+      const token = await getPasarguardToken(env, true, settings);
+      auth = { mode: "password", headers: { authorization: "Bearer " + token } };
+      retry = false;
+      continue;
+    }
+
+    // A valid API key may have only profile permissions. Live billing needs admins.read.
+    // When owner credentials are also configured, transparently fall back to a short-lived
+    // password token so usage never stops because of an under-scoped key.
+    if ([401, 403].includes(Number(response.status)) && retry && auth.mode === "api_key" &&
+        settings.pasarguard_admin_username && settings.pasarguard_admin_password) {
+      const token = await getPasarguardToken(env, true, settings);
+      auth = { mode: "password_fallback", headers: { authorization: "Bearer " + token } };
+      fallbackMode = "password";
+      retry = false;
+      continue;
+    }
+
+    // One quick retry for temporary upstream failures. POST/PUT are intentionally excluded.
+    if (String(method).toUpperCase() === "GET" && transientRetry < 1 &&
+        [429, 500, 502, 503, 504].includes(Number(response.status))) {
+      transientRetry += 1;
+      await new Promise(resolve => setTimeout(resolve, 250));
+      continue;
+    }
+    break;
+  }
+
   if (response.status === 204) return {};
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const detail = data.detail || data.message || data.error || ("HTTP " + response.status);
     let message = typeof detail === "string" ? detail : JSON.stringify(detail);
     if (auth.mode === "api_key" && [401, 403].includes(Number(response.status))) {
-      message = "API Key پاسارگارد نامعتبر است یا مجوز لازم برای این عملیات را ندارد";
-    } else if (auth.mode === "access_token" && Number(response.status) === 401) {
-      message = "Access Token پاسارگارد منقضی یا نامعتبر است";
+      message = Number(response.status) === 403
+        ? "API Key پاسارگارد مجوز admins.read ندارد؛ دسترسی مدیران را برای کلید فعال کنید"
+        : "API Key پاسارگارد نامعتبر است";
+    } else if (["access_token", "password", "password_fallback"].includes(auth.mode) && Number(response.status) === 401) {
+      message = "احراز هویت پاسارگارد منقضی یا نامعتبر است";
     }
     const error = new Error(message);
     error.status = response.status;
+    error.code = "PASARGUARD_HTTP_" + String(response.status || 0);
     error.authMode = auth.mode;
     error.details = data;
+    error.retryable = [0, 429, 500, 502, 503, 504].includes(Number(response.status));
     throw error;
+  }
+
+  if (fallbackMode) {
+    setSettings(env, {
+      pasarguard_api_last_error: "API Key مجوز کافی نداشت؛ همگام‌سازی با نام کاربری و رمز مدیر ادامه یافت",
+      pasarguard_api_last_verified_at: nowIso()
+    }).catch(() => null);
   }
   return data;
 }
@@ -2942,7 +3011,27 @@ async function pasarguardApiKeyProbe(panelUrl, apiKey) {
     if ([401, 403].includes(Number(response.status))) throw new Error("API Key پاسارگارد نامعتبر است یا مجوز لازم را ندارد");
     throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
   }
-  return { profile: parsed.data || {}, panel_url: baseUrl };
+
+  let adminsRead = false;
+  try {
+    const listResponse = await fetchWithTimeout(baseUrl + "/api/admins?limit=1", {
+      method: "GET",
+      headers: { "x-api-key": key, "accept": "application/json" },
+      redirect: "manual"
+    }, 12000);
+    const listParsed = await readJsonResponseSafe(listResponse, "فهرست مدیران پاسارگارد");
+    if (!listResponse.ok) {
+      if (Number(listResponse.status) === 403) {
+        throw new Error("API Key معتبر است اما مجوز admins.read ندارد؛ بدون این مجوز محاسبه مصرف نمایندگان انجام نمی‌شود");
+      }
+      const detail = listParsed.data?.detail || listParsed.data?.message || listParsed.data?.error || ("HTTP " + listResponse.status);
+      throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    }
+    adminsRead = true;
+  } catch (error) {
+    throw new Error(cleanText(error?.message || error, 500));
+  }
+  return { profile: parsed.data || {}, panel_url: baseUrl, admins_read: adminsRead };
 }
 
 async function testPasarguardApiConnection(env) {
@@ -2957,6 +3046,7 @@ async function testPasarguardApiConnection(env) {
       panel_url: result.panel_url,
       username: cleanText(result.profile?.username || result.profile?.profile_title || "", 120),
       admin_id: result.profile?.id ?? null,
+      admins_read: result.admins_read === true,
       verified_at: verifiedAt
     };
   } catch (error) {
@@ -3064,12 +3154,36 @@ function extractUsageBytes(data) {
 }
 
 async function pasargadGetManager(env, remoteId) {
-  const query = new URLSearchParams({ ids: String(remoteId), limit: "1" });
-  const data = await pasargadRequest(env, "GET", "/api/admins?" + query.toString());
-  const admins = Array.isArray(data) ? data : (data.admins || data.data || []);
-  const admin = admins.find(item => String(item.id) === String(remoteId)) || admins[0];
-  if (!admin) throw new Error("مدیر فروش در PasarGuard پیدا نشد");
-  return admin;
+  const remoteKey = String(remoteId || "").trim();
+  if (!remoteKey) {
+    const error = new Error("شناسه مدیر PasarGuard برای این نمایندگی ثبت نشده است");
+    error.code = "PASARGUARD_MANAGER_ID_MISSING";
+    throw error;
+  }
+
+  const attempts = [
+    new URLSearchParams({ ids: remoteKey, limit: "1" }),
+    new URLSearchParams({ offset: "0", limit: "100" })
+  ];
+  let lastError = null;
+  for (let index = 0; index < attempts.length; index++) {
+    try {
+      const data = await pasargadRequest(env, "GET", "/api/admins?" + attempts[index].toString());
+      const admins = Array.isArray(data) ? data : (data.admins || data.data || []);
+      const admin = admins.find(item => String(item.id) === remoteKey) || (index === 0 ? admins[0] : null);
+      if (admin) return admin;
+    } catch (error) {
+      lastError = error;
+      // Permission/authentication failures will not improve by scanning the first page.
+      if ([401, 403].includes(Number(error?.status || 0))) break;
+    }
+  }
+
+  if (lastError) throw lastError;
+  const error = new Error("مدیر نمایندگی با شناسه " + remoteKey + " در PasarGuard پیدا نشد");
+  error.code = "PASARGUARD_MANAGER_NOT_FOUND";
+  error.status = 404;
+  throw error;
 }
 
 function pasarguardAdminList(data) {
@@ -3683,8 +3797,8 @@ async function syncUsage(env, limit = 50) {
       processed += 1;
       charged += Number(bill.charged || 0);
     } catch (error) {
-      errors.push({ agencyId: agency.id, error: error.message });
-      await audit(env, null, "usage_sync_failed", { agencyId: agency.id, message: error.message });
+      errors.push({ agencyId: agency.id, agencyTitle: cleanText(agency.title || agency.panel_username || agency.id, 100), error: cleanText(error?.message || error, 500), code: cleanText(error?.code || "USAGE_SYNC_FAILED", 80), status: Number(error?.status || 0), retryable: error?.retryable === true });
+      await audit(env, null, "usage_sync_failed", { agencyId: agency.id, agencyTitle: agency.title || agency.panel_username || "", code: error?.code || "", status: Number(error?.status || 0), message: cleanText(error?.message || error, 500) });
     }
   }
   return { processed, charged, errors };
@@ -3722,8 +3836,8 @@ async function syncUsageForUser(env, userId, limit = 30, minIntervalSeconds = LI
       processed += 1;
       charged += Number(bill.charged || 0);
     } catch (error) {
-      errors.push({ agencyId: agency.id, error: error.message });
-      await audit(env, userId, "user_usage_sync_failed", { agencyId: agency.id, message: error.message });
+      errors.push({ agencyId: agency.id, agencyTitle: cleanText(agency.title || agency.panel_username || agency.id, 100), error: cleanText(error?.message || error, 500), code: cleanText(error?.code || "USAGE_SYNC_FAILED", 80), status: Number(error?.status || 0), retryable: error?.retryable === true });
+      await audit(env, userId, "user_usage_sync_failed", { agencyId: agency.id, agencyTitle: agency.title || agency.panel_username || "", code: error?.code || "", status: Number(error?.status || 0), message: cleanText(error?.message || error, 500) });
     }
   }
 
@@ -3763,10 +3877,21 @@ async function liveUsageSnapshot(request, env) {
         processed += 1;
         charged += Number(bill.charged || 0);
       } catch (error) {
-        errors.push({ agencyId: agency.id, message: error.message });
+        const message = cleanText(error?.message || error, 500);
+        errors.push({
+          agencyId: agency.id,
+          agencyTitle: cleanText(agency.title || agency.panel_username || agency.id, 100),
+          message,
+          code: cleanText(error?.code || (error?.status ? "HTTP_" + error.status : "USAGE_SYNC_FAILED"), 80),
+          status: Number(error?.status || 0),
+          retryable: error?.retryable === true
+        });
         await audit(env, auth.user.id, "live_usage_sync_failed", {
           agencyId: agency.id,
-          message: error.message
+          agencyTitle: agency.title || agency.panel_username || "",
+          code: error?.code || "",
+          status: Number(error?.status || 0),
+          message
         });
       }
     }
@@ -13217,7 +13342,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.1.9';
+const BLUEPANEL_CORE_VERSION = '3.2.0';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {

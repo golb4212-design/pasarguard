@@ -1,7 +1,7 @@
 {
-  "version": "3.1.9",
-  "release_id": "3.1.9-20260715-durable-live-usage-final-fix",
-  "architecture": "fully-split-three-worker-durable-live-usage",
+  "version": "3.2.0",
+  "release_id": "3.2.0-20260715-live-usage-diagnostics-auth-fallback-manifest-fix",
+  "architecture": "fully-split-three-worker-durable-live-usage-resilient-pasarguard",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -32,43 +32,45 @@
     ]
   },
   "features": [
-    "representative usage is calculated autonomously by Durable Object alarms without user activity or cron triggers",
-    "default live cycle is 15 seconds and is configurable from 8 to 300 seconds",
-    "the coordinator processes central PasarGuard agencies and downline reseller bots in fair updated_at batches",
-    "central billing_events and downline reseller_usage_events guard against duplicate deductions",
-    "concurrent live, manual and fallback syncs cannot charge the same downline usage delta twice",
-    "zero-balance agency suspension and automatic reactivation reconciliation run after every live cycle",
-    "live engine starts automatically on the first central Worker request and keeps rescheduling itself",
-    "the central Worker can auto-provision the Durable Object binding when Cloudflare deployment credentials are stored",
-    "admin status/start/run/stop/provision control is available at /api/admin/usage/live",
-    "central health reports whether LIVE_USAGE_COORDINATOR is bound",
-    "the existing central cron remains only as a fallback when the Durable Object binding is absent and for non-live maintenance jobs",
-    "subscription import, CubePay, Plisio, automatic USD rates and report topics are preserved",
+    "live usage remains autonomous through Durable Object alarms and does not depend on user activity or cron triggers",
+    "PasarGuard requests have a 12-second timeout and one retry for temporary GET failures",
+    "an under-scoped PasarGuard API key automatically falls back to configured owner credentials without stopping billing",
+    "API key validation now verifies admins.read because representative usage requires the admins list endpoint",
+    "manager usage lookup has a compatibility fallback and explicit manager-not-found diagnostics",
+    "the central miniapp shows the exact representative and upstream error instead of only a generic partial failure badge",
+    "billing idempotency, zero-balance suspension, subscription import, CubePay, Plisio, automatic USD rates and report topics are preserved",
     "README files are excluded"
   ],
   "deployment": {
     "required_binding_name": "LIVE_USAGE_COORDINATOR",
     "required_class_name": "LiveUsageCoordinator",
-    "migration_tag": "v3.1.9-live-usage",
+    "migration_tag": "v3.1.9-live-usage (unchanged; no new Durable Object migration)",
     "automatic_provisioning": "supported when cf_account_id, cf_api_token and cf_worker_name are already saved and the token can update Workers scripts",
     "manual_config_file": "core/wrangler.live-usage.example.toml",
-    "activation": "after deployment open /health once or send any message to the central bot; after binding deployment the next request starts the alarm loop",
+    "activation": "deploy all three workers; LIVE_USAGE_COORDINATOR continues using the existing Durable Object class and alarm state",
     "cron": "the existing 10-minute central cron can remain; it is not used for live usage while the Durable Object binding is active"
   },
   "validation": {
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "module_exports": "passed: default and LiveUsageCoordinator",
-    "durable_object_alarm_initialization_mock": "passed",
-    "duplicate_downline_billing_guard": "implemented with INSERT OR IGNORE transaction gate",
-    "archive_structure": "passed: core, edge, processor, version, release manifest and Durable Object config; no README",
-    "live_cloudflare_pasarguard_test": "not run because live deployment credentials and production panel access were not available"
+    "api_key_permission_probe": "static verified",
+    "password_fallback_path": "static verified",
+    "live_error_ui": "static verified",
+    "zip_integrity": "passed",
+    "live_pasarguard_call": "not run without production credentials",
+    "release_manifest_hashes": "recalculated from packaged bytes and passed uploader-compatible validation"
   },
   "sha256": {
-    "core": "1fc9ad58fbf0de20f2e8d0d5d0e0e09922953038d6007f73dc018829a5cfbb87",
-    "edge": "47ab1e62177723c774404d1bfd9b90a6a5504f7eafed0f5a829108e4f40b3e6b",
-    "processor": "cc6d7605950d88ce9ffdab37dd2cf12e846e52e3d4cee7946355dea0d6080f72",
+    "core": "08ee8686ef9ee98e6a1c8345cd559d64319dc055333354a49f020c9bfa2afe9c",
+    "edge": "93f1baae09464b748271edaa139a44aa7293a185314b7196de9c30d8d8a5e66e",
+    "processor": "102ab393ab7dba40a97763351228cb71d2b840a9c5bb8f274d6831f7c097bd6c",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
+  },
+  "hashes": {
+    "core/worker.js": "08ee8686ef9ee98e6a1c8345cd559d64319dc055333354a49f020c9bfa2afe9c",
+    "edge/worker.js": "93f1baae09464b748271edaa139a44aa7293a185314b7196de9c30d8d8a5e66e",
+    "processor/worker.js": "102ab393ab7dba40a97763351228cb71d2b840a9c5bb8f274d6831f7c097bd6c",
+    "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   }
 }
