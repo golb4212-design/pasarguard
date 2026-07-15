@@ -1,7 +1,7 @@
 {
-  "version": "3.2.6",
-  "release_id": "3.2.6-20260715-user-chosen-subscription-name",
-  "architecture": "fully-split-three-worker-live-usage-plan-display-bidi-fixed",
+  "version": "3.2.7",
+  "release_id": "3.2.7-20260715-manual-telegram-profile-fields-final",
+  "architecture": "fully-split-three-worker-manual-telegram-profile-fields-final",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -32,11 +32,12 @@
     ]
   },
   "features": [
-    "reseller bot customers now choose their own subscription username before selecting payment",
-    "subscription usernames are validated and checked for availability in the connected PasarGuard panel",
-    "new bot orders persist the requested username and provision exactly that username",
-    "username collisions fail safely instead of attaching an existing remote service",
-    "renewal, volume, miniapp, live usage and wallet collection behavior remain preserved",
+    "disables every automatic Telegram full-description update for central and reseller bots",
+    "disables every automatic Telegram short-description/Bio update for central and reseller bots",
+    "webhook repair, version synchronization and menu synchronization no longer overwrite bot profile text",
+    "bot owners configure both Telegram profile fields manually",
+    "existing manually configured profile values are not cleared by this update",
+    "all 3.2.6 subscription-name and earlier billing/payment fixes are preserved",
     "README files are excluded"
   ],
   "deployment": {
@@ -52,25 +53,21 @@
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "username_validation": "passed",
-    "remote_availability_check": "implemented against connected PasarGuard panel",
-    "username_collision_safety": "existing remote service is never adopted on conflict",
-    "payment_flows": "card, online and wallet preserve requested username",
-    "sales_order_insert_placeholders": "17 columns / 17 values verified",
-    "manifest_hashes": "recalculated",
-    "zip_integrity": "passed after packaging",
-    "live_pasarguard_call": "not run without production credentials"
+    "setMyDescription_calls": "zero",
+    "setMyShortDescription_calls": "zero",
+    "release_manifest_hashes": "recalculated",
+    "zip_integrity": "passed"
   },
   "sha256": {
-    "core": "fddde2609f46d1bf3ab96ad8a0b2539aa74ed025e9d1d36cc03e4d063601b6d7",
-    "edge": "7dbeedb487bc413f9df763a5e02a1446aeb0a745418f16c9a242eb86c0fbf982",
-    "processor": "b3b12ce24ac07829c36d8711dd55a7e14be796960e85b640d41390e7b9717a12",
+    "core": "49fc833e89315dafaf14a922fe84e98f62a763614015bd05fd2a57112bf421d8",
+    "edge": "9a4ec110a4bb2191c887fe3f671ebfc30abfbefe9ca3715871c3e8efe7d6801c",
+    "processor": "79515507eac4de5abc138ac2658331f63b650339f04aa17f3d55f35c74a3f441",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "hashes": {
-    "core/worker.js": "fddde2609f46d1bf3ab96ad8a0b2539aa74ed025e9d1d36cc03e4d063601b6d7",
-    "edge/worker.js": "7dbeedb487bc413f9df763a5e02a1446aeb0a745418f16c9a242eb86c0fbf982",
-    "processor/worker.js": "b3b12ce24ac07829c36d8711dd55a7e14be796960e85b640d41390e7b9717a12",
+    "core/worker.js": "49fc833e89315dafaf14a922fe84e98f62a763614015bd05fd2a57112bf421d8",
+    "edge/worker.js": "9a4ec110a4bb2191c887fe3f671ebfc30abfbefe9ca3715871c3e8efe7d6801c",
+    "processor/worker.js": "79515507eac4de5abc138ac2658331f63b650339f04aa17f3d55f35c74a3f441",
     "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   }
 }

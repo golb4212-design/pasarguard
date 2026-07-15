@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.2.6
+ * Version: 3.2.7
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = "3.2.6";
+const APP_VERSION = "3.2.7";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -1891,15 +1891,7 @@ async function configureResellerBot(env, bot, origin = "") {
   for (const scope of commandScopes) {
     try { await telegramApiWithToken(token, "deleteMyCommands", { scope }); } catch (_) {}
   }
-
-  try {
-    await telegramApiWithToken(token, "setMyDescription", {
-      description: "خرید، تمدید، شارژ کیف پول و مدیریت سرویس در " + cleanText(bot.brand_name, 120) + " · نسخه " + RESELLER_BOT_VERSION
-    });
-    await telegramApiWithToken(token, "setMyShortDescription", {
-      short_description: "فروشگاه و پنل کاربری " + cleanText(bot.brand_name, 40)
-    });
-  } catch (_) {}
+  // Telegram Bio and Description are configured manually by the bot owner.
   return webhookUrl;
 }
 
@@ -10522,7 +10514,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_EDGE_VERSION='3.2.6';
+const BLUEPANEL_EDGE_VERSION='3.2.7';
 function bluePanelEdgeJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function bluePanelEdgeInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
 function bluePanelEdgeRuntimeBinding(env,name){const value=env?.[name];return{name,exact_key_present:Object.prototype.hasOwnProperty.call(env||{},name),value_present:value!==undefined&&value!==null,fetch_callable:Boolean(value&&typeof value.fetch==='function'),constructor_name:value?.constructor?.name||''}}

@@ -1,11 +1,11 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.2.6
+ * Version: 3.2.7
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.2.6";
+const APP_VERSION = "3.2.7";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -8411,14 +8411,7 @@ async function configureResellerBot(env, bot, origin = "") {
     try { await telegramApiWithToken(token, "deleteMyCommands", { scope }); } catch (_) {}
   }
 
-  try {
-    await telegramApiWithToken(token, "setMyDescription", {
-      description: "خرید، تمدید، شارژ کیف پول و مدیریت سرویس در " + cleanText(bot.brand_name, 120) + " · نسخه " + RESELLER_BOT_VERSION
-    });
-    await telegramApiWithToken(token, "setMyShortDescription", {
-      short_description: "فروشگاه و پنل کاربری " + cleanText(bot.brand_name, 40)
-    });
-  } catch (_) {}
+  // Bot profile Bio/Description are intentionally left for the owner to configure manually.
   return webhookUrl;
 }
 
@@ -12461,10 +12454,7 @@ async function configureTelegramBotWithToken(env, origin, token, suppliedSetting
       ]
     });
   } catch (_) {}
-  try {
-    await telegramApiWithToken(token, "setMyDescription", { description: "مدیریت کیف پول، پنل‌ها و ربات نمایندگی از داخل مینی‌اپ" });
-    await telegramApiWithToken(token, "setMyShortDescription", { short_description: "مدیریت نمایندگی و مینی‌اپ" });
-  } catch (_) {}
+  // Telegram Bio and Description are configured manually by the bot owner.
   return { success: true, webhookUrl, bot_menu: "web_app", miniapp_url: appUrl, independent: true };
 }
 
@@ -13416,7 +13406,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.2.6';
+const BLUEPANEL_CORE_VERSION = '3.2.7';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
