@@ -1,7 +1,7 @@
 {
-  "version": "3.3.4",
-  "release_id": "3.3.4-20260715-emergency-webhook-runtime-recovery-fail-open-rollout",
-  "architecture": "fully-split-three-worker-growth-suite-emergency-fail-open-runtime",
+  "version": "3.3.5",
+  "release_id": "3.3.5-20260715-d1-reseller-growth-normalization-recovery",
+  "architecture": "fully-split-three-worker-normalized-growth-settings-d1-recovery",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -10,8 +10,8 @@
   },
   "roles": {
     "core": "central bot, D1 authority, payment callbacks, report outbox, safe update controller and Durable Object live usage engine",
-    "edge": "reseller bots, customer miniapps and imported-subscription lifecycle with fail-open Telegram webhook acknowledgement",
-    "processor": "optional advanced schedules, backups, campaigns and background reports"
+    "edge": "reseller bots, customer miniapps and imported-subscription lifecycle with normalized reseller growth settings",
+    "processor": "advanced schedules, auto-renewal, service health, reseller tiers, backups, campaigns and background reports"
   },
   "bindings": {
     "core": [
@@ -32,25 +32,24 @@
     ]
   },
   "features": [
-    "Telegram central webhook always acknowledges with HTTP 200 after containing an internal failure, preventing retry storms and total bot lockup",
-    "reseller Telegram webhooks also fail open with HTTP 200 when Core or remote D1 is temporarily unavailable",
-    "normal user requests never trigger GitHub or Cloudflare deployment checks",
-    "Cron update errors are isolated from the rest of scheduled maintenance jobs",
-    "release_rollouts, system_error_center and repair_runs are optional observability tables and cannot block deployment or bot runtime",
-    "staged deployment continues to preserve Core when Edge or Processor does not deploy successfully",
-    "error-center and repair-all screens operate in degraded mode instead of crashing when tracking tables are unavailable",
-    "database schema revision remains 3.3.3 because this rescue release adds no schema change, avoiding a heavy migration on the recovery request",
-    "retains all 3.3 growth, loyalty, service-health, D1 self-healing and previous 3.2 fixes",
+    "moves 13 BluePanel 3.3 growth and automation settings from reseller_bots into reseller_growth_settings",
+    "prevents any new ALTER TABLE operation for the 13 settings that caused sqlite_altertab_reseller_bots column-limit failures",
+    "self-heals databases left with one or more partially added 3.3 columns and copies those values into the normalized table",
+    "keeps the original reseller_bots table at the stable 3.2 column layout for fresh installations",
+    "hydrates growth settings transparently in Core, Edge and Processor so previous feature behavior remains available",
+    "updates toggles, low-balance thresholds, reseller tiers, auto-renew and service-health jobs to use the normalized table",
+    "splits snapshot restore between legacy reseller settings and normalized growth settings",
+    "retains emergency fail-open Telegram webhook behavior and all previous 3.2/3.3 fixes",
     "README files are excluded"
   ],
   "deployment": {
-    "emergency_recovery": "paste or upload core/worker.js to the existing Core Worker and deploy once; then upload this ZIP through the restored central bot",
+    "emergency_recovery": "deploy core/worker.js once to the existing Core Worker because the currently running recovery Core cannot complete a ZIP rollout while schema bootstrap is failing; after the bot returns, upload this full ZIP through the central bot",
     "automatic_provisioning": "supported from the central bot ZIP uploader after Core recovery",
     "required_binding_name": "LIVE_USAGE_COORDINATOR",
     "required_class_name": "LiveUsageCoordinator",
     "migration_tag": "v3.1.9-live-usage (unchanged)",
-    "manual_config_file": "core/wrangler.live-usage.example.toml",
-    "cron": "existing central cron may remain; update failures are isolated and live usage stays on Durable Object when configured"
+    "db_schema_revision": "3.3.5",
+    "cron": "existing schedules may remain"
   },
   "validation": {
     "node_syntax_core": "passed",
@@ -59,31 +58,31 @@
     "module_import_core": "passed",
     "module_import_edge": "passed",
     "module_import_processor": "passed",
-    "central_webhook_missing_d1_returns_200": "passed",
-    "reseller_webhook_missing_core_binding_returns_200": "passed",
-    "request_triggered_update_disabled": "passed",
-    "rollout_tracking_fail_open": "passed",
-    "db_schema_revision": "3.3.3",
+    "fresh_schema_execution": "passed",
+    "fresh_reseller_bots_column_count": 98,
+    "normalized_growth_table_column_count": 16,
+    "partial_3_3_migration_simulation_100_columns": "passed",
+    "legacy_growth_value_copy": "passed",
+    "legacy_required_reseller_columns_present": "passed",
     "release_manifest_hashes": "recalculated",
-    "zip_integrity": "passed",
+    "zip_integrity": "passed after packaging",
     "live_cloudflare_deployment": "not run without production credentials"
   },
   "limitations": [
-    "a Worker whose D1 or Service Binding was manually removed still requires that binding to be restored in Cloudflare settings",
-    "the emergency HTTP 200 response prevents Telegram retry storms but cannot complete a business operation while its required dependency is unavailable",
-    "representative low-balance automation does not charge a bank card without a payment mandate",
-    "automatic failover must be explicitly enabled by the reseller"
+    "the first recovery step still requires deploying the Core file once because the currently running Core is already trapped in schema recovery mode",
+    "production Cloudflare, Telegram and PasarGuard calls were not executed without account credentials",
+    "legacy partial growth columns already added to reseller_bots are left in place but are no longer read or written"
   ],
   "sha256": {
-    "core": "f9104066bea5ab39c2ce15d737015bf53a264ac8faead849db53cfee54044c64",
-    "edge": "7bdfedb2b268dc9b56fa294e9b11efc295989d8d2c0050d00fa9d30b08d15d53",
-    "processor": "6a3236011a2bfb429d13578ac0493e0b1e2434929e17d271a0a3837840b7362d",
+    "core": "497f00902d670a17067291f4ec376eec9bf0c08dcdf6c5049128248d3c5daa9b",
+    "edge": "95a4e94c3b4bd605280780a335ca4c896488fc2ac9e83547954049d7b50fd2ce",
+    "processor": "c82471f0700928eb712d49f1a0701b63d3d686ed7ad084c3c4824a6f7d9547e3",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "hashes": {
-    "core/worker.js": "f9104066bea5ab39c2ce15d737015bf53a264ac8faead849db53cfee54044c64",
-    "edge/worker.js": "7bdfedb2b268dc9b56fa294e9b11efc295989d8d2c0050d00fa9d30b08d15d53",
-    "processor/worker.js": "6a3236011a2bfb429d13578ac0493e0b1e2434929e17d271a0a3837840b7362d",
+    "core/worker.js": "497f00902d670a17067291f4ec376eec9bf0c08dcdf6c5049128248d3c5daa9b",
+    "edge/worker.js": "95a4e94c3b4bd605280780a335ca4c896488fc2ac9e83547954049d7b50fd2ce",
+    "processor/worker.js": "c82471f0700928eb712d49f1a0701b63d3d686ed7ad084c3c4824a6f7d9547e3",
     "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   }
 }

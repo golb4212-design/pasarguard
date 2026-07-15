@@ -1,11 +1,11 @@
 /* BLUEPANEL_PROCESSOR_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.4
+ * Version: 3.3.5
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = "3.3.4";
+const APP_VERSION = "3.3.5";
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
@@ -655,17 +655,41 @@ async function resolveResellerServiceAgency(env, bot) {
   };
 }
 
+
+const RESELLER_GROWTH_DEFAULTS = Object.freeze({
+  auto_renew_enabled:1,smart_recommendations_enabled:1,upsell_enabled:1,favorite_plan_enabled:1,
+  gift_service_enabled:1,service_health_enabled:1,auto_failover_enabled:0,guarantee_enabled:1,
+  low_balance_alert_enabled:1,low_balance_threshold_toman:200000,low_balance_recharge_amount_toman:500000,
+  reseller_tier:"bronze",reseller_tier_discount_percent:0
+});
+async function getResellerGrowthSettings(env,botId){
+  if(!botId)return{...RESELLER_GROWTH_DEFAULTS};
+  try{
+    const row=await env.PASARGUARD_DB.prepare(`SELECT auto_renew_enabled,smart_recommendations_enabled,upsell_enabled,favorite_plan_enabled,gift_service_enabled,service_health_enabled,auto_failover_enabled,guarantee_enabled,low_balance_alert_enabled,low_balance_threshold_toman,low_balance_recharge_amount_toman,reseller_tier,reseller_tier_discount_percent FROM reseller_growth_settings WHERE bot_id=?`).bind(botId).first();
+    return{...RESELLER_GROWTH_DEFAULTS,...(row||{})};
+  }catch(error){
+    if(/no such table/i.test(String(error?.message||error)))return{...RESELLER_GROWTH_DEFAULTS};
+    throw error;
+  }
+}
+async function ensureResellerGrowthSettingsRow(env,botId){
+  const ts=nowIso();
+  await env.PASARGUARD_DB.prepare(`CREATE TABLE IF NOT EXISTS reseller_growth_settings (bot_id TEXT PRIMARY KEY,auto_renew_enabled INTEGER NOT NULL DEFAULT 1,smart_recommendations_enabled INTEGER NOT NULL DEFAULT 1,upsell_enabled INTEGER NOT NULL DEFAULT 1,favorite_plan_enabled INTEGER NOT NULL DEFAULT 1,gift_service_enabled INTEGER NOT NULL DEFAULT 1,service_health_enabled INTEGER NOT NULL DEFAULT 1,auto_failover_enabled INTEGER NOT NULL DEFAULT 0,guarantee_enabled INTEGER NOT NULL DEFAULT 1,low_balance_alert_enabled INTEGER NOT NULL DEFAULT 1,low_balance_threshold_toman INTEGER NOT NULL DEFAULT 200000,low_balance_recharge_amount_toman INTEGER NOT NULL DEFAULT 500000,reseller_tier TEXT NOT NULL DEFAULT 'bronze',reseller_tier_discount_percent REAL NOT NULL DEFAULT 0,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)`).run();
+  await env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO reseller_growth_settings(bot_id,created_at,updated_at) VALUES(?,?,?)`).bind(botId,ts,ts).run();
+  return getResellerGrowthSettings(env,botId);
+}
+
 async function hydrateResellerBotRelations(env, bot) {
   if (!bot) return null;
-  const relation = await env.PASARGUARD_DB.prepare(`
+  const [relation,growth] = await Promise.all([env.PASARGUARD_DB.prepare(`
     SELECT a.title AS agency_title,a.panel_username,a.panel_password_enc,a.status AS agency_status,a.remote_manager_id,
            u.telegram_id AS owner_telegram_id,u.username AS owner_username,u.first_name AS owner_first_name,
            u.last_name AS owner_last_name,u.wallet_balance AS owner_wallet_balance,
            CASE WHEN a.panel_password_enc IS NULL THEN 0 ELSE 1 END AS agency_has_password
     FROM users u LEFT JOIN agencies a ON a.id=?
     WHERE u.id=?
-  `).bind(bot.agency_id, bot.user_id).first();
-  return { ...bot, ...(relation || {}) };
+  `).bind(bot.agency_id, bot.user_id).first(),getResellerGrowthSettings(env,bot.id)]);
+  return { ...bot, ...RESELLER_GROWTH_DEFAULTS, ...(growth || {}), ...(relation || {}) };
 }
 
 async function getResellerBotById(env, botId) {
@@ -1972,7 +1996,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_PROCESSOR_VERSION='3.3.4';
+const BLUEPANEL_PROCESSOR_VERSION='3.3.5';
 let processorSchemaPromise=null;
 function processorJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 
@@ -2005,18 +2029,20 @@ function resellerTierLabel(tier) {
 }
 
 async function processResellerTiers(env, limit = 100) {
+  await env.PASARGUARD_DB.prepare(`CREATE TABLE IF NOT EXISTS reseller_growth_settings (bot_id TEXT PRIMARY KEY,auto_renew_enabled INTEGER NOT NULL DEFAULT 1,smart_recommendations_enabled INTEGER NOT NULL DEFAULT 1,upsell_enabled INTEGER NOT NULL DEFAULT 1,favorite_plan_enabled INTEGER NOT NULL DEFAULT 1,gift_service_enabled INTEGER NOT NULL DEFAULT 1,service_health_enabled INTEGER NOT NULL DEFAULT 1,auto_failover_enabled INTEGER NOT NULL DEFAULT 0,guarantee_enabled INTEGER NOT NULL DEFAULT 1,low_balance_alert_enabled INTEGER NOT NULL DEFAULT 1,low_balance_threshold_toman INTEGER NOT NULL DEFAULT 200000,low_balance_recharge_amount_toman INTEGER NOT NULL DEFAULT 500000,reseller_tier TEXT NOT NULL DEFAULT 'bronze',reseller_tier_discount_percent REAL NOT NULL DEFAULT 0,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)`).run();
   const rows = await env.PASARGUARD_DB.prepare(`
-    SELECT rb.id,rb.user_id,rb.reseller_tier,rb.bot_token_enc,rb.brand_name,
+    SELECT rb.id,rb.user_id,COALESCE(gs.reseller_tier,'bronze') AS reseller_tier,rb.bot_token_enc,rb.brand_name,
       COALESCE((SELECT SUM(o.amount_toman) FROM sales_orders o
         WHERE o.bot_id=rb.id AND o.status='delivered' AND o.updated_at>=?),0) AS revenue
-    FROM reseller_bots rb WHERE rb.status='active' ORDER BY rb.updated_at ASC LIMIT ?
+    FROM reseller_bots rb LEFT JOIN reseller_growth_settings gs ON gs.bot_id=rb.id WHERE rb.status='active' ORDER BY rb.updated_at ASC LIMIT ?
   `).bind(new Date(Date.now()-90*86400000).toISOString(), Math.max(1,Math.min(300,Number(limit||100)))).all();
   let checked=0,changed=0,failed=0;
   for (const row of rows.results || []) {
     checked++;
     try {
       const next=resellerTierForRevenue(row.revenue), previous=String(row.reseller_tier||"bronze");
-      await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET reseller_tier=?,reseller_tier_discount_percent=?,updated_at=? WHERE id=?")
+      await ensureResellerGrowthSettingsRow(env,row.id);
+      await env.PASARGUARD_DB.prepare("UPDATE reseller_growth_settings SET reseller_tier=?,reseller_tier_discount_percent=?,updated_at=? WHERE bot_id=?")
         .bind(next.tier,next.discount,nowIso(),row.id).run();
       if (previous!==next.tier) {
         changed++;
@@ -2033,12 +2059,14 @@ async function processResellerTiers(env, limit = 100) {
 }
 
 async function processRepresentativeLowBalance(env, limit = 60) {
+  await env.PASARGUARD_DB.prepare(`CREATE TABLE IF NOT EXISTS reseller_growth_settings (bot_id TEXT PRIMARY KEY,auto_renew_enabled INTEGER NOT NULL DEFAULT 1,smart_recommendations_enabled INTEGER NOT NULL DEFAULT 1,upsell_enabled INTEGER NOT NULL DEFAULT 1,favorite_plan_enabled INTEGER NOT NULL DEFAULT 1,gift_service_enabled INTEGER NOT NULL DEFAULT 1,service_health_enabled INTEGER NOT NULL DEFAULT 1,auto_failover_enabled INTEGER NOT NULL DEFAULT 0,guarantee_enabled INTEGER NOT NULL DEFAULT 1,low_balance_alert_enabled INTEGER NOT NULL DEFAULT 1,low_balance_threshold_toman INTEGER NOT NULL DEFAULT 200000,low_balance_recharge_amount_toman INTEGER NOT NULL DEFAULT 500000,reseller_tier TEXT NOT NULL DEFAULT 'bronze',reseller_tier_discount_percent REAL NOT NULL DEFAULT 0,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)`).run();
   const rows=await env.PASARGUARD_DB.prepare(`
-    SELECT rb.id AS bot_id,rb.user_id,rb.brand_name,rb.low_balance_threshold_toman,rb.low_balance_recharge_amount_toman,
+    SELECT rb.id AS bot_id,rb.user_id,rb.brand_name,COALESCE(gs.low_balance_threshold_toman,200000) AS low_balance_threshold_toman,COALESCE(gs.low_balance_recharge_amount_toman,500000) AS low_balance_recharge_amount_toman,
            u.telegram_id,u.wallet_balance
     FROM reseller_bots rb JOIN users u ON u.id=rb.user_id
-    WHERE rb.status='active' AND COALESCE(rb.low_balance_alert_enabled,1)=1
-      AND u.wallet_balance<=COALESCE(rb.low_balance_threshold_toman,200000)
+    LEFT JOIN reseller_growth_settings gs ON gs.bot_id=rb.id
+    WHERE rb.status='active' AND COALESCE(gs.low_balance_alert_enabled,1)=1
+      AND u.wallet_balance<=COALESCE(gs.low_balance_threshold_toman,200000)
     ORDER BY u.wallet_balance ASC LIMIT ?
   `).bind(Math.max(1,Math.min(200,Number(limit||60)))).all();
   let checked=0,notified=0,failed=0;
@@ -2059,16 +2087,18 @@ async function processRepresentativeLowBalance(env, limit = 60) {
 }
 
 async function processAutoRenewals(env, limit = 30) {
+  await env.PASARGUARD_DB.prepare(`CREATE TABLE IF NOT EXISTS reseller_growth_settings (bot_id TEXT PRIMARY KEY,auto_renew_enabled INTEGER NOT NULL DEFAULT 1,smart_recommendations_enabled INTEGER NOT NULL DEFAULT 1,upsell_enabled INTEGER NOT NULL DEFAULT 1,favorite_plan_enabled INTEGER NOT NULL DEFAULT 1,gift_service_enabled INTEGER NOT NULL DEFAULT 1,service_health_enabled INTEGER NOT NULL DEFAULT 1,auto_failover_enabled INTEGER NOT NULL DEFAULT 0,guarantee_enabled INTEGER NOT NULL DEFAULT 1,low_balance_alert_enabled INTEGER NOT NULL DEFAULT 1,low_balance_threshold_toman INTEGER NOT NULL DEFAULT 200000,low_balance_recharge_amount_toman INTEGER NOT NULL DEFAULT 500000,reseller_tier TEXT NOT NULL DEFAULT 'bronze',reseller_tier_discount_percent REAL NOT NULL DEFAULT 0,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)`).run();
   const dueAt=new Date(Date.now()+7*86400000).toISOString();
   const rows=await env.PASARGUARD_DB.prepare(`
     SELECT pref.*,o.remote_expire,o.remote_status,o.id AS service_order_id,o.remote_username AS service_username,
            c.wallet_balance,c.telegram_id,c.discount_percent,c.loyalty_discount_percent,
-           rb.user_id AS owner_user_id,rb.auto_renew_enabled AS bot_auto_renew_enabled
+           rb.user_id AS owner_user_id,COALESCE(gs.auto_renew_enabled,1) AS bot_auto_renew_enabled
     FROM sales_service_preferences pref
     JOIN sales_orders o ON o.id=pref.root_order_id AND o.status='delivered'
     JOIN sales_customers c ON c.id=pref.customer_id
     JOIN reseller_bots rb ON rb.id=pref.bot_id
-    WHERE pref.auto_renew_enabled=1 AND COALESCE(rb.auto_renew_enabled,1)=1
+    LEFT JOIN reseller_growth_settings gs ON gs.bot_id=rb.id
+    WHERE pref.auto_renew_enabled=1 AND COALESCE(gs.auto_renew_enabled,1)=1
       AND o.remote_expire IS NOT NULL AND o.remote_expire<>'' AND o.remote_expire<=?
       AND o.remote_status NOT IN ('disabled','deleted')
     ORDER BY o.remote_expire ASC LIMIT ?
@@ -2161,18 +2191,20 @@ async function tryServiceFailover(env, row, consecutiveFailures) {
 }
 
 async function processServiceHealthAndFailover(env, limit = 40) {
+  await env.PASARGUARD_DB.prepare(`CREATE TABLE IF NOT EXISTS reseller_growth_settings (bot_id TEXT PRIMARY KEY,auto_renew_enabled INTEGER NOT NULL DEFAULT 1,smart_recommendations_enabled INTEGER NOT NULL DEFAULT 1,upsell_enabled INTEGER NOT NULL DEFAULT 1,favorite_plan_enabled INTEGER NOT NULL DEFAULT 1,gift_service_enabled INTEGER NOT NULL DEFAULT 1,service_health_enabled INTEGER NOT NULL DEFAULT 1,auto_failover_enabled INTEGER NOT NULL DEFAULT 0,guarantee_enabled INTEGER NOT NULL DEFAULT 1,low_balance_alert_enabled INTEGER NOT NULL DEFAULT 1,low_balance_threshold_toman INTEGER NOT NULL DEFAULT 200000,low_balance_recharge_amount_toman INTEGER NOT NULL DEFAULT 500000,reseller_tier TEXT NOT NULL DEFAULT 'bronze',reseller_tier_discount_percent REAL NOT NULL DEFAULT 0,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)`).run();
   const cutoff=new Date(Date.now()-30*60000).toISOString();
   const rows=await env.PASARGUARD_DB.prepare(`
     SELECT pref.*,o.remote_expire,o.remote_status,p.location_id AS from_location_id,
-      rb.service_health_enabled,rb.auto_failover_enabled,rb.user_id AS owner_user_id,
+      COALESCE(gs.service_health_enabled,1) AS service_health_enabled,COALESCE(gs.auto_failover_enabled,0) AS auto_failover_enabled,rb.user_id AS owner_user_id,
       a.id AS agency_id,a.panel_username,a.panel_password_enc
     FROM sales_service_preferences pref
     JOIN sales_orders o ON o.id=pref.root_order_id AND o.status='delivered'
     JOIN sales_plans p ON p.id=o.plan_id
     JOIN reseller_bots rb ON rb.id=pref.bot_id
+    LEFT JOIN reseller_growth_settings gs ON gs.bot_id=rb.id
     LEFT JOIN reseller_bots parent_rb ON parent_rb.id=rb.parent_bot_id
     JOIN agencies a ON a.id=CASE WHEN rb.parent_bot_id IS NOT NULL THEN parent_rb.agency_id ELSE rb.agency_id END
-    WHERE pref.health_monitor_enabled=1 AND COALESCE(rb.service_health_enabled,1)=1
+    WHERE pref.health_monitor_enabled=1 AND COALESCE(gs.service_health_enabled,1)=1
       AND COALESCE(pref.last_health_at,'')<?
     ORDER BY COALESCE(pref.last_health_at,pref.created_at) ASC LIMIT ?
   `).bind(cutoff,Math.max(1,Math.min(120,Number(limit||40)))).all();

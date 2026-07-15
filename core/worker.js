@@ -1,15 +1,25 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.4
+ * Version: 3.3.5
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.3.4";
+const APP_VERSION = "3.3.5";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.5": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🧯", text: "رفع کامل خطای D1 too many columns با انتقال تنظیمات رشد از جدول اصلی نمایندگان به جدول جداگانه" },
+      { emoji: "🗄", text: "مهاجرت خودکار و سازگار با دیتابیس‌های نیمه‌مهاجرت‌شده بدون نیاز به SQL دستی" },
+      { emoji: "🚑", text: "خروج ربات مرکزی از CORE_RECOVERY_MODE و بازگشت پایدار ورود مینی‌اپ و Webhook" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "✅", text: "بازگشت پنل نماینده، امکانات رشد، تمدید خودکار و هشدار موجودی بدون افزایش ستون‌های جدول اصلی" }
+    ])
+  }),
   "3.3.4": Object.freeze({
     central: Object.freeze([
       { emoji: "🛟", text: "بازیابی اضطراری Webhook و جلوگیری از ازکارافتادن ربات هنگام خطای آپدیت یا D1" },
@@ -233,7 +243,7 @@ let schemaReadyPromise = null;
 
 // Persistent schema marker: avoids replaying the full D1 migration sweep whenever
 // Cloudflare starts a fresh isolate after an idle period.
-const DB_SCHEMA_REVISION = "3.3.3";
+const DB_SCHEMA_REVISION = "3.3.5";
 
 let settingsCache = null;
 
@@ -799,6 +809,21 @@ CREATE TABLE IF NOT EXISTS reseller_bots (
   payment_wallet_enabled INTEGER NOT NULL DEFAULT 1,
   payment_method_order TEXT NOT NULL DEFAULT 'card,blupal,wallet',
   payment_default_method TEXT NOT NULL DEFAULT 'card',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(user_id) REFERENCES users(id),
+  FOREIGN KEY(agency_id) REFERENCES agencies(id),
+  FOREIGN KEY(parent_bot_id) REFERENCES reseller_bots(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reseller_bots_status ON reseller_bots(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reseller_bots_agency ON reseller_bots(agency_id);
+CREATE INDEX IF NOT EXISTS idx_reseller_bots_parent ON reseller_bots(parent_bot_id,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reseller_bots_license_type ON reseller_bots(license_type,purchase_source,status);
+
+
+CREATE TABLE IF NOT EXISTS reseller_growth_settings (
+  bot_id TEXT PRIMARY KEY,
   auto_renew_enabled INTEGER NOT NULL DEFAULT 1,
   smart_recommendations_enabled INTEGER NOT NULL DEFAULT 1,
   upsell_enabled INTEGER NOT NULL DEFAULT 1,
@@ -814,15 +839,10 @@ CREATE TABLE IF NOT EXISTS reseller_bots (
   reseller_tier_discount_percent REAL NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  FOREIGN KEY(user_id) REFERENCES users(id),
-  FOREIGN KEY(agency_id) REFERENCES agencies(id),
-  FOREIGN KEY(parent_bot_id) REFERENCES reseller_bots(id)
+  FOREIGN KEY(bot_id) REFERENCES reseller_bots(id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_reseller_bots_status ON reseller_bots(status, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_reseller_bots_agency ON reseller_bots(agency_id);
-CREATE INDEX IF NOT EXISTS idx_reseller_bots_parent ON reseller_bots(parent_bot_id,created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_reseller_bots_license_type ON reseller_bots(license_type,purchase_source,status);
+CREATE INDEX IF NOT EXISTS idx_reseller_growth_tier ON reseller_growth_settings(reseller_tier,reseller_tier_discount_percent);
 
 CREATE TABLE IF NOT EXISTS reseller_plisio_configs (
   bot_id TEXT PRIMARY KEY,
@@ -1696,10 +1716,10 @@ async function ensureDbInternal(env) {
         WHERE type='table' AND name IN (
           'sales_service_preferences','sales_gifts','sales_service_health',
           'sales_failover_jobs','sales_guarantee_claims','reseller_tier_history',
-          'auto_recharge_alerts','system_error_center','repair_runs','release_rollouts'
+          'auto_recharge_alerts','system_error_center','repair_runs','release_rollouts','reseller_growth_settings'
         )
       `).first();
-      if (Number(criticalTables?.c || 0) === 10) {
+      if (Number(criticalTables?.c || 0) === 11) {
         schemaReady = true;
         return;
       }
@@ -1823,19 +1843,6 @@ async function ensureDbInternal(env) {
       ["payment_wallet_enabled", "INTEGER NOT NULL DEFAULT 1"],
       ["payment_method_order", "TEXT NOT NULL DEFAULT 'card,blupal,wallet'"],
       ["payment_default_method", "TEXT NOT NULL DEFAULT 'card'"],
-      ["auto_renew_enabled", "INTEGER NOT NULL DEFAULT 1"],
-      ["smart_recommendations_enabled", "INTEGER NOT NULL DEFAULT 1"],
-      ["upsell_enabled", "INTEGER NOT NULL DEFAULT 1"],
-      ["favorite_plan_enabled", "INTEGER NOT NULL DEFAULT 1"],
-      ["gift_service_enabled", "INTEGER NOT NULL DEFAULT 1"],
-      ["service_health_enabled", "INTEGER NOT NULL DEFAULT 1"],
-      ["auto_failover_enabled", "INTEGER NOT NULL DEFAULT 0"],
-      ["guarantee_enabled", "INTEGER NOT NULL DEFAULT 1"],
-      ["low_balance_alert_enabled", "INTEGER NOT NULL DEFAULT 1"],
-      ["low_balance_threshold_toman", "INTEGER NOT NULL DEFAULT 200000"],
-      ["low_balance_recharge_amount_toman", "INTEGER NOT NULL DEFAULT 500000"],
-      ["reseller_tier", "TEXT NOT NULL DEFAULT 'bronze'"],
-      ["reseller_tier_discount_percent", "REAL NOT NULL DEFAULT 0"]
     ],
     reseller_usage_events: [
       ["parent_bot_id", "TEXT"],
@@ -1936,6 +1943,34 @@ async function ensureDbInternal(env) {
         names.add(column);
       }
     }
+  }
+
+  // BluePanel 3.3 originally added 13 optional feature columns to reseller_bots.
+  // Older D1 databases are already close to the SQLite column ceiling and may
+  // have stopped midway with "too many columns on sqlite_altertab_reseller_bots".
+  // Keep the legacy table narrow and store all new growth settings here instead.
+  const growthTs = nowIso();
+  await env.PASARGUARD_DB.prepare(`
+    INSERT OR IGNORE INTO reseller_growth_settings(bot_id,created_at,updated_at)
+    SELECT id,COALESCE(created_at,?),COALESCE(updated_at,?) FROM reseller_bots
+  `).bind(growthTs,growthTs).run();
+
+  // A failed 3.3.0 migration may already have added one or two of the old
+  // columns. Copy those values once without requiring any of the remaining
+  // columns to exist. The legacy columns are intentionally left untouched.
+  const resellerBotInfoForGrowth = await env.PASARGUARD_DB.prepare("PRAGMA table_info(reseller_bots)").all();
+  const resellerBotGrowthNames = new Set((resellerBotInfoForGrowth.results || []).map(row => String(row.name)));
+  const growthSettingColumns = [
+    "auto_renew_enabled","smart_recommendations_enabled","upsell_enabled","favorite_plan_enabled",
+    "gift_service_enabled","service_health_enabled","auto_failover_enabled","guarantee_enabled",
+    "low_balance_alert_enabled","low_balance_threshold_toman","low_balance_recharge_amount_toman",
+    "reseller_tier","reseller_tier_discount_percent"
+  ];
+  for (const column of growthSettingColumns) {
+    if (!resellerBotGrowthNames.has(column)) continue;
+    await env.PASARGUARD_DB.prepare(
+      "UPDATE reseller_growth_settings SET " + column + "=COALESCE((SELECT rb." + column + " FROM reseller_bots rb WHERE rb.id=reseller_growth_settings.bot_id)," + column + "),updated_at=?"
+    ).bind(growthTs).run();
   }
 
   // Explicitly verify the columns used by the new indexes before creating any
@@ -4056,7 +4091,7 @@ async function agencyTierDiscount(env, userId) {
   const cached=resellerTierDiscountCache.get(key);
   if(cached&&Date.now()-cached.at<300000)return cached.value;
   let value=0;
-  try{const tier=await env.PASARGUARD_DB.prepare("SELECT MAX(COALESCE(reseller_tier_discount_percent,0)) AS discount FROM reseller_bots WHERE user_id=? AND status='active'").bind(userId).first();value=Math.max(0,Math.min(30,Number(tier?.discount||0)));}catch(_){}
+  try{const tier=await env.PASARGUARD_DB.prepare("SELECT MAX(COALESCE(gs.reseller_tier_discount_percent,0)) AS discount FROM reseller_bots rb LEFT JOIN reseller_growth_settings gs ON gs.bot_id=rb.id WHERE rb.user_id=? AND rb.status='active'").bind(userId).first();value=Math.max(0,Math.min(30,Number(tier?.discount||0)));}catch(_){}
   resellerTierDiscountCache.set(key,{value,at:Date.now()});
   if(resellerTierDiscountCache.size>500)resellerTierDiscountCache.delete(resellerTierDiscountCache.keys().next().value);
   return value;
@@ -8707,7 +8742,7 @@ async function getResellerCubepayConfig(env,botId){if(!botId)return{...RESELLER_
 
 async function hydrateResellerBotRelations(env, bot) {
   if (!bot) return null;
-  const [relation,plisio,cubepay] = await Promise.all([
+  const [relation,plisio,cubepay,growth] = await Promise.all([
     env.PASARGUARD_DB.prepare(`
     SELECT a.title AS agency_title,a.panel_username,a.panel_password_enc,a.status AS agency_status,a.remote_manager_id,
            u.telegram_id AS owner_telegram_id,u.username AS owner_username,u.first_name AS owner_first_name,
@@ -8715,9 +8750,33 @@ async function hydrateResellerBotRelations(env, bot) {
            CASE WHEN a.panel_password_enc IS NULL THEN 0 ELSE 1 END AS agency_has_password
     FROM users u LEFT JOIN agencies a ON a.id=?
     WHERE u.id=?
-  `).bind(bot.agency_id, bot.user_id).first(),getResellerPlisioConfig(env,bot.id),getResellerCubepayConfig(env,bot.id)]);
-  return { ...bot,...RESELLER_PLISIO_DEFAULTS,...RESELLER_CUBEPAY_DEFAULTS,...(plisio||{}),...(cubepay||{}), ...(relation || {}) };
+  `).bind(bot.agency_id, bot.user_id).first(),getResellerPlisioConfig(env,bot.id),getResellerCubepayConfig(env,bot.id),getResellerGrowthSettings(env,bot.id)]);
+  return { ...bot,...RESELLER_PLISIO_DEFAULTS,...RESELLER_CUBEPAY_DEFAULTS,...RESELLER_GROWTH_DEFAULTS,...(plisio||{}),...(cubepay||{}),...(growth||{}), ...(relation || {}) };
 }
+const RESELLER_GROWTH_DEFAULTS = Object.freeze({
+  auto_renew_enabled:1,smart_recommendations_enabled:1,upsell_enabled:1,favorite_plan_enabled:1,
+  gift_service_enabled:1,service_health_enabled:1,auto_failover_enabled:0,guarantee_enabled:1,
+  low_balance_alert_enabled:1,low_balance_threshold_toman:200000,low_balance_recharge_amount_toman:500000,
+  reseller_tier:"bronze",reseller_tier_discount_percent:0
+});
+async function getResellerGrowthSettings(env,botId){
+  if(!botId)return{...RESELLER_GROWTH_DEFAULTS};
+  try{
+    const row=await env.PASARGUARD_DB.prepare(`SELECT auto_renew_enabled,smart_recommendations_enabled,upsell_enabled,favorite_plan_enabled,gift_service_enabled,service_health_enabled,auto_failover_enabled,guarantee_enabled,low_balance_alert_enabled,low_balance_threshold_toman,low_balance_recharge_amount_toman,reseller_tier,reseller_tier_discount_percent FROM reseller_growth_settings WHERE bot_id=?`).bind(botId).first();
+    return{...RESELLER_GROWTH_DEFAULTS,...(row||{})};
+  }catch(error){
+    if(/no such table/i.test(String(error?.message||error)))return{...RESELLER_GROWTH_DEFAULTS};
+    throw error;
+  }
+}
+async function ensureResellerGrowthSettingsRow(env,botId){
+  const ts=nowIso();
+  await env.PASARGUARD_DB.prepare(`CREATE TABLE IF NOT EXISTS reseller_growth_settings (bot_id TEXT PRIMARY KEY,auto_renew_enabled INTEGER NOT NULL DEFAULT 1,smart_recommendations_enabled INTEGER NOT NULL DEFAULT 1,upsell_enabled INTEGER NOT NULL DEFAULT 1,favorite_plan_enabled INTEGER NOT NULL DEFAULT 1,gift_service_enabled INTEGER NOT NULL DEFAULT 1,service_health_enabled INTEGER NOT NULL DEFAULT 1,auto_failover_enabled INTEGER NOT NULL DEFAULT 0,guarantee_enabled INTEGER NOT NULL DEFAULT 1,low_balance_alert_enabled INTEGER NOT NULL DEFAULT 1,low_balance_threshold_toman INTEGER NOT NULL DEFAULT 200000,low_balance_recharge_amount_toman INTEGER NOT NULL DEFAULT 500000,reseller_tier TEXT NOT NULL DEFAULT 'bronze',reseller_tier_discount_percent REAL NOT NULL DEFAULT 0,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)`).run();
+  await env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO reseller_growth_settings(bot_id,created_at,updated_at) VALUES(?,?,?)`).bind(botId,ts,ts).run();
+  return getResellerGrowthSettings(env,botId);
+}
+
+
 
 async function getResellerBotForUser(env, userId) {
   let bot = await env.PASARGUARD_DB.prepare("SELECT * FROM reseller_bots WHERE user_id=? LIMIT 1").bind(userId).first();
@@ -12601,6 +12660,7 @@ async function botHandleSessionMessage(env, account, message, session, origin, c
     ]);
     if (!Number(createResults?.[0]?.meta?.changes || 0)) throw new Error("موجودی حساب هنگام ساخت ربات کافی نیست یا تغییر کرده است");
     const bot = await getResellerBotForUser(env, account.user.id);
+    await ensureResellerGrowthSettingsRow(env,bot.id);
     await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET bot_version=?,miniapp_enabled=1,updated_at=? WHERE id=?")
       .bind(RESELLER_BOT_VERSION, nowIso(), bot.id).run();
     bot.bot_version = RESELLER_BOT_VERSION;
@@ -14026,7 +14086,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.3.3';
+const BLUEPANEL_CORE_VERSION = '3.3.5';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {

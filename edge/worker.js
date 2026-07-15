@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.4
+ * Version: 3.3.5
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = "3.3.4";
+const APP_VERSION = "3.3.5";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -1521,6 +1521,30 @@ async function getResellerCubepayConfig(env, botId) {
     throw error;
   }
 }
+const RESELLER_GROWTH_DEFAULTS = Object.freeze({
+  auto_renew_enabled:1,smart_recommendations_enabled:1,upsell_enabled:1,favorite_plan_enabled:1,
+  gift_service_enabled:1,service_health_enabled:1,auto_failover_enabled:0,guarantee_enabled:1,
+  low_balance_alert_enabled:1,low_balance_threshold_toman:200000,low_balance_recharge_amount_toman:500000,
+  reseller_tier:"bronze",reseller_tier_discount_percent:0
+});
+async function getResellerGrowthSettings(env,botId){
+  if(!botId)return{...RESELLER_GROWTH_DEFAULTS};
+  try{
+    const row=await env.PASARGUARD_DB.prepare(`SELECT auto_renew_enabled,smart_recommendations_enabled,upsell_enabled,favorite_plan_enabled,gift_service_enabled,service_health_enabled,auto_failover_enabled,guarantee_enabled,low_balance_alert_enabled,low_balance_threshold_toman,low_balance_recharge_amount_toman,reseller_tier,reseller_tier_discount_percent FROM reseller_growth_settings WHERE bot_id=?`).bind(botId).first();
+    return{...RESELLER_GROWTH_DEFAULTS,...(row||{})};
+  }catch(error){
+    if(/no such table/i.test(String(error?.message||error)))return{...RESELLER_GROWTH_DEFAULTS};
+    throw error;
+  }
+}
+async function ensureResellerGrowthSettingsRow(env,botId){
+  const ts=nowIso();
+  await env.PASARGUARD_DB.prepare(`CREATE TABLE IF NOT EXISTS reseller_growth_settings (bot_id TEXT PRIMARY KEY,auto_renew_enabled INTEGER NOT NULL DEFAULT 1,smart_recommendations_enabled INTEGER NOT NULL DEFAULT 1,upsell_enabled INTEGER NOT NULL DEFAULT 1,favorite_plan_enabled INTEGER NOT NULL DEFAULT 1,gift_service_enabled INTEGER NOT NULL DEFAULT 1,service_health_enabled INTEGER NOT NULL DEFAULT 1,auto_failover_enabled INTEGER NOT NULL DEFAULT 0,guarantee_enabled INTEGER NOT NULL DEFAULT 1,low_balance_alert_enabled INTEGER NOT NULL DEFAULT 1,low_balance_threshold_toman INTEGER NOT NULL DEFAULT 200000,low_balance_recharge_amount_toman INTEGER NOT NULL DEFAULT 500000,reseller_tier TEXT NOT NULL DEFAULT 'bronze',reseller_tier_discount_percent REAL NOT NULL DEFAULT 0,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)`).run();
+  await env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO reseller_growth_settings(bot_id,created_at,updated_at) VALUES(?,?,?)`).bind(botId,ts,ts).run();
+  return getResellerGrowthSettings(env,botId);
+}
+
+
 
 async function saveResellerCubepayConfig(env, botId, changes = {}) {
   const current = await getResellerCubepayConfig(env, botId);
@@ -1552,7 +1576,7 @@ async function saveResellerCubepayConfig(env, botId, changes = {}) {
 
 async function hydrateResellerBotRelations(env, bot) {
   if (!bot) return null;
-  const [relation, plisio, cubepay] = await Promise.all([
+  const [relation, plisio, cubepay, growth] = await Promise.all([
     env.PASARGUARD_DB.prepare(`
       SELECT a.title AS agency_title,a.panel_username,a.panel_password_enc,a.status AS agency_status,a.remote_manager_id,
              u.telegram_id AS owner_telegram_id,u.username AS owner_username,u.first_name AS owner_first_name,
@@ -1562,9 +1586,10 @@ async function hydrateResellerBotRelations(env, bot) {
       WHERE u.id=?
     `).bind(bot.agency_id, bot.user_id).first(),
     getResellerPlisioConfig(env, bot.id),
-    getResellerCubepayConfig(env, bot.id)
+    getResellerCubepayConfig(env, bot.id),
+    getResellerGrowthSettings(env, bot.id)
   ]);
-  return { ...bot, ...RESELLER_PLISIO_DEFAULTS, ...RESELLER_CUBEPAY_DEFAULTS, ...(plisio || {}), ...(cubepay || {}), ...(relation || {}) };
+  return { ...bot, ...RESELLER_PLISIO_DEFAULTS, ...RESELLER_CUBEPAY_DEFAULTS, ...RESELLER_GROWTH_DEFAULTS, ...(plisio || {}), ...(cubepay || {}), ...(growth || {}), ...(relation || {}) };
 }
 
 async function getResellerBotForUser(env, userId) {
@@ -5651,12 +5676,21 @@ async function restoreResellerSnapshot(env, bot, account, snapshotId) {
   let payload;
   try { payload = JSON.parse(row.payload_json || "{}"); } catch (_) { throw new Error("محتوای نسخه پشتیبان معتبر نیست"); }
   const settings = payload.settings && typeof payload.settings === "object" ? payload.settings : {};
-  const keys = RESELLER_BACKUP_FIELDS.filter(key => Object.prototype.hasOwnProperty.call(settings, key));
+  const growthKeys = ["auto_renew_enabled","smart_recommendations_enabled","upsell_enabled","favorite_plan_enabled","gift_service_enabled","service_health_enabled","auto_failover_enabled","guarantee_enabled","low_balance_alert_enabled","low_balance_threshold_toman","low_balance_recharge_amount_toman","reseller_tier","reseller_tier_discount_percent"];
+  const keys = RESELLER_BACKUP_FIELDS.filter(key => Object.prototype.hasOwnProperty.call(settings, key) && !growthKeys.includes(key));
   if (keys.length) {
     const assignments = keys.map(key => key + "=?").join(",");
     const values = keys.map(key => settings[key]);
     await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET " + assignments + ",updated_at=? WHERE id=?")
       .bind(...values, nowIso(), bot.id).run();
+  }
+  const growthRestoreKeys=growthKeys.filter(key=>Object.prototype.hasOwnProperty.call(settings,key));
+  if(growthRestoreKeys.length){
+    await ensureResellerGrowthSettingsRow(env,bot.id);
+    const assignments=growthRestoreKeys.map(key=>key+"=?").join(",");
+    const values=growthRestoreKeys.map(key=>settings[key]);
+    await env.PASARGUARD_DB.prepare("UPDATE reseller_growth_settings SET "+assignments+",updated_at=? WHERE bot_id=?")
+      .bind(...values,nowIso(),bot.id).run();
   }
   for (const x of Array.isArray(payload.locations) ? payload.locations : []) {
     await env.PASARGUARD_DB.prepare(`INSERT INTO sales_locations(id,bot_id,title,emoji,description,group_ids_json,status,sort_order,created_at,updated_at)
@@ -6327,21 +6361,26 @@ async function resellerOwnerHandleCallback(env, bot, callback) {
     const key=data.slice("owner:growth:toggle:".length);
     const allowed=["auto_renew_enabled","smart_recommendations_enabled","upsell_enabled","favorite_plan_enabled","gift_service_enabled","service_health_enabled","auto_failover_enabled","guarantee_enabled"];
     if(!allowed.includes(key))throw new Error("قابلیت معتبر نیست");
-    await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET "+key+"=CASE WHEN COALESCE("+key+",1)=1 THEN 0 ELSE 1 END,updated_at=? WHERE id=?").bind(nowIso(),bot.id).run();
+    await ensureResellerGrowthSettingsRow(env,bot.id);
+    const fallback=key==="auto_failover_enabled"?0:1;
+    await env.PASARGUARD_DB.prepare("UPDATE reseller_growth_settings SET "+key+"=CASE WHEN COALESCE("+key+","+fallback+")=1 THEN 0 ELSE 1 END,updated_at=? WHERE bot_id=?").bind(nowIso(),bot.id).run();
     return resellerOwnerSendOrEdit(env,await getResellerBotById(env,bot.id),target,"growth");
   }
   if (data === "owner:growth:low") {
-    await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET low_balance_alert_enabled=CASE WHEN COALESCE(low_balance_alert_enabled,1)=1 THEN 0 ELSE 1 END,updated_at=? WHERE id=?").bind(nowIso(),bot.id).run();
+    await ensureResellerGrowthSettingsRow(env,bot.id);
+    await env.PASARGUARD_DB.prepare("UPDATE reseller_growth_settings SET low_balance_alert_enabled=CASE WHEN COALESCE(low_balance_alert_enabled,1)=1 THEN 0 ELSE 1 END,updated_at=? WHERE bot_id=?").bind(nowIso(),bot.id).run();
     return resellerOwnerSendOrEdit(env,await getResellerBotById(env,bot.id),target,"growth");
   }
   if (data === "owner:growth:threshold") {
     const fresh=await getResellerBotById(env,bot.id),values=[50000,100000,200000,500000,1000000],current=Number(fresh.low_balance_threshold_toman||200000),idx=values.indexOf(current),next=values[(idx+1+values.length)%values.length];
-    await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET low_balance_threshold_toman=?,updated_at=? WHERE id=?").bind(next,nowIso(),bot.id).run();
+    await ensureResellerGrowthSettingsRow(env,bot.id);
+    await env.PASARGUARD_DB.prepare("UPDATE reseller_growth_settings SET low_balance_threshold_toman=?,updated_at=? WHERE bot_id=?").bind(next,nowIso(),bot.id).run();
     return resellerOwnerSendOrEdit(env,await getResellerBotById(env,bot.id),target,"growth");
   }
   if (data === "owner:growth:amount") {
     const fresh=await getResellerBotById(env,bot.id),values=[200000,500000,1000000,2000000,5000000],current=Number(fresh.low_balance_recharge_amount_toman||500000),idx=values.indexOf(current),next=values[(idx+1+values.length)%values.length];
-    await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET low_balance_recharge_amount_toman=?,updated_at=? WHERE id=?").bind(next,nowIso(),bot.id).run();
+    await ensureResellerGrowthSettingsRow(env,bot.id);
+    await env.PASARGUARD_DB.prepare("UPDATE reseller_growth_settings SET low_balance_recharge_amount_toman=?,updated_at=? WHERE bot_id=?").bind(next,nowIso(),bot.id).run();
     return resellerOwnerSendOrEdit(env,await getResellerBotById(env,bot.id),target,"growth");
   }
   if (data === "owner:growth:repair") {
@@ -10958,7 +10997,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_EDGE_VERSION='3.3.4';
+const BLUEPANEL_EDGE_VERSION='3.3.5';
 function bluePanelEdgeJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function bluePanelEdgeInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
 function bluePanelEdgeRuntimeBinding(env,name){const value=env?.[name];return{name,exact_key_present:Object.prototype.hasOwnProperty.call(env||{},name),value_present:value!==undefined&&value!==null,fetch_callable:Boolean(value&&typeof value.fetch==='function'),constructor_name:value?.constructor?.name||''}}
