@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.1.6
+ * Version: 3.1.8
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = "3.1.6";
+const APP_VERSION = "3.1.8";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -50,6 +50,7 @@ const CENTRAL_REPORT_TOPICS = Object.freeze([
   { key: "orders", title: "🛍 گزارش‌های خرید", color: 16766590 },
   { key: "payments", title: "💰 گزارش مالی", color: 16478047 },
   { key: "service_purchases", title: "📌 گزارش خرید خدمات", color: 7322096 },
+  { key: "service_imports", title: "🔗 اتصال سرویس‌های قبلی", color: 9367192 },
   { key: "trial_accounts", title: "🔑 گزارش اکانت تست", color: 13338331 },
   { key: "announcements", title: "📝 گزارش اطلاع‌رسانی‌ها", color: 9367192 },
   { key: "commissions", title: "🎁 گزارش پورسانت‌ها", color: 16766590 },
@@ -67,6 +68,7 @@ const RESELLER_REPORT_TOPICS = Object.freeze([
   { key: "orders", title: "🛍 گزارش‌های خرید", color: 16766590 },
   { key: "payments", title: "💰 گزارش مالی", color: 16478047 },
   { key: "service_purchases", title: "📌 گزارش خرید خدمات", color: 7322096 },
+  { key: "service_imports", title: "🔗 اتصال سرویس‌های قبلی", color: 9367192 },
   { key: "trial_accounts", title: "🔑 گزارش اکانت تست", color: 13338331 },
   { key: "announcements", title: "📝 گزارش اطلاع‌رسانی‌ها", color: 9367192 },
   { key: "commissions", title: "🎁 گزارش پورسانت‌ها", color: 16766590 },
@@ -105,7 +107,7 @@ const SALES_TEXT_DEFAULTS = Object.freeze({
   trial: "این سرویس فقط برای تست کیفیت ارائه شده است.",
   referral: "لینک اختصاصی خود را برای دوستانتان ارسال کنید و از خرید موفق آن‌ها پورسانت بگیرید.",
   support: "برای ارتباط با پشتیبانی از دکمه پشتیبانی استفاده کنید.",
-  faq: "• بعد از خرید، لینک اشتراک و QR در بخش سرویس‌های من قرار می‌گیرد.\n• تمدید از روی همان سرویس انجام می‌شود.\n• رسیدهای کارت‌به‌کارت پس از بررسی نماینده تأیید می‌شوند.",
+  faq: "• بعد از خرید، لینک اشتراک و QR در بخش سرویس‌های من قرار می‌گیرد.\n• سرویس قدیمی را با دستور /import یا دکمه افزودن سرویس قبلی ثبت کنید.\n• تمدید از روی همان سرویس انجام می‌شود.\n• رسیدهای کارت‌به‌کارت پس از بررسی نماینده تأیید می‌شوند.",
   tutorial_android: "برنامه سازگار را نصب کنید، لینک اشتراک را کپی کنید و از بخش Import from Clipboard وارد نمایید.",
   tutorial_ios: "برنامه سازگار را نصب کنید، لینک اشتراک را کپی کرده و از بخش افزودن Subscription وارد نمایید.",
   tutorial_windows: "برنامه سازگار ویندوز را اجرا کنید، لینک اشتراک را از Clipboard وارد و اتصال را فعال کنید."
@@ -1069,6 +1071,9 @@ function reportTopicDefinition(scopeType, topicKey) {
   const aliases = Object.freeze({
     services: "service_purchases",
     service: "service_purchases",
+    imports: "service_imports",
+    legacy: "service_imports",
+    subscription_import: "service_imports",
     security: "errors",
     error: "errors",
     trials: "trial_accounts",
@@ -1138,17 +1143,23 @@ async function triggerProcessorFromEdge(env,source="edge"){
   if(!env?.PROCESSOR_WORKER||typeof env.PROCESSOR_WORKER.fetch!=="function")return{success:false,error:"PROCESSOR_WORKER متصل نیست"};
   try{const r=await env.PROCESSOR_WORKER.fetch(new Request("https://bluepanel-processor.internal/__bluepanel/service/process",{method:"POST",headers:{"content-type":"application/json","x-bluepanel-service-hop":"edge-to-processor","x-bluepanel-process-source":cleanText(source,80)},body:"{}"}));const data=await r.json().catch(()=>({}));return r.ok&&data?.success!==false?{success:true,...data}:{success:false,error:data?.error||("Processor HTTP "+r.status)};}catch(error){return{success:false,error:String(error?.message||error)};}
 }
+async function triggerCoreReportFlushFromEdge(env,source="edge"){
+  if(!env?.CORE_WORKER||typeof env.CORE_WORKER.fetch!=="function")return{success:false,error:"CORE_WORKER متصل نیست"};
+  try{const r=await env.CORE_WORKER.fetch(new Request("https://bluepanel-core.internal/__bluepanel/service/reports/flush",{method:"POST",headers:{"content-type":"application/json","x-bluepanel-service-hop":"edge-to-core-reports","x-bluepanel-process-source":cleanText(source,80)},body:"{}"}));const data=await r.json().catch(()=>({}));return r.ok&&data?.success!==false?{success:true,...data}:{success:false,error:data?.error||("Core HTTP "+r.status)};}catch(error){return{success:false,error:String(error?.message||error)};}
+}
+async function queueAllResellerReportTopicTests(env,bot){let queued=0,delivered=0;for(const d of RESELLER_REPORT_TOPICS){const r=await queueReportEvent(env,bot.id,d.key,"آزمایش Topic: "+d.title,"✅ این پیام برای بررسی مسیر تخصصی <b>"+botEscape(d.title)+"</b> ارسال شده است.\nزمان: <code>"+botEscape(nowIso())+"</code>","report-topic-test:reseller:"+bot.id+":"+d.key+":"+Date.now());if(r?.queued)queued++;if(r?.delivery?.resellerStatus==="delivered")delivered++;}return{queued,delivered,total:RESELLER_REPORT_TOPICS.length};}
 async function handleResellerReportGroupCommand(env,bot,message){
   const text=String(message.text||"").trim();
   const setup=reportCommandMatch(text,"setup_reports")||reportCommandMatch(text,"reports_setup")||reportCommandMatch(text,"report_setup");
-  const reset=reportCommandMatch(text,"reset_reports"),status=reportCommandMatch(text,"reports_status"),disable=reportCommandMatch(text,"disable_reports"),test=reportCommandMatch(text,"test_reports"),flush=reportCommandMatch(text,"flush_reports")||reportCommandMatch(text,"process_reports");
-  if(!setup&&!reset&&!status&&!disable&&!test&&!flush)return false;
+  const reset=reportCommandMatch(text,"reset_reports"),status=reportCommandMatch(text,"reports_status"),disable=reportCommandMatch(text,"disable_reports"),test=reportCommandMatch(text,"test_reports"),testAll=reportCommandMatch(text,"test_all_topics"),flush=reportCommandMatch(text,"flush_reports")||reportCommandMatch(text,"process_reports");
+  if(!setup&&!reset&&!status&&!disable&&!test&&!testAll&&!flush)return false;
   const account=await resellerOwnerAccount(env,bot,message.from);resellerRequirePermission(account,"settings");
   const scopeKey=reportScopeKey(bot.id);
   if(disable){await env.PASARGUARD_DB.prepare("UPDATE report_forums SET status='disabled',updated_at=? WHERE scope_key=?").bind(nowIso(),scopeKey).run();await resellerTelegramApi(env,bot,"sendMessage",{chat_id:message.chat.id,text:"⏸ ارسال گزارش‌های این ربات به گروه غیرفعال شد."});return true;}
-  if(flush){const result=await triggerProcessorFromEdge(env,"reseller_telegram_flush");await resellerTelegramApi(env,bot,"sendMessage",{chat_id:message.chat.id,parse_mode:"HTML",text:result.success?"✅ <b>صف گزارش پردازش شد</b>":"❌ <b>پردازش صف گزارش ناموفق بود</b>\n"+botEscape(result.error||"خطای نامشخص")});return true;}
+  if(flush){let result=await triggerProcessorFromEdge(env,"reseller_telegram_flush");if(!result.success)result=await triggerCoreReportFlushFromEdge(env,"reseller_telegram_flush_fallback");await resellerTelegramApi(env,bot,"sendMessage",{chat_id:message.chat.id,parse_mode:"HTML",text:result.success?"✅ <b>صف گزارش پردازش شد</b>\nپردازش از "+(result.business?"Worker سوم":"Worker مرکزی")+" انجام شد.":"❌ <b>پردازش صف گزارش ناموفق بود</b>\n"+botEscape(result.error||"خطای نامشخص")});return true;}
+  if(testAll){const tested=await queueAllResellerReportTopicTests(env,bot);await resellerTelegramApi(env,bot,"sendMessage",{chat_id:message.chat.id,parse_mode:"HTML",text:"🧵 <b>آزمایش همه Topicهای این ربات انجام شد</b>\nکل: <b>"+botMoney(tested.total)+"</b>\nارسال فوری: <b>"+botMoney(tested.delivered)+"</b>\nوارد صف: <b>"+botMoney(tested.queued)+"</b>"});return true;}
   if(test){const queued=await queueReportEvent(env,bot.id,"misc","گزارش آزمایشی ربات نماینده","✅ اتصال گروه، Topic و ارسال گزارش این ربات با موفقیت بررسی شد.\nزمان: <code>"+botEscape(nowIso())+"</code>","report-test:reseller:"+bot.id+":"+Date.now());await resellerTelegramApi(env,bot,"sendMessage",{chat_id:message.chat.id,parse_mode:"HTML",text:queued?.delivery?.resellerStatus==="delivered"?"✅ گزارش آزمایشی در Topic «سایر گزارشات» ارسال شد.":"⚠️ گزارش آزمایشی وارد صف شد اما ارسال فوری انجام نشد. /reports_status را بررسی کنید."});return true;}
-  if(status){const f=await env.PASARGUARD_DB.prepare("SELECT * FROM report_forums WHERE scope_key=?").bind(scopeKey).first();const c=await env.PASARGUARD_DB.prepare("SELECT COUNT(*) AS c FROM report_forum_topics WHERE scope_key=?").bind(scopeKey).first();const pending=await env.PASARGUARD_DB.prepare("SELECT COUNT(*) AS c FROM report_outbox WHERE bot_id=? AND reseller_status='pending'").bind(bot.id).first();await resellerTelegramApi(env,bot,"sendMessage",{chat_id:message.chat.id,parse_mode:"HTML",text:f?"📊 <b>وضعیت گزارش ربات</b>\nگروه: <b>"+botEscape(f.chat_title||f.chat_id)+"</b>\nوضعیت: <b>"+(f.status==="active"?"فعال":"غیرفعال")+"</b>\nموضوع‌ها: <b>"+botMoney(c?.c||0)+"</b>\nصف گزارش: <b>"+botMoney(pending?.c||0)+"</b>\nآخرین ارسال: <b>"+botEscape(f.last_delivery_at?botDate(f.last_delivery_at):"هنوز ارسال نشده")+"</b>"+(f.last_error?"\nآخرین خطا: <code>"+botEscape(f.last_error)+"</code>":"")+"\n\n/test_reports برای تست فوری\n/flush_reports برای پردازش صف":"گروه گزارش هنوز تنظیم نشده است."});return true;}
+  if(status){const f=await env.PASARGUARD_DB.prepare("SELECT * FROM report_forums WHERE scope_key=?").bind(scopeKey).first();const c=await env.PASARGUARD_DB.prepare("SELECT COUNT(*) AS c FROM report_forum_topics WHERE scope_key=?").bind(scopeKey).first();const pending=await env.PASARGUARD_DB.prepare("SELECT COUNT(*) AS c FROM report_outbox WHERE bot_id=? AND reseller_status='pending'").bind(bot.id).first();await resellerTelegramApi(env,bot,"sendMessage",{chat_id:message.chat.id,parse_mode:"HTML",text:f?"📊 <b>وضعیت گزارش ربات</b>\nگروه: <b>"+botEscape(f.chat_title||f.chat_id)+"</b>\nوضعیت: <b>"+(f.status==="active"?"فعال":"غیرفعال")+"</b>\nموضوع‌ها: <b>"+botMoney(c?.c||0)+"</b>\nصف گزارش: <b>"+botMoney(pending?.c||0)+"</b>\nآخرین ارسال: <b>"+botEscape(f.last_delivery_at?botDate(f.last_delivery_at):"هنوز ارسال نشده")+"</b>"+(f.last_error?"\nآخرین خطا: <code>"+botEscape(f.last_error)+"</code>":"")+"\n\n/test_reports برای تست فوری\n/test_all_topics برای آزمایش همه موضوع‌ها\n/flush_reports برای پردازش صف":"گروه گزارش هنوز تنظیم نشده است."});return true;}
   const r=await configureResellerReportForum(env,bot,message,reset);
   await resellerTelegramApi(env,bot,"sendMessage",{chat_id:message.chat.id,parse_mode:"HTML",text:"🧵 <b>گروه گزارش ربات آماده شد</b>\nموضوع‌های فعال: <b>"+botMoney(r.topics)+"</b>\n\nبرای بررسی فوری دستور /test_reports را ارسال کنید."});
   try{await triggerProcessorFromEdge(env,"reseller_report_setup");}catch(_){}return true;
@@ -1890,6 +1901,7 @@ async function configureResellerBot(env, bot, origin = "") {
         { command: "setup_reports", description: "ساخت موضوع‌های گروه گزارش این ربات" },
         { command: "reports_status", description: "نمایش وضعیت گروه گزارش" },
         { command: "test_reports", description: "ارسال گزارش آزمایشی فوری" },
+        { command: "test_all_topics", description: "آزمایش همه Topicهای گزارش" },
         { command: "flush_reports", description: "پردازش صف گزارش‌ها" },
         { command: "reset_reports", description: "بازسازی موضوع‌های گزارش" },
         { command: "disable_reports", description: "توقف ارسال گزارش به گروه" }
@@ -2122,6 +2134,228 @@ function salesRemoteSnapshot(remote = {}, fallback = {}) {
     onlineAt: salesRemoteExpireValue(source.online_at || source.onlineAt || fallback.remote_online_at),
     subscriptionUrl,
     syncedAt: nowIso()
+  };
+}
+
+function salesSubscriptionAllowedHosts(settings) {
+  const hosts = new Set();
+  const add = (raw) => {
+    const value = String(raw || "").trim();
+    if (!value) return;
+    try {
+      const parsed = new URL(value.includes("://") ? value : ("https://" + value));
+      if (parsed.hostname) hosts.add(parsed.hostname.toLowerCase());
+    } catch (_) {}
+  };
+  add(settings?.pasarguard_panel_url);
+  add(settings?.pasarguard_sub_domain);
+  return hosts;
+}
+
+function parseSalesSubscriptionLink(rawLink, settings) {
+  let value = cleanText(rawLink, 2000).trim();
+  value = value.replace(/^<|>$/g, "").trim();
+  if (!value) throw new Error("لینک اشتراک را ارسال کنید");
+  let url;
+  try { url = new URL(value); } catch (_) { throw new Error("فرمت لینک اشتراک معتبر نیست"); }
+  if (url.protocol !== "https:") throw new Error("لینک اشتراک باید با https شروع شود");
+  if (url.username || url.password) throw new Error("لینک اشتراک دارای اطلاعات ورود نامعتبر است");
+  if (url.port && url.port !== "443") throw new Error("پورت لینک اشتراک مجاز نیست");
+  const allowedHosts = salesSubscriptionAllowedHosts(settings);
+  if (!allowedHosts.size || !allowedHosts.has(url.hostname.toLowerCase())) {
+    throw new Error("دامنه لینک اشتراک متعلق به پنل متصل این نماینده نیست");
+  }
+  url.hash = "";
+  url.search = "";
+  let path = url.pathname.replace(/\/+$/, "");
+  path = path.replace(/\/(?:info|raw|usage|apps)$/i, "").replace(/\/+$/, "");
+  const parts = path.split("/").filter(Boolean);
+  if (parts.length < 2) throw new Error("مسیر لینک اشتراک معتبر نیست");
+  let token = "";
+  try { token = decodeURIComponent(parts[parts.length - 1]); } catch (_) { token = parts[parts.length - 1]; }
+  if (!/^[A-Za-z0-9_-]{8,512}$/.test(token)) throw new Error("توکن لینک اشتراک معتبر نیست");
+  return {
+    token,
+    tokenNormalized: token,
+    subscriptionUrl: url.origin + path,
+    infoUrl: url.origin + path + "/info",
+    host: url.hostname.toLowerCase()
+  };
+}
+
+async function fetchSalesSubscriptionInfo(env, rawLink) {
+  const settings = await getSettings(env);
+  const parsed = parseSalesSubscriptionLink(rawLink, settings);
+  let response;
+  try {
+    response = await fetchWithTimeout(parsed.infoUrl, {
+      method: "GET",
+      headers: { accept: "application/json", "user-agent": "BluePanel-Service-Import/" + APP_VERSION },
+      redirect: "manual"
+    }, 10000);
+  } catch (error) {
+    if (String(error?.name || "") === "AbortError") throw new Error("استعلام لینک اشتراک زمان‌بر شد؛ دوباره تلاش کنید");
+    throw new Error("اتصال به لینک اشتراک انجام نشد");
+  }
+  if (response.status >= 300 && response.status < 400) throw new Error("لینک اشتراک به آدرس دیگری هدایت شد و قابل پذیرش نیست");
+  const { data } = await readJsonResponseSafe(response, "پنل اشتراک");
+  if (!response.ok) {
+    if ([401, 403, 404, 410].includes(Number(response.status))) throw new Error("لینک اشتراک نامعتبر، منقضی یا تعویض‌شده است");
+    throw new Error(cleanText(data?.detail || data?.message || "استعلام لینک اشتراک ناموفق بود", 300));
+  }
+  const nested = data && typeof data.data === "object" && data.data ? data.data : {};
+  const info = { ...data, ...nested };
+  const username = cleanText(info.username, 128);
+  if (!username) throw new Error("نام کاربری سرویس از لینک اشتراک دریافت نشد");
+  return { parsed, info, username };
+}
+
+async function ensureSalesImportedPlan(env, botId) {
+  const existing = await env.PASARGUARD_DB.prepare(
+    "SELECT id FROM sales_plans WHERE bot_id=? AND plan_type='imported' LIMIT 1"
+  ).bind(botId).first();
+  if (existing?.id) return existing.id;
+  const planId = "sysimp_" + String(botId).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 72);
+  const ts = nowIso();
+  await env.PASARGUARD_DB.prepare(`
+    INSERT OR IGNORE INTO sales_plans(
+      id,bot_id,title,data_limit_bytes,duration_days,price_toman,status,sort_order,category_id,location_id,plan_type,created_at,updated_at
+    ) VALUES(?,?,?,0,1,0,'inactive',999999,NULL,NULL,'imported',?,?)
+  `).bind(planId, botId, "سرویس قبلی انتقال‌یافته", ts, ts).run();
+  const row = await env.PASARGUARD_DB.prepare(
+    "SELECT id FROM sales_plans WHERE bot_id=? AND plan_type='imported' LIMIT 1"
+  ).bind(botId).first();
+  if (!row?.id) throw new Error("ساخت رکورد سیستمی انتقال سرویس انجام نشد");
+  return row.id;
+}
+
+async function importSalesServiceBySubscriptionLink(env, bot, customer, rawLink) {
+  if (bot.agency_status !== "active") throw new Error("پنل متصل نماینده فعال نیست");
+  const publicResult = await fetchSalesSubscriptionInfo(env, rawLink);
+  const remoteUsername = cleanText(publicResult.username, 128);
+  const normalizedUsername = remoteUsername.toLowerCase();
+  const agency = { id: bot.agency_id, panel_username: bot.panel_username, panel_password_enc: bot.panel_password_enc };
+  let remote;
+  try {
+    remote = await agencyPasarguardRequest(env, agency, "GET", "/api/user/" + encodeURIComponent(remoteUsername));
+  } catch (error) {
+    if ([403, 404].includes(Number(error?.status))) throw new Error("این سرویس زیرمجموعه پنل این نماینده نیست");
+    throw error;
+  }
+  const snapshot = salesRemoteSnapshot(remote, publicResult.info);
+  const settings = await getSettings(env);
+  let canonicalUrl = snapshot.subscriptionUrl || publicResult.parsed.subscriptionUrl;
+  if (canonicalUrl && canonicalUrl.startsWith("/")) canonicalUrl = pasarguardBaseUrl(settings) + canonicalUrl;
+  const canonicalParsed = parseSalesSubscriptionLink(canonicalUrl, settings);
+  if (canonicalParsed.tokenNormalized !== publicResult.parsed.tokenNormalized) {
+    throw new Error("این لینک دیگر لینک فعال سرویس نیست؛ لینک جدید را از فروشنده دریافت کنید");
+  }
+  canonicalUrl = canonicalParsed.subscriptionUrl;
+  const panelScope = canonicalParsed.host;
+
+  const priorClaim = await env.PASARGUARD_DB.prepare(
+    "SELECT bot_id,customer_id,root_order_id FROM sales_service_claims WHERE panel_scope=? AND remote_username=?"
+  ).bind(panelScope, normalizedUsername).first();
+  if (priorClaim && (String(priorClaim.bot_id) !== String(bot.id) || String(priorClaim.customer_id) !== String(customer.id))) {
+    throw new Error("این سرویس قبلاً در ربات نماینده یا حساب تلگرام دیگری ثبت شده است");
+  }
+
+  const existing = await env.PASARGUARD_DB.prepare(`
+    SELECT id,customer_id,remote_username,created_at
+    FROM sales_orders
+    WHERE bot_id=? AND LOWER(remote_username)=? AND status='delivered'
+    ORDER BY CASE WHEN order_type IN ('new','imported') THEN 0 ELSE 1 END,created_at ASC
+    LIMIT 1
+  `).bind(bot.id, normalizedUsername).first();
+  if (existing && String(existing.customer_id) !== String(customer.id)) {
+    throw new Error("این سرویس قبلاً به حساب تلگرام دیگری در همین ربات متصل شده است");
+  }
+
+  const tokenHash = await sha256Hex(publicResult.parsed.token);
+  if (existing) {
+    await env.PASARGUARD_DB.batch([
+      env.PASARGUARD_DB.prepare(`
+        UPDATE sales_orders SET subscription_url=?,remote_user_id=COALESCE(NULLIF(?,''),remote_user_id),
+          remote_status=?,remote_data_limit=?,remote_used_traffic=?,remote_expire=?,remote_online_at=?,
+          remote_last_synced_at=?
+        WHERE bot_id=? AND customer_id=? AND LOWER(remote_username)=? AND status='delivered'
+      `).bind(canonicalUrl, String(remote?.id || remote?.data?.id || ""), snapshot.status, snapshot.dataLimit,
+        snapshot.usedTraffic, snapshot.expire, snapshot.onlineAt, snapshot.syncedAt, bot.id, customer.id, normalizedUsername),
+      env.PASARGUARD_DB.prepare(`
+        INSERT INTO sales_service_claims(panel_scope,remote_username,bot_id,customer_id,root_order_id,claim_type,subscription_token_hash,claimed_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(panel_scope,remote_username) DO UPDATE SET
+          subscription_token_hash=excluded.subscription_token_hash,updated_at=excluded.updated_at
+        WHERE sales_service_claims.bot_id=excluded.bot_id AND sales_service_claims.customer_id=excluded.customer_id
+      `).bind(panelScope, normalizedUsername, bot.id, customer.id, existing.id, "existing", tokenHash, nowIso(), nowIso())
+    ]);
+    await salesEvent(env, bot.id, customer.id, "service_import_refreshed", { serviceId: existing.id, username: remoteUsername });
+    return {
+      id: existing.id, remote_username: remoteUsername, subscription_url: canonicalUrl, imported: false, alreadyLinked: true,
+      remote_status: snapshot.status, remote_data_limit: snapshot.dataLimit, remote_used_traffic: snapshot.usedTraffic,
+      remote_expire: snapshot.expire, remote_online_at: snapshot.onlineAt, remote_last_synced_at: snapshot.syncedAt
+    };
+  }
+
+  const generatedOrderId = id("ordimp");
+  const claimAt = nowIso();
+  await env.PASARGUARD_DB.prepare(`
+    INSERT OR IGNORE INTO sales_service_claims(
+      panel_scope,remote_username,bot_id,customer_id,root_order_id,claim_type,subscription_token_hash,claimed_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?)
+  `).bind(panelScope, normalizedUsername, bot.id, customer.id, generatedOrderId, "import", tokenHash, claimAt, claimAt).run();
+  const claim = await env.PASARGUARD_DB.prepare(
+    "SELECT * FROM sales_service_claims WHERE panel_scope=? AND remote_username=?"
+  ).bind(panelScope, normalizedUsername).first();
+  if (!claim || String(claim.bot_id) !== String(bot.id) || String(claim.customer_id) !== String(customer.id)) {
+    throw new Error("این سرویس هم‌زمان در ربات نماینده یا حساب دیگری ثبت شده است");
+  }
+  const orderId = String(claim.root_order_id || generatedOrderId);
+  const claimedOrder = await env.PASARGUARD_DB.prepare(
+    "SELECT id FROM sales_orders WHERE id=? AND bot_id=? AND customer_id=?"
+  ).bind(orderId, bot.id, customer.id).first();
+  if (claimedOrder?.id) {
+    await env.PASARGUARD_DB.prepare(`
+      UPDATE sales_orders SET subscription_url=?,remote_status=?,remote_data_limit=?,remote_used_traffic=?,
+        remote_expire=?,remote_online_at=?,remote_last_synced_at=? WHERE id=?
+    `).bind(canonicalUrl, snapshot.status, snapshot.dataLimit, snapshot.usedTraffic, snapshot.expire,
+      snapshot.onlineAt, snapshot.syncedAt, orderId).run();
+    return {
+      id: orderId, remote_username: remoteUsername, subscription_url: canonicalUrl, imported: false, alreadyLinked: true,
+      remote_status: snapshot.status, remote_data_limit: snapshot.dataLimit, remote_used_traffic: snapshot.usedTraffic,
+      remote_expire: snapshot.expire, remote_online_at: snapshot.onlineAt, remote_last_synced_at: snapshot.syncedAt
+    };
+  }
+
+  const planId = await ensureSalesImportedPlan(env, bot.id);
+  const remoteId = String(remote?.id || remote?.data?.id || publicResult.info?.id || "");
+  try {
+    await env.PASARGUARD_DB.prepare(`
+      INSERT INTO sales_orders(
+        id,bot_id,plan_id,customer_id,amount_toman,original_amount_toman,discount_toman,status,
+        remote_user_id,remote_username,subscription_url,remote_status,remote_data_limit,remote_used_traffic,
+        remote_expire,remote_online_at,remote_last_synced_at,order_type,payment_method,origin,created_at,updated_at
+      ) VALUES(?,?,?,?,0,0,0,'delivered',?,?,?,?,?,?,?,?,?,'imported','import','subscription_link',?,?)
+    `).bind(orderId, bot.id, planId, customer.id, remoteId, remoteUsername, canonicalUrl, snapshot.status,
+      snapshot.dataLimit, snapshot.usedTraffic, snapshot.expire, snapshot.onlineAt, snapshot.syncedAt, claimAt, claimAt).run();
+  } catch (error) {
+    try {
+      await env.PASARGUARD_DB.prepare(
+        "DELETE FROM sales_service_claims WHERE panel_scope=? AND remote_username=? AND bot_id=? AND customer_id=? AND root_order_id=?"
+      ).bind(panelScope, normalizedUsername, bot.id, customer.id, orderId).run();
+    } catch (_) {}
+    throw error;
+  }
+  await salesEvent(env, bot.id, customer.id, "service_imported", { serviceId: orderId, username: remoteUsername });
+  try {
+    await queueReportEvent(env, bot.id, "service_imports", "سرویس قبلی به ربات متصل شد",
+      "کاربر <code>" + botEscape(customer.telegram_id) + "</code> سرویس <code>" + botEscape(remoteUsername) + "</code> را با لینک اشتراک معتبر ثبت کرد.",
+      "service-import:" + bot.id + ":" + normalizedUsername);
+  } catch (_) {}
+  return {
+    id: orderId, remote_username: remoteUsername, subscription_url: canonicalUrl, imported: true, alreadyLinked: false,
+    remote_status: snapshot.status, remote_data_limit: snapshot.dataLimit, remote_used_traffic: snapshot.usedTraffic,
+    remote_expire: snapshot.expire, remote_online_at: snapshot.onlineAt, remote_last_synced_at: snapshot.syncedAt
   };
 }
 
@@ -2745,7 +2979,7 @@ async function salesCustomerHomeView(env, bot, customer) {
   const supportUrl = salesSupportUrl(bot);
   const rows = [
     [{ text: "🛒 خرید سرویس", callback_data: "sale:locations" }, { text: "♻️ تمدید سرویس", callback_data: "sale:services" }],
-    [{ text: "📦 سرویس‌ها و سفارش‌ها", callback_data: "sale:orders" }],
+    [{ text: "📦 سرویس‌ها و سفارش‌ها", callback_data: "sale:orders" }, { text: "🔗 افزودن سرویس قبلی", callback_data: "sale:import" }],
     [{ text: "💳 شارژ و موجودی", callback_data: "sale:wallet" }, { text: "👤 حساب کاربری", callback_data: "sale:account" }],
     [{ text: "👥 زیرمجموعه‌گیری", callback_data: "sale:referral" }, { text: "🎁 تست رایگان", callback_data: "sale:trial" }],
     [{ text: "🎟 تخفیف و هدیه", callback_data: "sale:promo" }, { text: "📚 آموزش و راهنما", callback_data: "sale:help" }]
@@ -2777,7 +3011,8 @@ async function salesCustomerGroupView(env, bot, customer, group) {
       chart: ["🌍 خرید مرحله‌ای", "🧭 سرویس‌های من", "🧾 سفارش‌ها"],
       rows: [
         [{ text: "🌍 شروع خرید سرویس", callback_data: "sale:locations" }],
-        [{ text: "🧭 سرویس‌های من", callback_data: "sale:services" }, { text: "🧾 سفارش‌های من", callback_data: "sale:orders" }]
+        [{ text: "🧭 سرویس‌های من", callback_data: "sale:services" }, { text: "🧾 سفارش‌های من", callback_data: "sale:orders" }],
+        [{ text: "🔗 افزودن سرویس قبلی با لینک اشتراک", callback_data: "sale:import" }]
       ]
     },
     account: {
@@ -2977,8 +3212,8 @@ async function salesCustomerOrdersView(env, bot, customer) {
   const orders = rows.results || [];
   const text = orders.length ? orders.map(order =>
     salesOrderStatusIcon(order.status) + " <b>" + botEscape(order.plan_title) + "</b>" +
-    (order.order_type === "renewal" ? " · ♻️ تمدید" : order.order_type === "volume" ? " · ➕ افزایش حجم" : "") + "\n" +
-    "   مبلغ: <b>" + botMoney(order.amount_toman) + " تومان</b> · " + (order.payment_method === "wallet" ? "کیف پول" : order.payment_method === "blupal" ? "بلوپال" : "کارت") + "\n" +
+    (order.order_type === "renewal" ? " · ♻️ تمدید" : order.order_type === "volume" ? " · ➕ افزایش حجم" : order.order_type === "imported" ? " · 🔗 انتقال سرویس قبلی" : "") + "\n" +
+    "   مبلغ: <b>" + botMoney(order.amount_toman) + " تومان</b> · " + (order.payment_method === "wallet" ? "کیف پول" : order.payment_method === "blupal" ? "بلوپال" : order.payment_method === "import" ? "ثبت با لینک اشتراک" : "کارت") + "\n" +
     "   وضعیت: " + botEscape(salesOrderStatusLabel(order.status)) + "\n" +
     (order.remote_username ? "   کاربری: <code>" + botEscape(order.remote_username) + "</code>\n" : "") +
     (order.subscription_url ? "   لینک: <code>" + botEscape(order.subscription_url) + "</code>\n" : "") +
@@ -3021,6 +3256,7 @@ async function salesCustomerServicesView(env, bot, customer) {
   services.slice(0, 8).forEach((service, index) => {
     buttons.push([{ text: "🧭 سرویس " + (index + 1) + " — " + service.remote_username, callback_data: "sale:service:" + service.id }]);
   });
+  buttons.push([{ text: "🔗 افزودن سرویس قبلی", callback_data: "sale:import" }]);
   buttons.push([{ text: "🏠 منوی اصلی", callback_data: "sale:home" }]);
   return { text: "🧭 <b>مرکز سرویس‌های من</b>\n━━━━━━━━━━━━━━\n" + lines, reply_markup: { inline_keyboard: buttons } };
 }
@@ -4493,6 +4729,14 @@ async function salesHandleCustomerCallback(env, bot, callback) {
     if (done) return salesCustomerSendOrEdit(env, bot, target, payment.target_type === "wallet" ? "wallet" : "services");
     return;
   }
+  if (data === "sale:import") {
+    await salesSessionSet(env, bot.id, customer.telegram_id, "import_subscription_link", {});
+    return resellerTelegramApi(env, bot, "editMessageText", {
+      chat_id: chatId, message_id: callback.message.message_id, parse_mode: "HTML", disable_web_page_preview: true,
+      text: "🔗 <b>افزودن سرویس قبلی</b>\n━━━━━━━━━━━━━━\nلینک اشتراکی را که قبلاً از همین فروشنده یا پنل دریافت کرده‌اید ارسال کنید.\n\nربات لینک را از خود پنل بررسی می‌کند، مالکیت آن را برای این حساب ثبت می‌کند و سپس استعلام، تمدید، افزایش حجم و دریافت لینک از همین ربات انجام می‌شود.\n\n⚠️ لینک را برای شخص دیگری ارسال نکنید؛ دارنده لینک به تنظیمات سرویس دسترسی دارد.",
+      reply_markup: { inline_keyboard: [[{ text: "لغو", callback_data: "sale:services" }]] }
+    });
+  }
   if (data.startsWith("sale:service:refresh:")) {
     const serviceId = data.slice("sale:service:refresh:".length);
     await syncSalesService(env, bot, customer, serviceId);
@@ -4805,7 +5049,7 @@ async function createResellerSnapshot(env, bot, actorTelegramId = "system", snap
     const [locations, categories, plans, texts, promos] = await Promise.all([
       env.PASARGUARD_DB.prepare("SELECT id,title,emoji,description,group_ids_json,status,sort_order,created_at,updated_at FROM sales_locations WHERE bot_id=? ORDER BY sort_order,created_at").bind(fresh.id).all(),
       env.PASARGUARD_DB.prepare("SELECT id,title,emoji,status,sort_order,created_at,updated_at FROM sales_categories WHERE bot_id=? ORDER BY sort_order,created_at").bind(fresh.id).all(),
-      env.PASARGUARD_DB.prepare("SELECT id,title,data_limit_bytes,duration_days,price_toman,status,sort_order,category_id,location_id,plan_type,created_at,updated_at FROM sales_plans WHERE bot_id=? ORDER BY sort_order,created_at").bind(fresh.id).all(),
+      env.PASARGUARD_DB.prepare("SELECT id,title,data_limit_bytes,duration_days,price_toman,status,sort_order,category_id,location_id,plan_type,created_at,updated_at FROM sales_plans WHERE bot_id=? AND COALESCE(plan_type,'sale')<>'imported' ORDER BY sort_order,created_at").bind(fresh.id).all(),
       env.PASARGUARD_DB.prepare("SELECT text_key,text_value,updated_at FROM reseller_bot_texts WHERE bot_id=? ORDER BY text_key").bind(fresh.id).all(),
       env.PASARGUARD_DB.prepare("SELECT id,code,kind,value_type,value,min_purchase_toman,max_uses,per_user_limit,use_count,status,expires_at,description,created_at,updated_at FROM sales_promo_codes WHERE bot_id=? ORDER BY created_at").bind(fresh.id).all()
     ]);
@@ -5993,8 +6237,9 @@ async function resellerOwnerHandleCallback(env, bot, callback) {
   }
   if (data.startsWith("owner:plan:toggle:")) {
     const planId = data.slice("owner:plan:toggle:".length);
-    const plan = await env.PASARGUARD_DB.prepare("SELECT status FROM sales_plans WHERE id=? AND bot_id=?").bind(planId, bot.id).first();
+    const plan = await env.PASARGUARD_DB.prepare("SELECT status,plan_type FROM sales_plans WHERE id=? AND bot_id=?").bind(planId, bot.id).first();
     if (!plan) throw new Error("پلن پیدا نشد");
+    if (plan.plan_type === "imported") throw new Error("این رکورد سیستمی قابل تغییر نیست");
     await env.PASARGUARD_DB.prepare("UPDATE sales_plans SET status=?,updated_at=? WHERE id=?").bind(plan.status === "active" ? "inactive" : "active", nowIso(), planId).run();
     return resellerOwnerSendOrEdit(env, bot, target, "plans");
   }
@@ -6588,6 +6833,15 @@ async function resellerSalesWebhook(request, env, botId, ctx = null) {
     }
     if (/^\/plans(?:@\w+)?$/i.test(text)) return json({ ok: true, result: await salesCustomerSendOrEdit(env, bot, { customer, chatId: message.chat.id }, "locations") });
     if (/^\/orders(?:@\w+)?$/i.test(text)) return json({ ok: true, result: await salesCustomerSendOrEdit(env, bot, { customer, chatId: message.chat.id }, "orders") });
+    if (/^\/import(?:@\w+)?$/i.test(text)) {
+      await salesSessionSet(env, bot.id, customer.telegram_id, "import_subscription_link", {});
+      await resellerTelegramApi(env, bot, "sendMessage", {
+        chat_id: message.chat.id, parse_mode: "HTML", disable_web_page_preview: true,
+        text: "🔗 <b>افزودن سرویس قبلی</b>\nلینک اشتراک سرویس قبلی را ارسال کنید. فقط لینک متعلق به پنل همین نماینده پذیرفته می‌شود.",
+        reply_markup: { inline_keyboard: [[{ text: "لغو", callback_data: "sale:services" }]] }
+      });
+      return json({ ok: true });
+    }
     if (/^\/renew(?:@\w+)?$/i.test(text)) return json({ ok: true, result: await salesCustomerSendOrEdit(env, bot, { customer, chatId: message.chat.id }, "services") });
     if (/^\/wallet(?:@\w+)?$/i.test(text)) return json({ ok: true, result: await salesCustomerSendOrEdit(env, bot, { customer, chatId: message.chat.id }, "wallet") });
     if (/^\/account(?:@\w+)?$/i.test(text)) return json({ ok: true, result: await salesCustomerSendOrEdit(env, bot, { customer, chatId: message.chat.id }, "account") });
@@ -6608,6 +6862,17 @@ async function resellerSalesWebhook(request, env, botId, ctx = null) {
       return json({ ok: true });
     }
     const session = await salesSessionGet(env, bot.id, customer.telegram_id);
+    if (session?.state === "import_subscription_link") {
+      const imported = await importSalesServiceBySubscriptionLink(env, bot, customer, text);
+      await salesSessionClear(env, bot.id, customer.telegram_id);
+      await resellerTelegramApi(env, bot, "sendMessage", {
+        chat_id: message.chat.id, parse_mode: "HTML", disable_web_page_preview: true,
+        text: (imported.alreadyLinked ? "✅ <b>این سرویس از قبل به حساب شما متصل بود و اطلاعات آن بروزرسانی شد.</b>" : "✅ <b>سرویس قبلی با موفقیت به حساب شما متصل شد.</b>") +
+          "\n\nنام کاربری: <code>" + botEscape(imported.remote_username) + "</code>\nاز این پس استعلام، تمدید، افزایش حجم و دریافت لینک از بخش سرویس‌های من انجام می‌شود.",
+        reply_markup: { inline_keyboard: [[{ text: "🧭 مشاهده سرویس", callback_data: "sale:service:" + imported.id }], [{ text: "🏠 منوی اصلی", callback_data: "sale:home" }]] }
+      });
+      return json({ ok: true });
+    }
     if (session?.state === "promo_code") {
       const result = await salesActivatePromoCode(env, bot, customer, text);
       await salesSessionClear(env, bot.id, customer.telegram_id);
@@ -8491,6 +8756,10 @@ async function salesMiniAppAction(request, env, botId, ctx = null) {
       const delivered = await purchaseSalesPlanFromWallet(env, bot, customer, cleanText(body.plan_id, 80), { orderType: "volume", targetOrderId, origin: "miniapp", promoCode });
       return json({ success: true, message: "حجم سرویس با موفقیت افزایش یافت.", delivery: { id: delivered.id, title: delivered.plan_title, username: delivered.remote_username, subscription_url: delivered.subscription_url, order_type: "volume", amount_toman: delivered.amount_toman, discount_toman: delivered.discount_toman, promo_code: delivered.promo_code, cashback_toman: Number(delivered.cashback_toman || 0) } });
     }
+    if (action === "import_service") {
+      const service = await importSalesServiceBySubscriptionLink(env, bot, customer, body.subscription_url);
+      return json({ success: true, message: service.alreadyLinked ? "سرویس از قبل متصل بود و بروزرسانی شد." : "سرویس قبلی با موفقیت به حساب شما متصل شد.", service });
+    }
     if (action === "service_refresh") {
       const service = await syncSalesService(env, bot, customer, cleanText(body.service_id, 80));
       return json({ success: true, message: "اطلاعات سرویس با پنل همگام شد.", service });
@@ -8606,7 +8875,7 @@ body:after{content:"";position:fixed;z-index:-1;width:190px;height:190px;left:-7
 <div id="catStep" style="display:none"><button class="btn ghost full miniBack" onclick="backToLocations()">→ بازگشت به لوکیشن‌ها</button><div class="choiceHeading"><b>نوع سرویس را انتخاب کنید</b><small>پلن‌ها براساس انتخاب شما فیلتر می‌شوند</small></div><div id="catChips" class="choiceGrid"></div></div>
 <div id="planStep" style="display:none"><button id="planBackBtn" class="btn ghost full miniBack" onclick="backToCategories()">→ بازگشت به دسته‌بندی‌ها</button><div class="sectionTitle"><span id="shopTitle">پلن‌های فروش</span><small id="planCount"></small></div><div id="plans" class="planGrid"></div></div>
 </section>
-<section id="services" class="page"><div class="hero"><h1>🧭 مرکز سرویس‌های من</h1><p>حجم، مصرف، انقضا و وضعیت سرویس را ببینید؛ تمدید، افزایش حجم و تعویض لینک نیز از همین بخش انجام می‌شود.</p></div><div class="sectionTitle"><span>سرویس‌ها</span><small>اطلاعات مشترک با پنل</small></div><div id="serviceList"></div></section>
+<section id="services" class="page"><div class="hero"><h1>🧭 مرکز سرویس‌های من</h1><p>حجم، مصرف، انقضا و وضعیت سرویس را ببینید؛ تمدید، افزایش حجم و تعویض لینک نیز از همین بخش انجام می‌شود.</p></div><button class="btn secondary full" style="margin:12px 0" onclick="importService()">🔗 افزودن سرویس قبلی با لینک اشتراک</button><div class="sectionTitle"><span>سرویس‌ها</span><small>اطلاعات مشترک با پنل</small></div><div id="serviceList"></div></section>
 <section id="wallet" class="page"><div class="hero"><h1>💳 کیف پول</h1><p>فقط روش‌های فعال‌شده توسط نماینده نمایش داده می‌شوند.</p><div class="price" id="walletBalance">۰ تومان</div></div><div class="card"><h3>افزایش موجودی</h3><input id="chargeAmount" class="input" inputmode="numeric" type="number" min="10000" placeholder="مبلغ به تومان"><div class="paymentMethods two" id="walletPaymentMethods"><button class="paymentMethod" id="chargeCardBtn"><b>💳</b>کارت‌به‌کارت</button><button class="paymentMethod online" id="chargeOnlineBtn"><b>💠</b>پرداخت آنلاین</button><button class="paymentMethod online" id="chargePlisioBtn"><b>🪙</b>Plisio رمزارزی</button><button class="paymentMethod online" id="chargeCubepayBtn"><b>💳</b>CubePay خودکار</button></div><div id="onlineWalletHint" class="muted" style="margin-top:9px"></div></div><div class="sectionTitle"><span>پرداخت‌های آنلاین</span><small>استعلام خودکار</small></div><div id="onlinePayments"></div><div class="sectionTitle"><span>درخواست‌های شارژ</span><small>وضعیت بررسی</small></div><div id="walletRequests"></div><div class="sectionTitle"><span>گردش حساب</span><small>آخرین تراکنش‌ها</small></div><div id="ledger"></div></section>
 <section id="offers" class="page"><button class="btn secondary full miniBack" onclick="nav('home')">↩️ بازگشت به خانه</button><div class="hero"><h1>🎟 تخفیف و هدیه</h1><p>کد تخفیف یا هدیه نماینده را وارد کنید. کد تخفیف روی خرید بعدی و کد هدیه روی موجودی اعمال می‌شود.</p></div><div id="activePromoCard"></div><div class="card"><h3>فعال‌سازی کد</h3><input id="promoCode" class="input offerCode" maxlength="32" autocomplete="off" placeholder="EXAMPLE20"><button class="btn full" onclick="redeemPromo()">فعال‌سازی</button></div></section>
 <section id="notifications" class="page"><button class="btn secondary full miniBack" onclick="nav('home')">↩️ بازگشت به خانه</button><div class="hero"><h1>🔔 مرکز اعلان‌ها</h1><p>هشدارهای مصرف و انقضا، کش‌بک و رویدادهای مهم حساب در این بخش نگهداری می‌شوند.</p></div><button class="btn secondary full" style="margin:12px 0" onclick="markNotificationsRead()">✅ علامت‌گذاری همه به‌عنوان خوانده‌شده</button><div id="notificationList"></div></section>
@@ -8724,6 +8993,7 @@ window.backToLocations=function(){loc="";cat="";shopStep="location";renderShop()
 window.backToCategories=function(){cat="";shopStep="category";renderShop()};
 window.selectRenew=function(id){renewTarget=id;serviceMode="renew";loc="";cat="";shopStep="plans";el("shopTitle").textContent="پلن‌های تمدید";renderShop();nav("shop");toast("پلن تمدید را انتخاب کنید")};
 window.selectVolume=function(id){renewTarget=id;serviceMode="volume";loc="";cat="";shopStep="plans";el("shopTitle").textContent="بسته‌های افزایش حجم";renderShop();nav("shop");toast("بسته افزایش حجم را انتخاب کنید")};
+window.importService=async function(){var link=prompt("لینک اشتراک سرویس قبلی را وارد کنید:");if(!link)return;try{toast("در حال بررسی لینک با پنل…");var d=await api("action",{action:"import_service",subscription_url:link});toast(d.message);await refresh();nav("services")}catch(e){toast(e.message)}};
 window.refreshService=async function(id){try{toast("در حال همگام‌سازی با پنل…");var d=await api("action",{action:"service_refresh",service_id:id});toast(d.message);await refresh();nav("services")}catch(e){toast(e.message)}};
 window.confirmRevokeService=function(id){var run=function(ok){if(ok)revokeService(id)};if(tg&&tg.showConfirm)tg.showConfirm("لینک فعلی از اعتبار خارج شود و لینک جدید ساخته شود؟",run);else run(confirm("لینک فعلی از اعتبار خارج شود و لینک جدید ساخته شود؟"))};
 async function revokeService(id){try{toast("در حال ساخت لینک جدید…");var d=await api("action",{action:"service_revoke",service_id:id});toast(d.message);await refresh();var service=(state.services||[]).find(function(x){return x.id===id});if(service&&service.subscription_url)showQr(encodeURIComponent(service.subscription_url))}catch(e){toast(e.message)}}
@@ -9301,18 +9571,18 @@ async function resellerAdminAction(request, env, botId) {
       const dataBytes=Math.round(Math.max(0.01,Number(body.data_gb||0))*GIB),days=clampInt(body.duration_days,1,3650),price=clampInt(body.price_toman,0,1000000000000),sort=clampInt(body.sort_order||0,-100000,100000);
       const planType=["sale","renew","volume"].includes(String(body.plan_type))?String(body.plan_type):"sale",categoryId=cleanText(body.category_id,100)||null,locationId=cleanText(body.location_id,100)||null;
       if(dataBytes<=0)throw new Error("حجم پلن معتبر نیست");
-      if(planId){const row=await env.PASARGUARD_DB.prepare("SELECT id FROM sales_plans WHERE id=? AND bot_id=?").bind(planId,bot.id).first();if(!row)throw new Error("پلن پیدا نشد");
+      if(planId){const row=await env.PASARGUARD_DB.prepare("SELECT id,plan_type FROM sales_plans WHERE id=? AND bot_id=?").bind(planId,bot.id).first();if(!row)throw new Error("پلن پیدا نشد");if(row.plan_type==="imported")throw new Error("این رکورد سیستمی قابل ویرایش نیست");
         await env.PASARGUARD_DB.prepare("UPDATE sales_plans SET title=?,data_limit_bytes=?,duration_days=?,price_toman=?,sort_order=?,category_id=?,location_id=?,plan_type=?,updated_at=? WHERE id=? AND bot_id=?").bind(title,dataBytes,days,price,sort,categoryId,locationId,planType,nowIso(),planId,bot.id).run();
       }else{await env.PASARGUARD_DB.prepare(`INSERT INTO sales_plans(id,bot_id,title,data_limit_bytes,duration_days,price_toman,status,sort_order,category_id,location_id,plan_type,created_at,updated_at)
         VALUES(?,?,?,?,?,?,'active',?,?,?,?,?,?)`).bind(id("plan"),bot.id,title,dataBytes,days,price,sort,categoryId,locationId,planType,nowIso(),nowIso()).run();}
       await resellerAudit(env,bot,account,"web_plan_saved",{id:planId||null,title,price});return json({success:true,message:planId?"پلن ویرایش شد":"پلن جدید ساخته شد"});
     }
     if (action === "plan_toggle") {
-      const planId=cleanText(body.id,100);const row=await env.PASARGUARD_DB.prepare("SELECT status FROM sales_plans WHERE id=? AND bot_id=?").bind(planId,bot.id).first();if(!row)throw new Error("پلن پیدا نشد");const next=row.status==="active"?"inactive":"active";
+      const planId=cleanText(body.id,100);const row=await env.PASARGUARD_DB.prepare("SELECT status,plan_type FROM sales_plans WHERE id=? AND bot_id=?").bind(planId,bot.id).first();if(!row)throw new Error("پلن پیدا نشد");if(row.plan_type==="imported")throw new Error("این رکورد سیستمی قابل تغییر نیست");const next=row.status==="active"?"inactive":"active";
       await env.PASARGUARD_DB.prepare("UPDATE sales_plans SET status=?,updated_at=? WHERE id=? AND bot_id=?").bind(next,nowIso(),planId,bot.id).run();await resellerAudit(env,bot,account,"web_plan_status",{planId,status:next});return json({success:true,message:next==="active"?"پلن فعال شد":"پلن غیرفعال شد"});
     }
     if (action === "plan_delete") {
-      const planId=cleanText(body.id,100);const used=await env.PASARGUARD_DB.prepare("SELECT COUNT(*) AS c FROM sales_orders WHERE plan_id=? AND bot_id=?").bind(planId,bot.id).first();
+      const planId=cleanText(body.id,100);const protectedPlan=await env.PASARGUARD_DB.prepare("SELECT plan_type FROM sales_plans WHERE id=? AND bot_id=?").bind(planId,bot.id).first();if(protectedPlan?.plan_type==="imported")throw new Error("این رکورد سیستمی قابل حذف نیست");const used=await env.PASARGUARD_DB.prepare("SELECT COUNT(*) AS c FROM sales_orders WHERE plan_id=? AND bot_id=?").bind(planId,bot.id).first();
       if(Number(used?.c||0)>0)throw new Error("این پلن سابقه سفارش دارد و برای حفظ گزارش‌ها قابل حذف نیست؛ آن را غیرفعال کنید");
       await env.PASARGUARD_DB.prepare("DELETE FROM sales_plans WHERE id=? AND bot_id=?").bind(planId,bot.id).run();await resellerAudit(env,bot,account,"web_plan_deleted",{planId});return json({success:true,message:"پلن حذف شد"});
     }
@@ -10068,7 +10338,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_EDGE_VERSION='3.1.6';
+const BLUEPANEL_EDGE_VERSION='3.1.8';
 function bluePanelEdgeJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function bluePanelEdgeInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
 function bluePanelEdgeRuntimeBinding(env,name){const value=env?.[name];return{name,exact_key_present:Object.prototype.hasOwnProperty.call(env||{},name),value_present:value!==undefined&&value!==null,fetch_callable:Boolean(value&&typeof value.fetch==='function'),constructor_name:value?.constructor?.name||''}}

@@ -1,32 +1,32 @@
 {
-  "version": "3.1.6",
-  "release_id": "3.1.6-20260715-cubepay-plisio-dual-gateway",
-  "architecture": "fully-split-three-worker",
+  "version": "3.1.8",
+  "release_id": "3.1.8-20260715-subscription-import-central-cron-topics",
+  "architecture": "fully-split-three-worker-central-cron-compatible",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
     "processor": "processor/worker.js"
   },
   "sha256": {
-    "core": "a7d8adb5bd81b19b347185993d24b191b832a8b13aaf6bae861b2c5e933bc81c",
-    "edge": "0ba58c2d18341a4c849355fb9fe7abb8dd5c6cb998ff50dece9ab44010cbe02a",
-    "processor": "9d4162e4adf9c7b077175b2355fef06029d1049243e686f0b3d19a8d108c6d8f"
+    "core": "f71823942b43a2133916b6d89865a8a49423d7e1e0cb0682576c68d821162fc8",
+    "edge": "d0ad4199431f77af6bf286ebf3f98f461172fdb3e9b55e1f2d547c26f522923e",
+    "processor": "79c5fab882abc50a57bfe2f6a6f6955a2551c27239bb9a5a7e568686f9daf6ae"
   },
   "roles": {
-    "core": "central bot, central wallet, PasarGuard integration, Plisio, CubePay callback verification and D1 authority",
-    "edge": "web panels, reseller bots, customer miniapps, reseller Plisio and reseller CubePay payments",
-    "processor": "report retries, topic repair, daily reports, backups and background jobs"
+    "core": "central bot, D1 schema authority, direct report outbox retry/topic repair, central wallet and callbacks",
+    "edge": "reseller bots, customer miniapps, old subscription import and service lifecycle",
+    "processor": "optional advanced schedules, report retries, topic repair, backups and background jobs"
   },
   "bindings": {
     "core": [
       "PASARGUARD_DB",
       "EDGE_WORKER",
-      "PROCESSOR_WORKER"
+      "PROCESSOR_WORKER (optional for advanced scheduled jobs)"
     ],
     "edge": [
       "EDGE_DB",
       "CORE_WORKER",
-      "PROCESSOR_WORKER"
+      "PROCESSOR_WORKER (optional because CORE fallback is supported)"
     ],
     "processor": [
       "PROCESSOR_DB",
@@ -35,25 +35,26 @@
     ]
   },
   "features": [
-    "add CubePay card-to-card payment beside Plisio for the central bot and central wallet",
-    "add independent CubePay configuration and wallet recharge for every reseller bot",
-    "store CubePay API tokens encrypted and delete Telegram messages containing secrets after saving",
-    "create invoices with Bearer authentication and convert toman amounts to rial before sending",
-    "preserve and display CubePay exact randomized payable amount returned by pay_amount/pay_amount_toman",
-    "treat CubePay callbacks only as notifications and call verify-payment before crediting a wallet",
-    "enforce order and amount matching and one-time wallet crediting for central and reseller payments",
-    "recover safely from CubePay HTTP 409 already-verified responses through local idempotency guards",
-    "use a separate reseller_cubepay_configs table to avoid the reseller_bots column limit",
-    "resolve the public HTTPS callback origin correctly when API requests are forwarded between Workers",
-    "keep Plisio, automatic USD-to-toman rates, report topics and PasarGuard 5.1 compatibility",
+    "customers can attach an existing PasarGuard service by submitting its current HTTPS subscription link in the reseller bot or miniapp",
+    "the public subscription info endpoint resolves the username and the reseller PasarGuard API verifies the service belongs to that reseller",
+    "imported services support status, renewal, volume increase, current subscription link and link revocation through the reseller bot",
+    "the same remote service cannot be claimed by another Telegram account or reseller bot",
+    "service imports are routed to a dedicated report topic",
+    "pending report delivery and deleted-topic repair run directly from the central Worker cron",
+    "only the central Worker needs a cron trigger for report delivery; a separate processor cron is no longer required for the report outbox",
+    "processor service binding remains optional for advanced scheduled jobs such as daily summaries, campaigns, backups and notifications",
+    "report flush in reseller groups falls back to the central Worker when PROCESSOR_WORKER is unavailable",
+    "test_all_topics command validates every configured topic and sends one test message to each",
+    "CubePay, Plisio, automatic USD rates and PasarGuard 5.1 API key compatibility are preserved",
     "README files are excluded"
   ],
   "validation": {
     "javascript_syntax": "passed for core, edge and processor",
-    "sqlite_schema": "SCHEMA_SQL executed successfully in SQLite; CubePay tables and invoice columns verified",
-    "invoice_storage": "central and reseller CubePay INSERT statements executed in a schema smoke test",
-    "idempotency": "central credit SQL replay test credited the wallet once and created one ledger record",
-    "callback_security": "static assertion: callback evidence is stored, then verify-payment is required before credit",
-    "live_cubepay_payment": "not run; no live CubePay merchant API token was supplied"
+    "central_cron_report_fallback": "core scheduled handler flushes pending report_outbox before and after optional processor jobs",
+    "topic_self_repair": "missing or invalid message_thread_id is recreated on demand and the message is retried once",
+    "service_import_route": "old subscription import is visible in reseller bot and miniapp and records a dedicated service_imports report",
+    "duplicate_claim_protection": "preserved from v3.1.7",
+    "live_pasarguard_import": "not run; no active customer subscription link was supplied",
+    "live_telegram_topics": "not run; no production bot tokens/group IDs were supplied"
   }
 }

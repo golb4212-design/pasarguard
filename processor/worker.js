@@ -1,11 +1,11 @@
 /* BLUEPANEL_PROCESSOR_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.1.6
+ * Version: 3.1.8
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = "3.1.6";
+const APP_VERSION = "3.1.8";
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
@@ -31,6 +31,7 @@ const CENTRAL_REPORT_TOPICS = Object.freeze([
   { key: "orders", title: "🛍 گزارش‌های خرید", color: 16766590 },
   { key: "payments", title: "💰 گزارش مالی", color: 16478047 },
   { key: "service_purchases", title: "📌 گزارش خرید خدمات", color: 7322096 },
+  { key: "service_imports", title: "🔗 اتصال سرویس‌های قبلی", color: 9367192 },
   { key: "trial_accounts", title: "🔑 گزارش اکانت تست", color: 13338331 },
   { key: "announcements", title: "📝 گزارش اطلاع‌رسانی‌ها", color: 9367192 },
   { key: "commissions", title: "🎁 گزارش پورسانت‌ها", color: 16766590 },
@@ -48,6 +49,7 @@ const RESELLER_REPORT_TOPICS = Object.freeze([
   { key: "orders", title: "🛍 گزارش‌های خرید", color: 16766590 },
   { key: "payments", title: "💰 گزارش مالی", color: 16478047 },
   { key: "service_purchases", title: "📌 گزارش خرید خدمات", color: 7322096 },
+  { key: "service_imports", title: "🔗 اتصال سرویس‌های قبلی", color: 9367192 },
   { key: "trial_accounts", title: "🔑 گزارش اکانت تست", color: 13338331 },
   { key: "announcements", title: "📝 گزارش اطلاع‌رسانی‌ها", color: 9367192 },
   { key: "commissions", title: "🎁 گزارش پورسانت‌ها", color: 16766590 },
@@ -394,7 +396,7 @@ async function telegramApiWithToken(token, method, body) {
 
 
 function reportScopeKey(botId = "") { return botId ? "reseller:" + String(botId) : "central"; }
-function reportTopicDefinition(scopeType, topicKey) { const aliases={services:"service_purchases",service:"service_purchases",security:"errors",error:"errors",trials:"trial_accounts",trial:"trial_accounts",daily:"nightly",backup:"backups",announcement:"announcements",commission:"commissions",finance:"payments",purchases:"orders",other:"misc"};const normalizedKey=aliases[String(topicKey||"")]||String(topicKey||"overview");const list=scopeType==="central"?CENTRAL_REPORT_TOPICS:RESELLER_REPORT_TOPICS;return list.find(x=>x.key===normalizedKey)||list[0]; }
+function reportTopicDefinition(scopeType, topicKey) { const aliases={services:"service_purchases",service:"service_purchases",imports:"service_imports",legacy:"service_imports",subscription_import:"service_imports",security:"errors",error:"errors",trials:"trial_accounts",trial:"trial_accounts",daily:"nightly",backup:"backups",announcement:"announcements",commission:"commissions",finance:"payments",purchases:"orders",other:"misc"};const normalizedKey=aliases[String(topicKey||"")]||String(topicKey||"overview");const list=scopeType==="central"?CENTRAL_REPORT_TOPICS:RESELLER_REPORT_TOPICS;return list.find(x=>x.key===normalizedKey)||list[0]; }
 async function queueReportEvent(env,botId,topicKey,title,messageHtml,dedupeKey){
   const ts=nowIso();
   try{
@@ -1935,7 +1937,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_PROCESSOR_VERSION='3.1.6';
+const BLUEPANEL_PROCESSOR_VERSION='3.1.8';
 let processorSchemaPromise=null;
 function processorJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function processorInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
