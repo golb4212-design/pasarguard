@@ -1,11 +1,11 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.1.5
+ * Version: 3.1.6
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.1.5";
+const APP_VERSION = "3.1.6";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -17,7 +17,8 @@ const RELEASE_NOTES = Object.freeze({
     { emoji: "🪙", text: "افزودن درگاه رمزارزی Plisio با Callback امضاشده و شارژ یک‌باره" },
     { emoji: "🔑", text: "افزودن مدیریت مستقیم API Key پاسارگارد در پنل مرکزی و ربات مرکزی" },
     { emoji: "💵", text: "دریافت خودکار نرخ دلار به تومان برای فاکتورهای Plisio با کش و نرخ پشتیبان" },
-    { emoji: "⚡", text: "ساخت سریع‌تر فاکتور Plisio با نرخ کش‌شده و انتقال ثبت وضعیت و گزارش به پس‌زمینه" }
+    { emoji: "⚡", text: "ساخت سریع‌تر فاکتور Plisio با نرخ کش‌شده و انتقال ثبت وضعیت و گزارش به پس‌زمینه" },
+    { emoji: "💳", text: "افزودن CubePay کارت‌به‌کارت با Callback و تایید نهایی API برای مرکز و نمایندگان" }
   ]),
   reseller: Object.freeze([
     { emoji: "📦", text: "تجمیع درخواست‌های اولیه پنل فروش و مدیریت در یک Batch دیتابیس" },
@@ -106,7 +107,7 @@ let schemaReadyPromise = null;
 
 // Persistent schema marker: avoids replaying the full D1 migration sweep whenever
 // Cloudflare starts a fresh isolate after an idle period.
-const DB_SCHEMA_REVISION = "3.1.4";
+const DB_SCHEMA_REVISION = "3.1.6";
 
 let settingsCache = null;
 
@@ -118,6 +119,8 @@ let encryptionKeyCacheSource = "";
 
 let centralPlisioSecretCache = { source: "", value: "", at: 0 };
 
+let centralCubepayTokenCache = { source: "", value: "", at: 0 };
+
 const resellerTokenCache = new Map();
 
 const joinStatusCache = new Map();
@@ -125,6 +128,8 @@ const joinStatusCache = new Map();
 const SETTINGS_CACHE_TTL_MS = 60000;
 
 const PLISIO_SECRET_CACHE_TTL_MS = 10 * 60 * 1000;
+
+const CUBEPAY_TOKEN_CACHE_TTL_MS = 10 * 60 * 1000;
 
 const PY_HELPER_INSIGHT_TIMEOUT_MS = 350;
 
@@ -307,6 +312,10 @@ const DEFAULT_SETTINGS = {
   plisio_test_currency: "BTC",
   plisio_last_verified_at: "",
   plisio_last_error: "",
+  cubepay_enabled: "false",
+  cubepay_api_token: "",
+  cubepay_last_verified_at: "",
+  cubepay_last_error: "",
   payment_poll_enabled: "true",
   auto_delete_pending_invoices: "true",
   pending_invoice_ttl_hours: "24",
@@ -392,7 +401,7 @@ const DEFAULT_SETTINGS = {
 const SECRET_SETTING_KEYS = new Set([
   "bot_token", "app_encryption_key", "telegram_webhook_secret",
   "pasarguard_access_token", "pasarguard_admin_password",
-  "blupal_api_key", "blupal_webhook_token", "plisio_api_key", "plisio_fx_api_key",
+  "blupal_api_key", "blupal_webhook_token", "plisio_api_key", "plisio_fx_api_key", "cubepay_api_token",
   "github_token", "cf_api_token", "edge_worker_api_key", "setup_password_hash", "setup_password_salt"
 ]);
 
@@ -688,6 +697,19 @@ CREATE TABLE IF NOT EXISTS reseller_plisio_configs (
   FOREIGN KEY(bot_id) REFERENCES reseller_bots(id)
 );
 CREATE INDEX IF NOT EXISTS idx_reseller_plisio_enabled ON reseller_plisio_configs(plisio_enabled,updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS reseller_cubepay_configs (
+  bot_id TEXT PRIMARY KEY,
+  cubepay_enabled INTEGER NOT NULL DEFAULT 0,
+  cubepay_api_token_enc TEXT,
+  cubepay_configured_at TEXT,
+  cubepay_last_verified_at TEXT,
+  cubepay_last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(bot_id) REFERENCES reseller_bots(id)
+);
+CREATE INDEX IF NOT EXISTS idx_reseller_cubepay_enabled ON reseller_cubepay_configs(cubepay_enabled,updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS reseller_usage_events (
   event_key TEXT PRIMARY KEY,
@@ -1868,7 +1890,8 @@ function publicSettings(settings) {
     release_last_announcement_at: settings.release_last_announcement_at || "",
     release_last_announcement_error: settings.release_last_announcement_error || "",
     min_recharge: Number(settings.min_recharge || 0),
-    payment_provider: settings.plisio_enabled === "true" ? "plisio" : "blupal",
+    payment_provider: settings.cubepay_enabled === "true" ? "cubepay" : (settings.plisio_enabled === "true" ? "plisio" : "blupal"),
+    cubepay_enabled: cubepayConfigured(settings),
     plisio_enabled: plisioConfigured(settings),
     plisio_source_currency: settings.plisio_source_currency || "USD",
     plisio_toman_per_source_unit: Number(settings.plisio_fx_last_rate_toman || settings.plisio_toman_per_source_unit || 0),
@@ -1910,7 +1933,11 @@ function adminSettings(settings) {
     release_last_announcement_at: settings.release_last_announcement_at || "",
     release_last_announcement_error: settings.release_last_announcement_error || "",
     min_recharge: Number(settings.min_recharge || 0),
-    payment_provider: settings.plisio_enabled === "true" ? "plisio" : "blupal",
+    payment_provider: settings.cubepay_enabled === "true" ? "cubepay" : (settings.plisio_enabled === "true" ? "plisio" : "blupal"),
+    cubepay_enabled: settings.cubepay_enabled === "true",
+    cubepay_token_configured: Boolean(settings.cubepay_api_token),
+    cubepay_last_verified_at: settings.cubepay_last_verified_at || "",
+    cubepay_last_error: settings.cubepay_last_error || "",
     plisio_enabled: settings.plisio_enabled === "true",
     plisio_source_currency: settings.plisio_source_currency || "USD",
     plisio_toman_per_source_unit: Number(settings.plisio_toman_per_source_unit || 0),
@@ -4291,6 +4318,91 @@ async function testCentralPlisioConnection(env) {
   return { configured: true, source_currency: settings.plisio_source_currency || "USD", rate_toman: fx.rate_toman, rate_source: fx.source, stale: !!fx.stale };
 }
 
+
+function normalizeCubepayBaseUrl(value = "https://cubevps.ir/smspay/api") {
+  const raw = String(value || "https://cubevps.ir/smspay/api").trim();
+  let url;
+  try { url = new URL(raw); } catch (_) { throw new Error("آدرس API CubePay معتبر نیست"); }
+  if (url.protocol !== "https:" || url.hostname.toLowerCase() !== "cubevps.ir") throw new Error("دامنه API CubePay معتبر نیست");
+  const path = url.pathname.replace(/\/+$/, "");
+  if (path !== "/smspay/api") throw new Error("مسیر API CubePay باید /smspay/api باشد");
+  return "https://cubevps.ir/smspay/api";
+}
+
+function cubepayConfigured(settings) {
+  return settings?.cubepay_enabled === "true" && !!String(settings?.cubepay_api_token || "").trim();
+}
+
+async function centralCubepayToken(settings, env) {
+  const raw = String(settings?.cubepay_api_token || "").trim();
+  if (!raw) throw new Error("API Token درگاه CubePay ثبت نشده است");
+  if (!raw.startsWith("enc:")) return raw;
+  if (centralCubepayTokenCache.source === raw && centralCubepayTokenCache.value && Date.now() - centralCubepayTokenCache.at < CUBEPAY_TOKEN_CACHE_TTL_MS) return centralCubepayTokenCache.value;
+  try {
+    const value = await decryptSecret(raw.slice(4), env);
+    if (!value) throw new Error("empty");
+    centralCubepayTokenCache = { source: raw, value, at: Date.now() };
+    return value;
+  } catch (_) {
+    throw new Error("API Token درگاه CubePay قابل بازیابی نیست؛ آن را دوباره ثبت کنید");
+  }
+}
+
+async function cubepayRequest(settings, env, endpoint, body, tokenOverride = "") {
+  if (!["create-payment.php", "verify-payment.php"].includes(endpoint)) throw new Error("مسیر CubePay مجاز نیست");
+  const token = tokenOverride || await centralCubepayToken(settings, env);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  let response;
+  try {
+    response = await fetch(normalizeCubepayBaseUrl() + "/" + endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json", authorization: "Bearer " + token },
+      body: JSON.stringify(body || {}),
+      signal: controller.signal
+    });
+  } finally { clearTimeout(timer); }
+  const data = await response.json().catch(() => ({}));
+  return { ok: response.ok, status: response.status, data };
+}
+
+async function recordCentralCubepayState(env, ok, message = "") {
+  await setSettings(env, ok
+    ? { cubepay_last_verified_at: nowIso(), cubepay_last_error: "" }
+    : { cubepay_last_error: cleanText(message, 800) });
+}
+
+async function testCentralCubepayConfig(env) {
+  const settings = await getSettings(env);
+  const token = await centralCubepayToken(settings, env);
+  if (String(token).length < 8) throw new Error("API Token CubePay معتبر نیست");
+  return { configured: true, note: "CubePay endpoint آزمایشی بدون ساخت فاکتور ندارد" };
+}
+
+function bluePanelPublicOrigin(request) {
+  const requestUrl = new URL(request.url);
+  const directOrigin = requestUrl.origin;
+  const internalHost = requestUrl.hostname.endsWith(".internal");
+  const forwarded = String(request.headers.get("x-bluepanel-public-origin") || "").trim();
+  const candidate = internalHost && forwarded ? forwarded : directOrigin;
+  let parsed;
+  try { parsed = new URL(candidate); } catch (_) { throw new Error("آدرس عمومی سرویس معتبر نیست"); }
+  if (parsed.protocol !== "https:" || parsed.hostname.endsWith(".internal")) throw new Error("آدرس عمومی HTTPS برای Callback در دسترس نیست");
+  return parsed.origin;
+}
+
+function centralCubepayCallbackUrl(origin) {
+  return String(origin || "").replace(/\/+$/, "") + "/payments/cubepay/callback";
+}
+
+function normalizeCubepayVerifyStatus(httpStatus, data) {
+  if (httpStatus === 200 && data?.success === true && String(data?.status || "").toLowerCase() === "verified") return "PAID";
+  if (httpStatus === 402 || String(data?.status || "").toLowerCase() === "pending") return "PENDING";
+  if (httpStatus === 410 || ["expired", "failed"].includes(String(data?.status || "").toLowerCase())) return "EXPIRED";
+  if (httpStatus === 404) return "FAILED";
+  return "PENDING";
+}
+
 function normalizePaymentStatus(value) {
   const status = String(value || "PENDING").toUpperCase();
   return ["PENDING", "PAID", "EXPIRED", "CANCELED", "FAILED"].includes(status) ? status : "PENDING";
@@ -4377,7 +4489,7 @@ async function createPlisioPaymentInvoice(request, env, ctx = null) {
   try { fx = await resolveCentralPlisioFxRateForInvoice(env, settings, ctx); }
   catch (error) { return fail("دریافت نرخ دلار ناموفق بود: " + error.message, 503, "FX_RATE_UNAVAILABLE"); }
   const sourceAmount = plisioSourceAmount(amountToman, fx.rate_toman);
-  const urls = centralPlisioUrls(new URL(request.url).origin);
+  const urls = centralPlisioUrls(bluePanelPublicOrigin(request));
   const params = {
     source_currency: cleanText(settings.plisio_source_currency || "USD", 20).toUpperCase() || "USD",
     source_amount: sourceAmount.toFixed(2),
@@ -4417,6 +4529,57 @@ async function createPlisioPaymentInvoice(request, env, ctx = null) {
   }
   scheduleInvoiceBackground(ctx, audit(env, auth.user.id, "plisio_invoice_created", { paymentId: localId, providerInvoiceId, amountToman, sourceAmount, sourceCurrency: params.source_currency, fxRateToman: fx.rate_toman, fxSource: fx.source }), "Plisio invoice audit failed");
   return json({ success: true, payment: { id: localId, invoice_id: providerInvoiceId, amount: amountToman, status: "PENDING", payment_link: paymentLink, provider: "plisio", source_amount: sourceAmount, source_currency: params.source_currency, fx_source: fx.source } }, 201);
+}
+
+
+async function createCubepayPaymentInvoice(request, env, ctx = null) {
+  const auth = await requireAuth(request, env);
+  if (auth.response) return auth.response;
+  const body = await parseBody(request);
+  const settings = await getSettings(env);
+  if (!cubepayConfigured(settings)) return fail("درگاه CubePay فعال یا کامل تنظیم نشده است", 503, "CUBEPAY_NOT_CONFIGURED");
+  const amountToman = clampInt(body.amount, 0, 1000000000000);
+  const minRecharge = Math.max(10000, clampInt(settings.min_recharge, 0));
+  if (amountToman < minRecharge) return fail("حداقل مبلغ شارژ " + minRecharge.toLocaleString("fa-IR") + " تومان است", 400, "AMOUNT_TOO_LOW");
+  const localId = id("cpay");
+  const amountRial = amountToman * 10;
+  const requestBody = {
+    amount: amountRial,
+    order_id: localId,
+    callback_url: centralCubepayCallbackUrl(bluePanelPublicOrigin(request)),
+    type: "card",
+    customer_user_id: String(auth.user.telegram_id || auth.user.id),
+    description: "شارژ کیف پول مرکزی " + amountToman + " تومان"
+  };
+  let result;
+  try {
+    result = await cubepayRequest(settings, env, "create-payment.php", requestBody);
+  } catch (error) {
+    scheduleInvoiceBackground(ctx, recordCentralCubepayState(env, false, error.message), "record CubePay error state failed");
+    return fail("ساخت فاکتور CubePay ناموفق بود: " + error.message, 502, "CUBEPAY_CREATE_FAILED");
+  }
+  const provider = result.data || {};
+  if (!result.ok || provider.success !== true) {
+    const message = cleanText(provider.message || provider.error || ("CubePay HTTP " + result.status), 700);
+    scheduleInvoiceBackground(ctx, recordCentralCubepayState(env, false, message), "record CubePay error state failed");
+    return fail("ساخت فاکتور CubePay ناموفق بود: " + message, result.status || 502, "CUBEPAY_CREATE_FAILED");
+  }
+  const authority = cleanText(provider.authority, 160);
+  const paymentLink = cleanText(provider.payment_link, 1000);
+  const payAmountRial = clampInt(provider.pay_amount, 0, Number.MAX_SAFE_INTEGER);
+  const payAmountToman = clampInt(provider.pay_amount_toman, 0, Number.MAX_SAFE_INTEGER);
+  if (!authority || !paymentLink || !payAmountRial || !payAmountToman) return fail("پاسخ CubePay ناقص است", 502, "INVALID_PROVIDER_RESPONSE");
+  if (payAmountRial < amountRial || Math.abs(payAmountRial - payAmountToman * 10) > 9) return fail("مبلغ دقیق CubePay نامعتبر است", 502, "AMOUNT_MISMATCH");
+  const ts = nowIso();
+  const storedPayload = { request: requestBody, response: provider, callback_received: false };
+  try {
+    await env.PASARGUARD_DB.prepare(`
+      INSERT INTO payment_invoices(id,user_id,provider,provider_invoice_id,amount_rial,amount_toman,final_amount_rial,status,payment_link,card_number,provider_payload,created_at,updated_at)
+      VALUES(?,?,'cubepay',?,?,?,?,'PENDING',?,NULL,?,?,?)
+    `).bind(localId, auth.user.id, authority, amountRial, amountToman, payAmountRial, paymentLink, JSON.stringify(storedPayload), ts, ts).run();
+  } catch (_) { return fail("ثبت فاکتور در دیتابیس ناموفق بود", 500, "PAYMENT_STORAGE_FAILED"); }
+  scheduleInvoiceBackground(ctx, audit(env, auth.user.id, "cubepay_invoice_created", { paymentId: localId, authority, amountToman, amountRial, payAmountRial, payAmountToman }), "CubePay invoice audit failed");
+  return json({ success: true, payment: { id: localId, invoice_id: authority, provider_invoice_id: authority, amount: amountToman, amount_toman: amountToman, amount_rial: amountRial, final_amount_rial: payAmountRial, final_amount_toman: payAmountToman, status: "PENDING", payment_link: paymentLink, provider: "cubepay" } }, 201);
 }
 
 async function applyVerifiedPlisioPayment(env, payment, providerPayload) {
@@ -4518,6 +4681,104 @@ function centralPlisioReturnPage(settings, origin, url) {
   return `<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>بازگشت از Plisio</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:20px;background:#f3f6ff;color:#17223b;font-family:Tahoma,Arial}.card{width:min(100%,500px);background:#fff;border-radius:28px;padding:30px;text-align:center;box-shadow:0 24px 70px #263d6b25}.icon{font-size:48px}.muted{color:#6e7890;line-height:2}.btn{display:block;text-decoration:none;margin-top:14px;padding:14px;border-radius:16px;background:linear-gradient(135deg,#4e8cff,#765eff);color:white;font-weight:900}</style></head><body><main class="card"><div class="icon">${ok ? "✅" : "↩️"}</div><h1>بازگشت از پرداخت Plisio</h1><p class="muted">وضعیت نهایی پرداخت از Callback امضاشده Plisio بررسی می‌شود. برای مشاهده موجودی جدید به ${brand} برگردید.</p><a class="btn" href="${htmlEscape(botLink)}">بازکردن ربات مرکزی</a><a class="btn" href="${htmlEscape(urls.return_url.replace('/payments/plisio/return','/app#payments'))}">مشاهده پرداخت‌ها</a></main></body></html>`;
 }
 
+
+async function applyVerifiedCubepayPayment(env, payment, providerData) {
+  const orderId = cleanText(providerData?.order_id, 160);
+  const amountRial = clampInt(providerData?.amount, 0, Number.MAX_SAFE_INTEGER);
+  if (orderId !== String(payment.id)) throw new Error("شماره سفارش CubePay تطبیق ندارد");
+  if (amountRial !== Number(payment.amount_rial)) throw new Error("مبلغ تاییدشده CubePay با فاکتور داخلی تطبیق ندارد");
+  let initial = {};
+  try { initial = JSON.parse(payment.provider_payload || "{}"); } catch (_) {}
+  const ts = nowIso();
+  const settings = await getSettings(env);
+  const bonusPercent = Math.max(0, Math.min(100, Number(settings.central_recharge_bonus_percent || 0)));
+  const baseAmount = Number(payment.amount_toman || 0);
+  const bonusAmount = Math.floor(baseAmount * bonusPercent / 100);
+  const creditedAmount = baseAmount + bonusAmount;
+  const suffix = String(crypto.getRandomValues(new Uint32Array(1))[0]).padStart(10, "0").slice(0, 6);
+  const creditToken = ts.replace("Z", suffix + "Z");
+  const ledgerId = "led_cubepay_" + String(payment.id).replace(/[^a-zA-Z0-9_]/g, "");
+  const description = bonusAmount > 0 ? ("شارژ CubePay + بونس " + bonusPercent + "٪") : "شارژ خودکار از طریق CubePay";
+  const payload = JSON.stringify({ ...initial, verified: providerData, callback_received: true });
+  const results = await env.PASARGUARD_DB.batch([
+    env.PASARGUARD_DB.prepare(`UPDATE payment_invoices SET status='PAID',paid_at=?,credited_at=?,provider_payload=?,updated_at=? WHERE id=? AND credited_at IS NULL AND amount_rial=?`)
+      .bind(ts, creditToken, payload, ts, payment.id, payment.amount_rial),
+    env.PASARGUARD_DB.prepare(`UPDATE users SET wallet_balance=wallet_balance+?,updated_at=? WHERE id=? AND EXISTS(SELECT 1 FROM payment_invoices WHERE id=? AND credited_at=?)`)
+      .bind(creditedAmount, ts, payment.user_id, payment.id, creditToken),
+    env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO wallet_ledger(id,user_id,type,amount,balance_after,ref_type,ref_id,description,created_at)
+      SELECT ?,id,'recharge',?,wallet_balance,'cubepay',?,?,? FROM users WHERE id=? AND EXISTS(SELECT 1 FROM payment_invoices WHERE id=? AND credited_at=?)`)
+      .bind(ledgerId, creditedAmount, payment.id, description, ts, payment.user_id, payment.id, creditToken)
+  ]);
+  const credited = Number(results?.[0]?.meta?.changes || 0) > 0;
+  if (credited) {
+    await reconcileUserAgencies(env, payment.user_id);
+    const target = await env.PASARGUARD_DB.prepare("SELECT telegram_id,wallet_balance,first_name,username FROM users WHERE id=?").bind(payment.user_id).first();
+    if (target) {
+      await notifyTelegramUser(env, target.telegram_id, "✅ پرداخت کارت‌به‌کارت CubePay تأیید شد.\nمبلغ شارژ: " + baseAmount.toLocaleString("fa-IR") + " تومان" + (bonusAmount > 0 ? "\n🎁 بونس: " + bonusAmount.toLocaleString("fa-IR") + " تومان" : "") + "\nموجودی: " + Number(target.wallet_balance).toLocaleString("fa-IR") + " تومان");
+      await notifyAdmins(env, "✅ <b>پرداخت موفق CubePay</b>\nکاربر: " + (target.first_name || target.username || target.telegram_id) + "\nمبلغ: " + baseAmount.toLocaleString("fa-IR") + " تومان\nAuthority: <code>" + botEscape(payment.provider_invoice_id) + "</code>");
+    }
+    await audit(env, payment.user_id, "cubepay_payment_credited", { paymentId: payment.id, authority: payment.provider_invoice_id, amount: baseAmount, bonusAmount, creditedAmount });
+  }
+  await recordCentralCubepayState(env, true).catch(() => null);
+  return { status: "PAID", credited, bonusAmount, creditedAmount };
+}
+
+async function reconcileCubepayPaymentInvoice(env, payment) {
+  if (payment.credited_at) return payment;
+  let stored = {};
+  try { stored = JSON.parse(payment.provider_payload || "{}"); } catch (_) {}
+  if (!stored.callback_received) return payment;
+  const settings = await getSettings(env);
+  const result = await cubepayRequest(settings, env, "verify-payment.php", { authority: payment.provider_invoice_id });
+  const data = result.data || {};
+  const status = normalizeCubepayVerifyStatus(result.status, data);
+  const ts = nowIso();
+  if (result.status === 409) {
+    await new Promise(resolve => setTimeout(resolve, 250));
+    const fresh = await env.PASARGUARD_DB.prepare("SELECT * FROM payment_invoices WHERE id=?").bind(payment.id).first();
+    if (fresh?.credited_at) return fresh;
+    await applyVerifiedCubepayPayment(env, payment, { order_id: payment.id, amount: payment.amount_rial, status: "verified", already_verified: true });
+    return env.PASARGUARD_DB.prepare("SELECT * FROM payment_invoices WHERE id=?").bind(payment.id).first();
+  }
+  if (status === "PAID") {
+    await applyVerifiedCubepayPayment(env, payment, data);
+  } else {
+    await env.PASARGUARD_DB.prepare("UPDATE payment_invoices SET status=?,provider_payload=?,updated_at=? WHERE id=? AND credited_at IS NULL")
+      .bind(status, JSON.stringify({ ...stored, callback_received: true, verify: data, verify_http_status: result.status }), ts, payment.id).run();
+    if (!result.ok && ![402,404,410].includes(result.status)) throw new Error(cleanText(data.message || data.error || ("CubePay HTTP " + result.status), 700));
+  }
+  return env.PASARGUARD_DB.prepare("SELECT * FROM payment_invoices WHERE id=?").bind(payment.id).first();
+}
+
+async function cubepayCallback(request, env) {
+  const url = new URL(request.url);
+  let payload = {};
+  if (request.method === "POST") { try { payload = await parseBody(request); } catch (_) {} }
+  const authority = cleanText(payload.authority || url.searchParams.get("authority"), 160);
+  const orderId = cleanText(payload.order_id || url.searchParams.get("order_id"), 160);
+  const callbackStatus = cleanText(payload.status || url.searchParams.get("status"), 50).toLowerCase();
+  if (!authority && !orderId) return fail("Invalid callback payload", 400, "INVALID_CALLBACK");
+  let payment = null;
+  if (authority) payment = await env.PASARGUARD_DB.prepare("SELECT * FROM payment_invoices WHERE provider='cubepay' AND provider_invoice_id=?").bind(authority).first();
+  if (!payment && orderId) payment = await env.PASARGUARD_DB.prepare("SELECT * FROM payment_invoices WHERE provider='cubepay' AND id=?").bind(orderId).first();
+  if (!payment) { await audit(env, null, "cubepay_callback_unknown_invoice", { authority, orderId, callbackStatus }); return fail("Invoice not found", 404, "NOT_FOUND"); }
+  let initial = {};
+  try { initial = JSON.parse(payment.provider_payload || "{}"); } catch (_) {}
+  await env.PASARGUARD_DB.prepare("UPDATE payment_invoices SET provider_payload=?,updated_at=? WHERE id=?")
+    .bind(JSON.stringify({ ...initial, callback_received: true, callback: payload, callback_query: Object.fromEntries(url.searchParams.entries()), callback_at: nowIso() }), nowIso(), payment.id).run();
+  if (payment.credited_at) return json({ received: true, already_processed: true });
+  try {
+    const fresh = await env.PASARGUARD_DB.prepare("SELECT * FROM payment_invoices WHERE id=?").bind(payment.id).first();
+    await reconcileCubepayPaymentInvoice(env, fresh);
+    await audit(env, payment.user_id, "cubepay_callback_processed", { paymentId: payment.id, authority, callbackStatus });
+    return json({ received: true });
+  } catch (error) {
+    await recordCentralCubepayState(env, false, error.message).catch(() => null);
+    await audit(env, payment.user_id, "cubepay_callback_failed", { paymentId: payment.id, message: error.message });
+    return fail("Callback processing failed", 500, "CALLBACK_FAILED");
+  }
+}
+
 async function applyVerifiedPayment(env, payment, providerData) {
   const providerInvoiceId = String(providerData.invoice_id || "");
   const status = normalizePaymentStatus(providerData.status);
@@ -4602,7 +4863,9 @@ async function reconcileBlupalPaymentInvoice(env, payment) {
 }
 
 async function reconcilePaymentInvoice(env, payment) {
-  if (String(payment?.provider || "blupal").toLowerCase() === "plisio") return reconcilePlisioPaymentInvoice(env, payment);
+  const provider = String(payment?.provider || "blupal").toLowerCase();
+  if (provider === "plisio") return reconcilePlisioPaymentInvoice(env, payment);
+  if (provider === "cubepay") return reconcileCubepayPaymentInvoice(env, payment);
   return reconcileBlupalPaymentInvoice(env, payment);
 }
 
@@ -4667,7 +4930,7 @@ async function cleanupStalePendingInvoices(env, options = {}) {
   for (const payment of rows.results || []) {
     try {
       const providerName = String(payment.provider || "blupal").toLowerCase();
-      if ((providerName === "plisio" && !settings.plisio_api_key) || (providerName !== "plisio" && !settings.blupal_api_key)) {
+      if ((providerName === "plisio" && !settings.plisio_api_key) || (providerName === "cubepay" && !settings.cubepay_api_token) || (!["plisio","cubepay"].includes(providerName) && !settings.blupal_api_key)) {
         skipped++;
         errors.push({ paymentId: payment.id, error: providerName + " API key is not configured" });
         continue;
@@ -5097,7 +5360,7 @@ async function saveAdminSettings(request, env) {
     "brand_name", "price_per_gb", "setup_fee", "reseller_bot_setup_fee", "reseller_bot_license_renewal_fee",
     "reseller_store_bot_setup_fee", "reseller_store_bot_license_renewal_fee", "reseller_master_bot_setup_fee", "reseller_master_bot_license_renewal_fee", "master_min_markup_toman",
     "agency_sales_enabled", "reseller_bot_sales_enabled", "central_recharge_bonus_percent", "central_trial_enabled", "central_trial_data_limit_bytes", "central_trial_duration_hours", "min_recharge", "support_username",
-    "blupal_base_url", "blupal_api_key", "blupal_card_number", "blupal_webhook_token", "plisio_enabled", "plisio_api_key", "plisio_source_currency", "plisio_toman_per_source_unit", "plisio_rate_mode", "plisio_fx_api_key", "plisio_fx_item", "plisio_fx_unit", "plisio_fx_refresh_minutes", "plisio_fx_max_stale_minutes", "plisio_fx_markup_percent", "plisio_allowed_currencies", "plisio_expire_minutes", "plisio_test_currency", "payment_poll_enabled",
+    "blupal_base_url", "blupal_api_key", "blupal_card_number", "blupal_webhook_token", "cubepay_enabled", "cubepay_api_token", "plisio_enabled", "plisio_api_key", "plisio_source_currency", "plisio_toman_per_source_unit", "plisio_rate_mode", "plisio_fx_api_key", "plisio_fx_item", "plisio_fx_unit", "plisio_fx_refresh_minutes", "plisio_fx_max_stale_minutes", "plisio_fx_markup_percent", "plisio_allowed_currencies", "plisio_expire_minutes", "plisio_test_currency", "payment_poll_enabled",
     "auto_delete_pending_invoices", "pending_invoice_ttl_hours", "usage_sync_enabled", "auto_update", "auto_update_interval_seconds", "bot_token", "admin_ids",
     "auth_max_age_seconds", "allow_dev_auth", "dev_telegram_id", "app_encryption_key", "app_url",
     "telegram_webhook_secret", "pasarguard_panel_url", "pasarguard_access_token",
@@ -5132,6 +5395,7 @@ async function saveAdminSettings(request, env) {
     try { values.blupal_base_url = normalizeBlupalBaseUrl(values.blupal_base_url); }
     catch (error) { return fail(error.message, 400, "INVALID_BLUPAL_URL"); }
   }
+  if (values.cubepay_enabled !== undefined) values.cubepay_enabled = values.cubepay_enabled === true || String(values.cubepay_enabled).toLowerCase() === "true" ? "true" : "false";
   if (values.plisio_rate_mode !== undefined) values.plisio_rate_mode = String(values.plisio_rate_mode).toLowerCase() === "manual" ? "manual" : "auto";
   if (values.plisio_fx_item !== undefined) values.plisio_fx_item = cleanText(values.plisio_fx_item || "usd_sell", 50).toLowerCase() || "usd_sell";
   if (values.plisio_fx_unit !== undefined) values.plisio_fx_unit = String(values.plisio_fx_unit).toLowerCase() === "rial" ? "rial" : "toman";
@@ -7530,9 +7794,14 @@ const RESELLER_PLISIO_DEFAULTS = Object.freeze({
 });
 async function getResellerPlisioConfig(env,botId){if(!botId)return{...RESELLER_PLISIO_DEFAULTS};try{const row=await env.PASARGUARD_DB.prepare(`SELECT plisio_enabled,plisio_api_key_enc,plisio_source_currency,plisio_toman_per_source_unit,plisio_allowed_currencies,plisio_expire_minutes,plisio_test_currency,plisio_configured_at,plisio_last_verified_at,plisio_last_error FROM reseller_plisio_configs WHERE bot_id=?`).bind(botId).first();return{...RESELLER_PLISIO_DEFAULTS,...(row||{})}}catch(e){if(/no such table/i.test(String(e?.message||e)))return{...RESELLER_PLISIO_DEFAULTS};throw e}}
 
+const RESELLER_CUBEPAY_DEFAULTS = Object.freeze({
+  cubepay_enabled:0,cubepay_api_token_enc:null,cubepay_configured_at:null,cubepay_last_verified_at:null,cubepay_last_error:null
+});
+async function getResellerCubepayConfig(env,botId){if(!botId)return{...RESELLER_CUBEPAY_DEFAULTS};try{const row=await env.PASARGUARD_DB.prepare(`SELECT cubepay_enabled,cubepay_api_token_enc,cubepay_configured_at,cubepay_last_verified_at,cubepay_last_error FROM reseller_cubepay_configs WHERE bot_id=?`).bind(botId).first();return{...RESELLER_CUBEPAY_DEFAULTS,...(row||{})}}catch(e){if(/no such table/i.test(String(e?.message||e)))return{...RESELLER_CUBEPAY_DEFAULTS};throw e}}
+
 async function hydrateResellerBotRelations(env, bot) {
   if (!bot) return null;
-  const [relation,plisio] = await Promise.all([
+  const [relation,plisio,cubepay] = await Promise.all([
     env.PASARGUARD_DB.prepare(`
     SELECT a.title AS agency_title,a.panel_username,a.panel_password_enc,a.status AS agency_status,a.remote_manager_id,
            u.telegram_id AS owner_telegram_id,u.username AS owner_username,u.first_name AS owner_first_name,
@@ -7540,8 +7809,8 @@ async function hydrateResellerBotRelations(env, bot) {
            CASE WHEN a.panel_password_enc IS NULL THEN 0 ELSE 1 END AS agency_has_password
     FROM users u LEFT JOIN agencies a ON a.id=?
     WHERE u.id=?
-  `).bind(bot.agency_id, bot.user_id).first(),getResellerPlisioConfig(env,bot.id)]);
-  return { ...bot,...RESELLER_PLISIO_DEFAULTS,...(plisio||{}), ...(relation || {}) };
+  `).bind(bot.agency_id, bot.user_id).first(),getResellerPlisioConfig(env,bot.id),getResellerCubepayConfig(env,bot.id)]);
+  return { ...bot,...RESELLER_PLISIO_DEFAULTS,...RESELLER_CUBEPAY_DEFAULTS,...(plisio||{}),...(cubepay||{}), ...(relation || {}) };
 }
 
 async function getResellerBotForUser(env, userId) {
@@ -9590,6 +9859,26 @@ async function botAdminPlisioView(env, account) {
   };
 }
 
+async function botAdminCubepayView(env, account) {
+  if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+  const s = await getSettings(env);
+  const tokenSet = !!String(s.cubepay_api_token || "").trim();
+  const enabled = s.cubepay_enabled === "true";
+  const lines = [
+    "💳 <b>درگاه کارت‌به‌کارت CubePay</b>", "━━━━━━━━━━━━━━",
+    "وضعیت: <b>" + (enabled && tokenSet ? "🟢 فعال" : enabled ? "🟠 توکن ناقص" : "🔴 غیرفعال") + "</b>",
+    "API Token: <b>" + (tokenSet ? "ثبت و رمزگذاری شده" : "ثبت نشده") + "</b>",
+    "واحد مبلغ: <b>ریال</b>", "تایید نهایی: <b>Callback سپس verify-payment</b>", "اعتبار فاکتور: <b>۳۰ دقیقه</b>"
+  ];
+  if (s.cubepay_last_verified_at) lines.push("آخرین تایید موفق: <b>" + botDate(s.cubepay_last_verified_at) + "</b>");
+  if (s.cubepay_last_error) lines.push("", "⚠️ آخرین خطا:", "<code>" + botEscape(s.cubepay_last_error) + "</code>");
+  return { text: lines.join("\n"), reply_markup:{inline_keyboard:[
+    [{text:tokenSet?"🔑 تغییر API Token":"🔑 ثبت API Token",callback_data:"bot:admin:cubepay:key"}],
+    [{text:"🧪 بررسی تنظیمات",callback_data:"bot:admin:cubepay:test"},{text:enabled?"⏸ غیرفعال‌کردن":"▶️ فعال‌کردن",callback_data:"bot:admin:cubepay:toggle"}],
+    [{text:"↩️ تعرفه و هزینه‌ها",callback_data:"bot:admin:settings:finance"}]
+  ]}};
+}
+
 async function botAdminPasarguardApiView(env, account) {
   if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
   const settings = await getSettings(env);
@@ -9656,14 +9945,15 @@ async function botAdminSettingsGroupView(env, account, group) {
         "🪪 تمدید ماهانه ربات: <b>" + botMoney(s.reseller_bot_license_renewal_fee || 0) + " تومان</b>",
         "🎉 بونس شارژ مرکزی: <b>" + botMoney(s.central_recharge_bonus_percent || 0) + "٪</b>",
         "💳 حداقل شارژ: <b>" + botMoney(s.min_recharge) + " تومان</b>",
-        "🪙 Plisio: <b>" + (s.plisio_enabled === "true" ? "فعال" : "غیرفعال") + "</b>"
+        "🪙 Plisio: <b>" + (s.plisio_enabled === "true" ? "فعال" : "غیرفعال") + "</b>",
+        "💳 CubePay: <b>" + (s.cubepay_enabled === "true" ? "فعال" : "غیرفعال") + "</b>"
       ],
       rows: [
         [{ text: "قیمت هر گیگ", callback_data: "bot:setting:price_per_gb" }, { text: "حداقل موجودی پنل", callback_data: "bot:setting:setup_fee" }],
         [{ text: "هزینه ساخت ربات", callback_data: "bot:setting:reseller_bot_setup_fee" }, { text: "تمدید ماهانه", callback_data: "bot:setting:reseller_bot_license_renewal_fee" }],
         [{ text: "بونس شارژ مرکزی", callback_data: "bot:setting:central_recharge_bonus_percent" }],
         [{ text: "حداقل شارژ", callback_data: "bot:setting:min_recharge" }],
-        [{ text: "🪙 مدیریت Plisio", callback_data: "bot:admin:plisio" }]
+        [{ text: "🪙 مدیریت Plisio", callback_data: "bot:admin:plisio" }, { text: "💳 مدیریت CubePay", callback_data: "bot:admin:cubepay" }]
       ]
     },
     access: {
@@ -9823,6 +10113,7 @@ async function botRenderView(env, account, view) {
   if (view === "admin_trial") return botAdminTrialView(env, account);
   if (view === "admin_settings_finance") return botAdminSettingsGroupView(env, account, "finance");
   if (view === "admin_plisio") return botAdminPlisioView(env, account);
+  if (view === "admin_cubepay") return botAdminCubepayView(env, account);
   if (view === "admin_pasarguard_api") return botAdminPasarguardApiView(env, account);
   if (view === "admin_settings_access") return botAdminSettingsGroupView(env, account, "access");
   if (view === "admin_settings_automation") return botAdminSettingsGroupView(env, account, "automation");
@@ -9923,8 +10214,30 @@ async function botCreatePlisioPaymentInvoice(env, user, amountToman, origin) {
   return { id:localId, providerInvoiceId, amount, paymentLink, status:"PENDING", provider:"plisio" };
 }
 
+async function botCreateCubepayPaymentInvoice(env, user, amountToman, origin) {
+  const settings = await getSettings(env);
+  if (!cubepayConfigured(settings)) throw new Error("درگاه CubePay فعال یا کامل تنظیم نشده است");
+  const amount = clampInt(amountToman, 0, 1000000000000);
+  const minRecharge = Math.max(10000, clampInt(settings.min_recharge, 0));
+  if (amount < minRecharge) throw new Error("حداقل مبلغ شارژ " + botMoney(minRecharge) + " تومان است");
+  const localId = id("cpay"), amountRial = amount * 10;
+  const requestBody = { amount: amountRial, order_id: localId, callback_url: centralCubepayCallbackUrl(origin), type: "card", customer_user_id: String(user.telegram_id || user.id), description: "شارژ کیف پول مرکزی " + amount + " تومان" };
+  const result = await cubepayRequest(settings, env, "create-payment.php", requestBody);
+  const provider = result.data || {};
+  if (!result.ok || provider.success !== true) throw new Error(cleanText(provider.message || provider.error || ("CubePay HTTP " + result.status), 700));
+  const authority = cleanText(provider.authority,160), paymentLink=cleanText(provider.payment_link,1000);
+  const payAmountRial=clampInt(provider.pay_amount,0,Number.MAX_SAFE_INTEGER),payAmountToman=clampInt(provider.pay_amount_toman,0,Number.MAX_SAFE_INTEGER);
+  if(!authority||!paymentLink||!payAmountRial||!payAmountToman)throw new Error("پاسخ CubePay ناقص است");
+  const ts=nowIso();
+  await env.PASARGUARD_DB.prepare(`INSERT INTO payment_invoices(id,user_id,provider,provider_invoice_id,amount_rial,amount_toman,final_amount_rial,status,payment_link,card_number,provider_payload,created_at,updated_at) VALUES(?,?,'cubepay',?,?,?,?,'PENDING',?,NULL,?,?,?)`)
+    .bind(localId,user.id,authority,amountRial,amount,payAmountRial,paymentLink,JSON.stringify({request:requestBody,response:provider,callback_received:false}),ts,ts).run();
+  await audit(env,user.id,"bot_cubepay_invoice_created",{paymentId:localId,authority,amountToman:amount,payAmountRial,payAmountToman});
+  return { id:localId,providerInvoiceId:authority,amount,paymentLink,status:"PENDING",provider:"cubepay",finalAmountRial:payAmountRial,finalAmountToman:payAmountToman };
+}
+
 function centralPaymentProviderChoices(settings) {
   const out = [];
+  if (cubepayConfigured(settings)) out.push("cubepay");
   if (plisioConfigured(settings)) out.push("plisio");
   if (String(settings.blupal_api_key || "").trim()) out.push("blupal");
   return out;
@@ -9934,10 +10247,11 @@ async function botPromptPaymentProvider(env, account, chatId, amount) {
   const providers = centralPaymentProviderChoices(account.settings);
   if (!providers.length) throw new Error("هیچ درگاه آنلاینی توسط مدیریت تنظیم نشده است");
   if (providers.length === 1) {
-    const payment = providers[0] === "plisio" ? await botCreatePlisioPaymentInvoice(env, account.user, amount, account.public_origin) : await botCreatePaymentInvoice(env, account.user, amount);
+    const payment = providers[0] === "cubepay" ? await botCreateCubepayPaymentInvoice(env, account.user, amount, account.public_origin) : providers[0] === "plisio" ? await botCreatePlisioPaymentInvoice(env, account.user, amount, account.public_origin) : await botCreatePaymentInvoice(env, account.user, amount);
     return botSendInvoice(env, chatId, payment);
   }
   const rows = [];
+  if (providers.includes("cubepay")) rows.push([{ text:"💳 کارت‌به‌کارت خودکار CubePay", callback_data:"bot:charge:provider:cubepay:"+amount }]);
   if (providers.includes("plisio")) rows.push([{ text:"🪙 پرداخت رمزارزی با Plisio", callback_data:"bot:charge:provider:plisio:"+amount }]);
   if (providers.includes("blupal")) rows.push([{ text:"💠 پرداخت با بلوپال", callback_data:"bot:charge:provider:blupal:"+amount }]);
   rows.push([{text:"↩️ کیف پول",callback_data:"bot:wallet"}]);
@@ -10072,7 +10386,7 @@ async function botAdminAdjustBalance(env, adminUser, targetUserId, operation, am
 async function botSendInvoice(env, chatId, payment) {
   await telegramApi(env, "sendMessage", {
     chat_id: chatId,
-    text: "🧾 <b>فاکتور ساخته شد</b>\n━━━━━━━━━━━━━━\nدرگاه: <b>" + (payment.provider === "plisio" ? "Plisio رمزارزی" : "بلوپال") + "</b>\nمبلغ شارژ: <b>" + botMoney(payment.amount) + " تومان</b>\nشماره: <code>" + botEscape(payment.providerInvoiceId) + "</code>\nپس از پرداخت، دکمه استعلام را بزنید.",
+    text: "🧾 <b>فاکتور ساخته شد</b>\n━━━━━━━━━━━━━━\nدرگاه: <b>" + (payment.provider === "cubepay" ? "CubePay کارت‌به‌کارت" : payment.provider === "plisio" ? "Plisio رمزارزی" : "بلوپال") + "</b>\nمبلغ شارژ: <b>" + botMoney(payment.amount) + " تومان</b>" + (payment.provider === "cubepay" && payment.finalAmountToman ? "\nمبلغ دقیق واریز: <b>" + botMoney(payment.finalAmountToman) + " تومان</b>" : "") + "\nشماره: <code>" + botEscape(payment.providerInvoiceId) + "</code>\nپس از پرداخت، نتیجه از Callback درگاه بررسی می‌شود.",
     parse_mode: "HTML",
     reply_markup: { inline_keyboard: [
       [{ text: "💳 پرداخت فاکتور", url: payment.paymentLink }],
@@ -10261,6 +10575,10 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
     await botSendOrEdit(env, { account: fresh, chatId, messageId }, "admin_pasarguard_api");
     return;
   }
+  if (data === "bot:admin:cubepay") { await botSendOrEdit(env,{account,chatId,messageId},"admin_cubepay"); return; }
+  if (data === "bot:admin:cubepay:key") { if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");await botSetSession(env,account.user.telegram_id,"setting_cubepay_token",{});await botPrompt(env,chatId,"🔑 API Token دریافتی از @cubepy_bot را ارسال کنید. پیام پس از ذخیره حذف می‌شود.");return; }
+  if (data === "bot:admin:cubepay:test") { if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");await testCentralCubepayConfig(env);await botPrompt(env,chatId,"✅ توکن CubePay ثبت و قابل بازیابی است. تست واقعی API هنگام اولین ساخت فاکتور انجام می‌شود.",[[{text:"↩️ CubePay",callback_data:"bot:admin:cubepay"}]]);return; }
+  if (data === "bot:admin:cubepay:toggle") { if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");const st=await getSettings(env),next=st.cubepay_enabled==="true"?"false":"true";if(next==="true"&&!st.cubepay_api_token)throw new Error("ابتدا API Token CubePay را ثبت کنید");await setSettings(env,{cubepay_enabled:next});const fresh=await ensureTelegramBotUser(env,callback.from);fresh.public_origin=origin;await botSendOrEdit(env,{account:fresh,chatId,messageId},"admin_cubepay");return; }
   if (data === "bot:admin:plisio") { await botSendOrEdit(env,{account,chatId,messageId},"admin_plisio"); return; }
   if (data === "bot:admin:plisio:key") { if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");await botSetSession(env,account.user.telegram_id,"setting_plisio_key",{});await botPrompt(env,chatId,"🔑 Secret Key دریافتی از Plisio را ارسال کنید. پیام پس از ذخیره حذف می‌شود.");return; }
   if (data === "bot:admin:plisio:fxkey") { if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");await botSetSession(env,account.user.telegram_id,"setting_plisio_fx_key",{});await botPrompt(env,chatId,"💵 API Key سرویس ناواسان را ارسال کنید.\nاین کلید پس از ذخیره رمزگذاری و پیام حذف می‌شود.");return; }
@@ -10710,7 +11028,7 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
   if (data.startsWith("bot:charge:provider:")) {
     const parts=data.split(":");const provider=parts[3],amount=botParseInteger(parts[4]);
     if(!Number.isFinite(amount))throw new Error("مبلغ معتبر نیست");
-    const payment=provider==="plisio"?await botCreatePlisioPaymentInvoice(env,account.user,amount,origin):await botCreatePaymentInvoice(env,account.user,amount);
+    const payment=provider==="cubepay"?await botCreateCubepayPaymentInvoice(env,account.user,amount,origin):provider==="plisio"?await botCreatePlisioPaymentInvoice(env,account.user,amount,origin):await botCreatePaymentInvoice(env,account.user,amount);
     await botSendInvoice(env,chatId,payment);return;
   }
   if (data.startsWith("bot:charge:")) {
@@ -11442,6 +11760,14 @@ async function botHandleSessionMessage(env, account, message, session, origin, c
     const fresh = await ensureTelegramBotUser(env, message.from); fresh.public_origin = origin;
     await botSendOrEdit(env, { account: fresh, chatId }, "admin_pasarguard_api");
     return true;
+  }
+  if (session.state === "setting_cubepay_token") {
+    if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");
+    const token=String(text||"").trim();if(token.length<8||token.length>2000)throw new Error("API Token CubePay معتبر نیست");
+    await setSettings(env,{cubepay_api_token:"enc:"+await encryptSecret(token,env),cubepay_last_error:""});
+    centralCubepayTokenCache={source:"",value:"",at:0};
+    await botClearSession(env,account.user.telegram_id);try{await telegramApi(env,"deleteMessage",{chat_id:chatId,message_id:message.message_id})}catch(_){}
+    const fresh=await ensureTelegramBotUser(env,message.from);fresh.public_origin=account.public_origin;await botSendOrEdit(env,{account:fresh,chatId},"admin_cubepay");return true;
   }
   if (["setting_plisio_key","setting_plisio_fx_key","setting_plisio_rate","setting_plisio_fx_options","setting_plisio_currencies","setting_plisio_expire"].includes(session.state)) {
     if(!account.isAdmin)throw new Error("دسترسی مدیر لازم است");const values={};
@@ -12354,6 +12680,7 @@ async function routeApiUnsafe(request, env, path, ctx = null) {
   if (path === "/api/usage/live" && request.method === "GET") return liveUsageSnapshot(request, env);
   if (path === "/api/payments/blupal/create" && request.method === "POST") return createPaymentInvoice(request, env);
   if (path === "/api/payments/plisio/create" && request.method === "POST") return createPlisioPaymentInvoice(request, env, ctx);
+  if (path === "/api/payments/cubepay/create" && request.method === "POST") return createCubepayPaymentInvoice(request, env, ctx);
   if (path === "/api/agencies" && request.method === "POST") return createAgency(request, env);
   if (path === "/api/trial" && request.method === "POST") return createCentralTrial(request, env);
   if (path === "/api/admin/settings" && request.method === "POST") return saveAdminSettings(request, env);
@@ -12378,7 +12705,7 @@ async function routeApiUnsafe(request, env, path, ctx = null) {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.1.5';
+const BLUEPANEL_CORE_VERSION = '3.1.6';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
@@ -12484,6 +12811,7 @@ export default {
       if(path==='/telegram/webhook'&&request.method==='POST') return telegramWebhook(request,env,ctx);
       if(path==='/payments/blupal/webhook'&&request.method==='POST') return blupalWebhook(request,env,ctx);
       if(path==='/payments/plisio/callback'&&request.method==='POST') return plisioCallback(request,env);
+      if(path==='/payments/cubepay/callback'&&['GET','POST'].includes(request.method)) return cubepayCallback(request,env);
       if(path.startsWith('/api/')) return routeApi(request,env,path,ctx);
       if(request.method==='GET') return bluePanelForwardToEdge(request,env);
       return new Response('Not found',{status:404});

@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.1.5
+ * Version: 3.1.6
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = "3.1.5";
+const APP_VERSION = "3.1.6";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -124,6 +124,7 @@ let encryptionKeyCache = null;
 let encryptionKeyCacheSource = "";
 
 const resellerPlisioSecretCache = new Map();
+const resellerCubepayTokenCache = new Map();
 
 const resellerTokenCache = new Map();
 
@@ -834,7 +835,7 @@ function resellerCallbackPermission(data) {
   if (value.startsWith("owner:text")) return "texts";
   if (value.startsWith("owner:plan")) return "plans";
   if (value.startsWith("owner:category") || value.startsWith("owner:location") || value.startsWith("owner:catalog")) return "catalog";
-  if (value.startsWith("owner:payment") || value.startsWith("owner:methods") || value.startsWith("owner:plisio") || value === "owner:payments" || value === "owner:payment_methods") return "settings";
+  if (value.startsWith("owner:payment") || value.startsWith("owner:methods") || value.startsWith("owner:plisio") || value.startsWith("owner:cubepay") || value === "owner:payments" || value === "owner:payment_methods") return "settings";
   if (value.startsWith("owner:setting") || value === "owner:card" || value === "owner:panel" || value.startsWith("owner:agency") || value === "owner:toggle") return "settings";
   if (value === "owner:stats") return "stats";
   if (value === "owner:users") return "users";
@@ -1485,9 +1486,59 @@ async function saveResellerPlisioConfig(env, botId, changes = {}) {
   return getResellerPlisioConfig(env, botId);
 }
 
+const RESELLER_CUBEPAY_DEFAULTS = Object.freeze({
+  cubepay_enabled: 0,
+  cubepay_api_token_enc: null,
+  cubepay_configured_at: null,
+  cubepay_last_verified_at: null,
+  cubepay_last_error: null
+});
+
+async function getResellerCubepayConfig(env, botId) {
+  if (!botId) return { ...RESELLER_CUBEPAY_DEFAULTS };
+  try {
+    const row = await env.PASARGUARD_DB.prepare(`
+      SELECT cubepay_enabled,cubepay_api_token_enc,cubepay_configured_at,cubepay_last_verified_at,cubepay_last_error
+      FROM reseller_cubepay_configs WHERE bot_id=?
+    `).bind(botId).first();
+    return { ...RESELLER_CUBEPAY_DEFAULTS, ...(row || {}) };
+  } catch (error) {
+    if (/no such table/i.test(String(error?.message || error))) return { ...RESELLER_CUBEPAY_DEFAULTS };
+    throw error;
+  }
+}
+
+async function saveResellerCubepayConfig(env, botId, changes = {}) {
+  const current = await getResellerCubepayConfig(env, botId);
+  const next = { ...current, ...changes };
+  const ts = nowIso();
+  await env.PASARGUARD_DB.prepare(`
+    INSERT INTO reseller_cubepay_configs(
+      bot_id,cubepay_enabled,cubepay_api_token_enc,cubepay_configured_at,cubepay_last_verified_at,cubepay_last_error,created_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?)
+    ON CONFLICT(bot_id) DO UPDATE SET
+      cubepay_enabled=excluded.cubepay_enabled,
+      cubepay_api_token_enc=excluded.cubepay_api_token_enc,
+      cubepay_configured_at=excluded.cubepay_configured_at,
+      cubepay_last_verified_at=excluded.cubepay_last_verified_at,
+      cubepay_last_error=excluded.cubepay_last_error,
+      updated_at=excluded.updated_at
+  `).bind(
+    botId,
+    Number(next.cubepay_enabled || 0) === 1 ? 1 : 0,
+    next.cubepay_api_token_enc || null,
+    next.cubepay_configured_at || null,
+    next.cubepay_last_verified_at || null,
+    cleanText(next.cubepay_last_error || "", 800) || null,
+    current.created_at || ts,
+    ts
+  ).run();
+  return getResellerCubepayConfig(env, botId);
+}
+
 async function hydrateResellerBotRelations(env, bot) {
   if (!bot) return null;
-  const [relation, plisio] = await Promise.all([
+  const [relation, plisio, cubepay] = await Promise.all([
     env.PASARGUARD_DB.prepare(`
       SELECT a.title AS agency_title,a.panel_username,a.panel_password_enc,a.status AS agency_status,a.remote_manager_id,
              u.telegram_id AS owner_telegram_id,u.username AS owner_username,u.first_name AS owner_first_name,
@@ -1496,9 +1547,10 @@ async function hydrateResellerBotRelations(env, bot) {
       FROM users u LEFT JOIN agencies a ON a.id=?
       WHERE u.id=?
     `).bind(bot.agency_id, bot.user_id).first(),
-    getResellerPlisioConfig(env, bot.id)
+    getResellerPlisioConfig(env, bot.id),
+    getResellerCubepayConfig(env, bot.id)
   ]);
-  return { ...bot, ...RESELLER_PLISIO_DEFAULTS, ...(plisio || {}), ...(relation || {}) };
+  return { ...bot, ...RESELLER_PLISIO_DEFAULTS, ...RESELLER_CUBEPAY_DEFAULTS, ...(plisio || {}), ...(cubepay || {}), ...(relation || {}) };
 }
 
 async function getResellerBotForUser(env, userId) {
@@ -3014,6 +3066,8 @@ async function salesCustomerWalletView(env, bot, customer) {
   ).join("\n") || "هنوز تراکنشی ثبت نشده است.";
   const keyboard = [];
   const rechargeMethods = resellerPaymentMethodOrder(bot).filter(method => method !== "wallet" && resellerPaymentMethodEnabled(bot, method, "recharge"));
+  if (resellerPlisioConfigured(bot)) rechargeMethods.push("plisio");
+  if (resellerCubepayConfigured(bot)) rechargeMethods.push("cubepay");
   if (rechargeMethods.length) keyboard.push([{ text: "➕ شارژ کیف پول", callback_data: "sale:wallet:charge" }]);
   else keyboard.push([{ text: "⚠️ روش شارژ فعالی تنظیم نشده", callback_data: "sale:home" }]);
   if (resellerPaymentMethodEnabled(bot, "wallet")) keyboard.push([{ text: "🛒 خرید با موجودی", callback_data: "sale:locations" }]);
@@ -3421,22 +3475,23 @@ async function sendSalesPaymentInstructions(env, bot, customer, order) {
 }
 
 async function sendSalesBlupalInvoiceMessage(env, bot, customer, invoice, title = "پرداخت آنلاین", detail = "") {
-  const isPlisio = String(invoice.provider || "").toLowerCase() === "plisio";
-  const providerLabel = isPlisio ? "Plisio" : "بلوپال";
-  const icon = isPlisio ? "🪙" : "💠";
+  const providerKey = String(invoice.provider || "").toLowerCase();
+  const isPlisio = providerKey === "plisio", isCubepay = providerKey === "cubepay";
+  const providerLabel = isCubepay ? "CubePay" : isPlisio ? "Plisio" : "بلوپال";
+  const icon = isCubepay ? "💳" : isPlisio ? "🪙" : "💠";
+  const exactLine = Number(invoice.final_amount_rial || 0)
+    ? (isCubepay ? "مبلغ دقیق قابل پرداخت: <b>" + botMoney(invoice.final_amount_rial) + " ریال</b>\n" : !isPlisio ? "مبلغ نهایی بلوپال: <b>" + botMoney(invoice.final_amount_rial) + " ریال</b>\n" : "")
+    : "";
+  const help = isCubepay
+    ? "مبلغ دقیق نمایش‌داده‌شده در صفحه CubePay را واریز کنید؛ بعد از Callback، تایید نهایی API انجام می‌شود."
+    : isPlisio ? "پس از پرداخت، Callback امضاشده Plisio دریافت و حساب شما فقط یک‌بار شارژ می‌شود."
+    : "پس از پرداخت، وضعیت از API بلوپال استعلام و عملیات به‌صورت خودکار انجام می‌شود.";
   const text = icon + " <b>" + botEscape(title) + "</b>\n━━━━━━━━━━━━━━\n" +
     (detail ? botEscape(detail) + "\n" : "") +
     "شماره فاکتور: <code>" + botEscape(invoice.invoice_id || invoice.provider_invoice_id || invoice.id) + "</code>\n" +
-    "مبلغ سفارش: <b>" + botMoney(invoice.amount_toman) + " تومان</b>\n" +
-    (!isPlisio && Number(invoice.final_amount_rial || 0) ? "مبلغ نهایی بلوپال: <b>" + botMoney(invoice.final_amount_rial) + " ریال</b>\n" : "") +
-    "\n" + (isPlisio
-      ? "پس از پرداخت، Callback امضاشده Plisio دریافت و حساب شما فقط یک‌بار شارژ می‌شود."
-      : "پس از پرداخت، وضعیت از API بلوپال استعلام و عملیات به‌صورت خودکار انجام می‌شود.");
+    "مبلغ سفارش: <b>" + botMoney(invoice.amount_toman) + " تومان</b>\n" + exactLine + "\n" + help;
   await resellerTelegramApi(env, bot, "sendMessage", {
-    chat_id: customer.telegram_id,
-    text,
-    parse_mode: "HTML",
-    disable_web_page_preview: true,
+    chat_id: customer.telegram_id, text, parse_mode: "HTML", disable_web_page_preview: true,
     protect_content: Number(bot.forward_enabled ?? 1) !== 1,
     reply_markup: { inline_keyboard: [
       [{ text: icon + " بازکردن صفحه پرداخت " + providerLabel, url: invoice.payment_link }],
@@ -4349,16 +4404,18 @@ async function salesHandleCustomerCallback(env, bot, callback) {
   if (data === "sale:wallet:charge") {
     const methods = resellerPaymentMethodOrder(bot).filter(method => method !== "wallet" && resellerPaymentMethodEnabled(bot, method, "recharge"));
     if (resellerPlisioConfigured(bot) && !methods.includes("plisio")) methods.push("plisio");
+    if (resellerCubepayConfigured(bot) && !methods.includes("cubepay")) methods.push("cubepay");
     if (!methods.length) throw new Error("هیچ روش فعالی برای شارژ کیف پول تنظیم نشده است");
     if (methods.length === 1) {
       const method = methods[0];
       await salesSessionSet(env, bot.id, customer.telegram_id, "wallet_amount", { paymentMethod: method });
-      const prompt = method === "plisio" ? "🪙 مبلغ شارژ رمزارزی Plisio را به تومان ارسال کنید.\nمثال: 100000" : method === "blupal" ? "💠 مبلغ شارژ آنلاین را به تومان ارسال کنید.\nمثال: 100000" : "💰 مبلغ شارژ کارت‌به‌کارت را به تومان ارسال کنید.\nمثال: 100000";
+      const prompt = method === "cubepay" ? "💳 مبلغ شارژ خودکار CubePay را به تومان ارسال کنید.\nمثال: 100000" : method === "plisio" ? "🪙 مبلغ شارژ رمزارزی Plisio را به تومان ارسال کنید.\nمثال: 100000" : method === "blupal" ? "💠 مبلغ شارژ آنلاین را به تومان ارسال کنید.\nمثال: 100000" : "💰 مبلغ شارژ کارت‌به‌کارت را به تومان ارسال کنید.\nمثال: 100000";
       await resellerTelegramApi(env, bot, "sendMessage", { chat_id: chatId, text: prompt });
       return;
     }
-    const keyboard = methods.map(method => method === "plisio"
-      ? [{ text: "🪙 پرداخت رمزارزی Plisio", callback_data: "sale:wallet:plisio" }]
+    const keyboard = methods.map(method => method === "cubepay"
+      ? [{ text: "💳 کارت‌به‌کارت خودکار CubePay", callback_data: "sale:wallet:cubepay" }]
+      : method === "plisio" ? [{ text: "🪙 پرداخت رمزارزی Plisio", callback_data: "sale:wallet:plisio" }]
       : method === "blupal"
         ? [{ text: "💠 پرداخت آنلاین بلوپال", callback_data: "sale:wallet:online" }]
         : [{ text: "💳 کارت‌به‌کارت و رسید", callback_data: "sale:wallet:card" }]);
@@ -4370,13 +4427,15 @@ async function salesHandleCustomerCallback(env, bot, callback) {
       reply_markup: { inline_keyboard: keyboard }
     });
   }
-  if (data === "sale:wallet:card" || data === "sale:wallet:online" || data === "sale:wallet:plisio") {
-    const method = data.endsWith(":plisio") ? "plisio" : data.endsWith(":online") ? "blupal" : "card";
-    if (method === "plisio") {
+  if (data === "sale:wallet:card" || data === "sale:wallet:online" || data === "sale:wallet:plisio" || data === "sale:wallet:cubepay") {
+    const method = data.endsWith(":cubepay") ? "cubepay" : data.endsWith(":plisio") ? "plisio" : data.endsWith(":online") ? "blupal" : "card";
+    if (method === "cubepay") {
+      if (!resellerCubepayConfigured(bot)) throw new Error("درگاه CubePay این ربات فعال یا کامل تنظیم نشده است");
+    } else if (method === "plisio") {
       if (!resellerPlisioConfigured(bot)) throw new Error("درگاه Plisio این ربات فعال یا کامل تنظیم نشده است");
     } else resellerRequirePaymentMethod(bot, method, "recharge");
     await salesSessionSet(env, bot.id, customer.telegram_id, "wallet_amount", { paymentMethod: method });
-    const prompt = method === "plisio" ? "🪙 مبلغ شارژ رمزارزی Plisio را به تومان ارسال کنید.\nمثال: 100000" : method === "blupal" ? "💠 مبلغ شارژ آنلاین را به تومان ارسال کنید.\nمثال: 100000" : "💰 مبلغ شارژ کارت‌به‌کارت را به تومان ارسال کنید.\nمثال: 100000";
+    const prompt = method === "cubepay" ? "💳 مبلغ شارژ خودکار CubePay را به تومان ارسال کنید.\nمثال: 100000" : method === "plisio" ? "🪙 مبلغ شارژ رمزارزی Plisio را به تومان ارسال کنید.\nمثال: 100000" : method === "blupal" ? "💠 مبلغ شارژ آنلاین را به تومان ارسال کنید.\nمثال: 100000" : "💰 مبلغ شارژ کارت‌به‌کارت را به تومان ارسال کنید.\nمثال: 100000";
     await resellerTelegramApi(env, bot, "sendMessage", { chat_id: chatId, text: prompt });
     return;
   }
@@ -4978,6 +5037,33 @@ async function resellerOwnerPaymentsView(env, bot, account) {
   ] } };
 }
 
+async function resellerOwnerCubepayView(env, bot, account) {
+  resellerRequirePermission(account, "settings");
+  const fresh = await getResellerBotById(env, bot.id);
+  const configured = !!String(fresh.cubepay_api_token_enc || "").trim();
+  const enabled = Number(fresh.cubepay_enabled || 0) === 1;
+  const pending = await env.PASARGUARD_DB.prepare("SELECT COUNT(*) AS c FROM sales_payment_invoices WHERE bot_id=? AND provider='cubepay' AND status IN ('PENDING','PAID') AND processed_at IS NULL")
+    .bind(fresh.id).first();
+  const last = await env.PASARGUARD_DB.prepare("SELECT provider_invoice_id,status,amount_toman,final_amount_rial,processed_at,updated_at,error_message FROM sales_payment_invoices WHERE bot_id=? AND provider='cubepay' ORDER BY created_at DESC LIMIT 1")
+    .bind(fresh.id).first();
+  const lines = [
+    "💳 <b>کارت‌به‌کارت خودکار CubePay</b>", "━━━━━━━━━━━━━━",
+    "وضعیت: <b>" + (enabled && configured ? "🟢 فعال" : enabled ? "🟠 توکن ناقص" : "🔴 غیرفعال") + "</b>",
+    "API Token: <b>" + (configured ? "ثبت و رمزگذاری شده" : "ثبت نشده") + "</b>",
+    "کاربرد: <b>شارژ خودکار کیف پول مشتریان</b>",
+    "تایید: <b>Callback سپس verify-payment</b>",
+    "فاکتورهای در انتظار: <b>" + botMoney(pending?.c || 0) + "</b>"
+  ];
+  if (fresh.cubepay_last_verified_at) lines.push("آخرین تایید موفق: <b>" + botDate(fresh.cubepay_last_verified_at) + "</b>");
+  if (fresh.cubepay_last_error) lines.push("", "⚠️ آخرین خطا:", "<code>" + botEscape(fresh.cubepay_last_error) + "</code>");
+  if (last) lines.push("", "آخرین فاکتور: <code>" + botEscape(last.provider_invoice_id) + "</code> · <b>" + botEscape(last.status) + "</b> · " + botMoney(last.amount_toman) + " تومان");
+  return { text: lines.join("\n"), reply_markup:{inline_keyboard:[
+    [{text:configured?"🔑 تغییر API Token":"🔑 ثبت API Token",callback_data:"owner:cubepay:key"}],
+    [{text:"🧪 بررسی تنظیمات",callback_data:"owner:cubepay:test"},{text:enabled?"⏸ غیرفعال‌کردن":"▶️ فعال‌کردن",callback_data:"owner:cubepay:toggle"}],
+    [{text:"↩️ روش‌های پرداخت",callback_data:"owner:payment_methods"}]
+  ]}};
+}
+
 async function resellerOwnerPlisioView(env, bot, account) {
   resellerRequirePermission(account, "settings");
   const fresh = await getResellerBotById(env, bot.id);
@@ -5036,7 +5122,9 @@ async function resellerOwnerPaymentMethodsView(env, bot, account) {
   const plisioEnabled = Number(fresh.plisio_enabled || 0) === 1;
   const plisioReady = !!String(fresh.plisio_api_key_enc || "").trim();
   const methodLine = order.map((method, index) => (index + 1) + "️⃣ " + SALES_PAYMENT_METHOD_LABELS[method]).join("  ←  ");
-  const activeCount = [resellerPaymentMethodEnabled(fresh, "card"), resellerPaymentMethodEnabled(fresh, "blupal"), resellerPaymentMethodEnabled(fresh, "wallet"), resellerPlisioConfigured(fresh)].filter(Boolean).length;
+  const cubepayEnabled = Number(fresh.cubepay_enabled || 0) === 1;
+  const cubepayReady = resellerCubepayConfigured(fresh);
+  const activeCount = [resellerPaymentMethodEnabled(fresh, "card"), resellerPaymentMethodEnabled(fresh, "blupal"), resellerPaymentMethodEnabled(fresh, "wallet"), resellerPlisioConfigured(fresh), cubepayReady].filter(Boolean).length;
   const text = [
     "💳 <b>مدیریت روش‌های پرداخت</b>",
     "━━━━━━━━━━━━━━",
@@ -5045,6 +5133,7 @@ async function resellerOwnerPaymentMethodsView(env, bot, account) {
     "💳 کارت‌به‌کارت: <b>" + (cardEnabled ? (cardReady ? "🟢 فعال" : "🟠 اطلاعات کارت ناقص") : "🔴 غیرفعال") + "</b>",
     "💠 بلوپال: <b>" + (blupalEnabled ? (blupalReady ? "🟢 فعال" : "🟠 API ناقص") : "🔴 غیرفعال") + "</b>",
     "🪙 Plisio برای شارژ کیف پول: <b>" + (plisioEnabled ? (plisioReady ? "🟢 فعال" : "🟠 تنظیمات ناقص") : "🔴 غیرفعال") + "</b>",
+    "💳 CubePay برای شارژ کیف پول: <b>" + (cubepayEnabled ? (cubepayReady ? "🟢 فعال" : "🟠 تنظیمات ناقص") : "🔴 غیرفعال") + "</b>",
     "⚡ کیف پول: <b>" + (walletEnabled ? "🟢 فعال" : "🔴 غیرفعال") + "</b>",
     "",
     "↕️ ترتیب نمایش:",
@@ -5052,7 +5141,7 @@ async function resellerOwnerPaymentMethodsView(env, bot, account) {
     "",
     "⭐ روش پیش‌فرض: <b>" + (SALES_PAYMENT_METHOD_LABELS[defaultMethod] || "تعیین نشده") + "</b>",
     "",
-    "کارت، بلوپال و کیف پول در خرید و تمدید استفاده می‌شوند؛ Plisio در این نسخه برای شارژ خودکار کیف پول ربات و مینی‌اپ فعال است."
+    "کارت، بلوپال و کیف پول در خرید و تمدید استفاده می‌شوند؛ Plisio و CubePay برای شارژ خودکار کیف پول ربات و مینی‌اپ فعال هستند."
   ].join("\n");
   return {
     text,
@@ -5060,6 +5149,7 @@ async function resellerOwnerPaymentMethodsView(env, bot, account) {
       [{ text: cardEnabled ? "⏸ کارت‌به‌کارت" : "▶️ کارت‌به‌کارت", callback_data: "owner:methods:card" }, { text: walletEnabled ? "⏸ کیف پول" : "▶️ کیف پول", callback_data: "owner:methods:wallet" }],
       [{ text: blupalEnabled ? "⏸ بلوپال" : "▶️ بلوپال", callback_data: "owner:methods:blupal" }, { text: "⚙️ تنظیم بلوپال", callback_data: "owner:payments" }],
       [{ text: plisioEnabled ? "⏸ Plisio" : "▶️ Plisio", callback_data: "owner:plisio:toggle" }, { text: "⚙️ تنظیم Plisio", callback_data: "owner:plisio" }],
+      [{ text: cubepayEnabled ? "⏸ CubePay" : "▶️ CubePay", callback_data: "owner:cubepay:toggle" }, { text: "⚙️ تنظیم CubePay", callback_data: "owner:cubepay" }],
       [{ text: "🏦 اطلاعات کارت", callback_data: "owner:card" }],
       [{ text: "↕️ تغییر ترتیب نمایش", callback_data: "owner:methods:order" }],
       [{ text: "⭐ تغییر روش پیش‌فرض", callback_data: "owner:methods:default" }],
@@ -5153,6 +5243,7 @@ async function resellerOwnerRender(env, bot, account, view = "home", extra = {})
   else if (view === "payments") rendered = await resellerOwnerPaymentsView(env, bot, account);
   else if (view === "payment_methods") rendered = await resellerOwnerPaymentMethodsView(env, bot, account);
   else if (view === "plisio") rendered = await resellerOwnerPlisioView(env, bot, account);
+  else if (view === "cubepay") rendered = await resellerOwnerCubepayView(env, bot, account);
   else if (view === "campaigns") rendered = await resellerOwnerCampaignsView(env, bot, account);
   else if (view === "staff") rendered = await resellerOwnerStaffView(env, bot, account);
   else if (view === "audit") rendered = await resellerOwnerAuditView(env, bot, account);
@@ -5272,7 +5363,7 @@ async function resellerOwnerHandleCallback(env, bot, callback) {
     "owner:tickets": "tickets", "owner:settings": "settings",
     "owner:settings:identity": "settings_identity", "owner:settings:loyalty": "settings_loyalty",
     "owner:settings:support": "settings_support", "owner:settings:automation": "settings_automation",
-    "owner:payments": "payments", "owner:payment_methods": "payment_methods", "owner:plisio": "plisio", "owner:campaigns": "campaigns", "owner:staff": "staff", "owner:audit": "audit",
+    "owner:payments": "payments", "owner:payment_methods": "payment_methods", "owner:plisio": "plisio", "owner:cubepay": "cubepay", "owner:campaigns": "campaigns", "owner:staff": "staff", "owner:audit": "audit",
     "owner:executive": "executive", "owner:automation": "automation", "owner:security": "security", "owner:health": "health", "owner:backups": "backups", "owner:children": "children"
   };
   resellerRequirePermission(account, resellerCallbackPermission(data));
@@ -5373,6 +5464,24 @@ async function resellerOwnerHandleCallback(env, bot, callback) {
     if(Number(fresh.blupal_enabled||0)!==1&&!String(fresh.blupal_api_key_enc||"").trim()) throw new Error("ابتدا API Key بلوپال را از بخش تنظیم بلوپال ثبت کنید");
     await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET blupal_enabled=CASE WHEN COALESCE(blupal_enabled,0)=1 THEN 0 ELSE 1 END,updated_at=? WHERE id=?").bind(nowIso(),bot.id).run();
     return resellerOwnerSendOrEdit(env,await getResellerBotById(env,bot.id),target,"payment_methods");
+  }
+  if (data === "owner:cubepay:key") {
+    await salesSessionSet(env, bot.id, account.user.telegram_id, "owner_cubepay_token", {});
+    return resellerOwnerPrompt(env, bot, chatId, "🔑 API Token دریافتی از @cubepy_bot را ارسال کنید.\nپیام پس از ذخیره حذف و توکن رمزگذاری می‌شود.");
+  }
+  if (data === "owner:cubepay:test") {
+    const fresh = await getResellerBotById(env, bot.id);
+    await testResellerCubepayConfig(env, fresh);
+    try { await resellerTelegramApi(env, bot, "answerCallbackQuery", { callback_query_id: callback.id, text: "✅ توکن CubePay ثبت و قابل بازیابی است", show_alert: false }); } catch (_) {}
+    return resellerOwnerSendOrEdit(env, await getResellerBotById(env, bot.id), target, "cubepay");
+  }
+  if (data === "owner:cubepay:toggle") {
+    const fresh = await getResellerBotById(env, bot.id);
+    const next = Number(fresh.cubepay_enabled || 0) === 1 ? 0 : 1;
+    if (next === 1 && !String(fresh.cubepay_api_token_enc || "").trim()) throw new Error("ابتدا API Token CubePay را ثبت کنید");
+    await saveResellerCubepayConfig(env, bot.id, { cubepay_enabled: next });
+    await resellerAudit(env, bot, account, "cubepay_toggled", { enabled: next === 1 });
+    return resellerOwnerSendOrEdit(env, await getResellerBotById(env, bot.id), target, "cubepay");
   }
   if (data === "owner:plisio:key") {
     await salesSessionSet(env, bot.id, account.user.telegram_id, "owner_plisio_key", {});
@@ -6140,6 +6249,16 @@ async function resellerOwnerHandleSession(env, bot, account, message, session) {
     else await env.PASARGUARD_DB.prepare("INSERT INTO reseller_bot_texts(bot_id,text_key,text_value,updated_at) VALUES(?,?,?,?) ON CONFLICT(bot_id,text_key) DO UPDATE SET text_value=excluded.text_value,updated_at=excluded.updated_at").bind(bot.id, session.data.key, value, nowIso()).run();
     return done("texts", "✅ متن ربات ذخیره شد.");
   }
+  if (session.state === "owner_cubepay_token") {
+    const token = String(text || "").trim();
+    if (token.length < 8 || token.length > 2000) throw new Error("API Token CubePay معتبر نیست");
+    const encrypted = await encryptSecret(token, env);
+    await saveResellerCubepayConfig(env, bot.id, { cubepay_api_token_enc: encrypted, cubepay_configured_at: nowIso(), cubepay_last_error: null });
+    resellerCubepayTokenCache.delete(String(bot.id));
+    try { await resellerTelegramApi(env, bot, "deleteMessage", { chat_id: chatId, message_id: message.message_id }); } catch (_) {}
+    await resellerAudit(env, bot, account, "cubepay_token_saved", {});
+    return done("cubepay", "✅ API Token CubePay رمزگذاری و ذخیره شد.");
+  }
   if (session.state === "owner_plisio_key") {
     const secret = String(text || "").trim();
     if (secret.length < 12 || secret.length > 1000) throw new Error("Secret Key Plisio معتبر نیست");
@@ -6504,8 +6623,14 @@ async function resellerSalesWebhook(request, env, botId, ctx = null) {
       const amount = botParseInteger(text);
       if (!Number.isFinite(amount) || amount < 10000 || amount > 1000000000000) throw new Error("مبلغ شارژ معتبر و حداقل ۱۰٬۰۰۰ تومان ارسال کنید");
       const requestedMethod = String(session.data?.paymentMethod || "card").toLowerCase();
-      const method = requestedMethod === "plisio" ? "plisio" : requestedMethod === "blupal" ? "blupal" : "card";
-      if (method === "plisio") {
+      const method = requestedMethod === "cubepay" ? "cubepay" : requestedMethod === "plisio" ? "plisio" : requestedMethod === "blupal" ? "blupal" : "card";
+      if (method === "cubepay") {
+        if (!resellerCubepayConfigured(bot)) throw new Error("درگاه CubePay این ربات فعال یا کامل تنظیم نشده است");
+        const invoiceOrigin = request.headers.get("x-bluepanel-public-origin") || new URL(request.url).origin;
+        const created = await createSalesCubepayWalletCharge(env, bot, customer, amount, invoiceOrigin, ctx);
+        await salesSessionClear(env, bot.id, customer.telegram_id);
+        await sendSalesBlupalInvoiceMessage(env, bot, customer, created.invoice, "شارژ خودکار کیف پول با CubePay", created.bonusAmount > 0 ? ("بونس پس از پرداخت: " + botMoney(created.bonusAmount) + " تومان") : "");
+      } else if (method === "plisio") {
         if (!resellerPlisioConfigured(bot)) throw new Error("درگاه Plisio این ربات فعال یا کامل تنظیم نشده است");
         const invoiceOrigin = request.headers.get("x-bluepanel-public-origin") || new URL(request.url).origin;
         const created = await createSalesPlisioWalletCharge(env, bot, customer, amount, invoiceOrigin, ctx);
@@ -7314,6 +7439,237 @@ async function testResellerPlisioConfig(env, bot) {
   return { configured: true, source_currency: "USD", rate_toman: fx.rate_toman, rate_source: fx.source, stale: !!fx.stale };
 }
 
+const CUBEPAY_API_BASE = "https://cubevps.ir/smspay/api";
+
+function resellerCubepayConfigured(bot) {
+  return Number(bot?.cubepay_enabled || 0) === 1 && !!String(bot?.cubepay_api_token_enc || "").trim();
+}
+
+async function resellerCubepayApiToken(env, bot) {
+  const encrypted = String(bot?.cubepay_api_token_enc || "").trim();
+  if (!encrypted) throw new Error("API Token درگاه CubePay برای این ربات ثبت نشده است");
+  const cacheKey = String(bot.id || "");
+  const cached = resellerCubepayTokenCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < 300000) return cached.value;
+  try {
+    const value = await decryptSecret(encrypted, env);
+    if (!value) throw new Error("empty");
+    if (resellerCubepayTokenCache.size > 500) resellerCubepayTokenCache.clear();
+    resellerCubepayTokenCache.set(cacheKey, { value, at: Date.now() });
+    return value;
+  } catch (_) {
+    throw new Error("API Token درگاه CubePay قابل بازیابی نیست؛ آن را دوباره ثبت کنید");
+  }
+}
+
+function resellerCubepayUrls(origin, bot) {
+  const base = String(origin || "").replace(/\/+$/, "");
+  const botId = encodeURIComponent(bot.id);
+  return {
+    callback_url: base + "/sales-payments/" + botId + "/cubepay/callback",
+    miniapp_url: base + "/sales-app/" + botId
+  };
+}
+
+async function resellerCubepayRequest(env, bot, endpoint, body) {
+  if (!["create-payment.php", "verify-payment.php"].includes(endpoint)) throw new Error("مسیر CubePay مجاز نیست");
+  const token = await resellerCubepayApiToken(env, bot);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  let response;
+  try {
+    response = await fetch(CUBEPAY_API_BASE + "/" + endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json", "accept": "application/json", "authorization": "Bearer " + token },
+      body: JSON.stringify(body || {}),
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") throw new Error("پاسخ CubePay بیش از حد طول کشید");
+    throw error;
+  } finally { clearTimeout(timer); }
+  const data = await response.json().catch(() => ({}));
+  return { ok: response.ok, status: response.status, data };
+}
+
+async function recordResellerCubepayState(env, botId, ok, message = "") {
+  return saveResellerCubepayConfig(env, botId, ok
+    ? { cubepay_last_verified_at: nowIso(), cubepay_last_error: null }
+    : { cubepay_last_error: cleanText(message, 800) });
+}
+
+async function testResellerCubepayConfig(env, bot) {
+  const token = await resellerCubepayApiToken(env, bot);
+  if (String(token).length < 8) throw new Error("API Token معتبر نیست");
+  return { configured: true };
+}
+
+async function createSalesCubepayInvoice(env, bot, customer, targetType, targetId, amountToman, origin, ctx = null) {
+  if (!resellerCubepayConfigured(bot)) throw new Error("درگاه CubePay این ربات هنوز کامل تنظیم نشده است");
+  if (targetType !== "wallet") throw new Error("CubePay در این نسخه برای شارژ کیف پول فعال است");
+  const safeAmountToman = clampInt(amountToman, 0, 1000000000000);
+  if (safeAmountToman < 10000) throw new Error("حداقل مبلغ شارژ ۱۰٬۰۰۰ تومان است");
+  const invoiceId = id("scpay"), amountRial = safeAmountToman * 10;
+  const requestBody = {
+    amount: amountRial,
+    order_id: invoiceId,
+    callback_url: resellerCubepayUrls(origin, bot).callback_url,
+    type: "card",
+    customer_user_id: String(customer.telegram_id || customer.id),
+    description: "شارژ کیف پول " + safeAmountToman + " تومان"
+  };
+  let result;
+  try { result = await resellerCubepayRequest(env, bot, "create-payment.php", requestBody); }
+  catch (error) {
+    scheduleSalesInvoiceBackground(ctx, recordResellerCubepayState(env, bot.id, false, error.message), "record reseller CubePay error failed");
+    throw new Error("ساخت فاکتور CubePay ناموفق بود: " + error.message);
+  }
+  const provider = result.data || {};
+  if (!result.ok || provider.success !== true) {
+    const message = cleanText(provider.message || provider.error || ("CubePay HTTP " + result.status), 700);
+    scheduleSalesInvoiceBackground(ctx, recordResellerCubepayState(env, bot.id, false, message), "record reseller CubePay error failed");
+    throw new Error(message || "ساخت فاکتور CubePay ناموفق بود");
+  }
+  const authority = cleanText(provider.authority, 160), paymentLink = cleanText(provider.payment_link, 1000);
+  const payAmountRial = clampInt(provider.pay_amount, 0, Number.MAX_SAFE_INTEGER);
+  const payAmountToman = clampInt(provider.pay_amount_toman, 0, Number.MAX_SAFE_INTEGER);
+  if (!authority || !paymentLink || !payAmountRial || !payAmountToman) throw new Error("پاسخ CubePay ناقص است");
+  const ts = nowIso();
+  await env.PASARGUARD_DB.prepare(`
+    INSERT INTO sales_payment_invoices(
+      id,bot_id,customer_id,provider,provider_invoice_id,target_type,target_id,
+      amount_rial,amount_toman,final_amount_rial,status,payment_link,card_number,provider_payload,created_at,updated_at
+    ) VALUES(?,?,?,'cubepay',?,?,?,?,?,?,?,?,NULL,?,?,?)
+  `).bind(
+    invoiceId, bot.id, customer.id, authority, "wallet", targetId,
+    amountRial, safeAmountToman, payAmountRial, "PENDING", paymentLink,
+    JSON.stringify({ request: requestBody, response: provider, callback_received: false, pay_amount_toman: payAmountToman }), ts, ts
+  ).run();
+  scheduleSalesInvoiceBackground(ctx, salesEvent(env, bot.id, customer.id, "cubepay_invoice_created", {
+    invoiceId, authority, targetId, amountToman: safeAmountToman, payAmountRial, payAmountToman
+  }), "reseller CubePay invoice event failed");
+  return { id: invoiceId, provider: "cubepay", invoice_id: authority, provider_invoice_id: authority, target_type: "wallet", target_id: targetId, amount_toman: safeAmountToman, amount_rial: amountRial, final_amount_rial: payAmountRial, final_amount_toman: payAmountToman, status: "PENDING", payment_link: paymentLink };
+}
+
+async function createSalesCubepayWalletCharge(env, bot, customer, amount, origin, ctx = null) {
+  salesRequireVerifiedPhone(bot, customer);
+  const safeAmount = clampInt(amount, 0, 1000000000000);
+  if (safeAmount < 10000) throw new Error("حداقل مبلغ شارژ ۱۰٬۰۰۰ تومان است");
+  await enforceSalesSecurity(env, bot, customer, "wallet_charge", safeAmount);
+  const requestId = id("wreq"), ts = nowIso();
+  await env.PASARGUARD_DB.prepare(`INSERT INTO sales_wallet_requests(id,bot_id,customer_id,amount_toman,status,origin,created_at,updated_at) VALUES(?,?,?,?,'payment_pending',?,?,?)`)
+    .bind(requestId, bot.id, customer.id, safeAmount, origin === "miniapp" ? "miniapp" : "bot", ts, ts).run();
+  try {
+    const invoice = await createSalesCubepayInvoice(env, bot, customer, "wallet", requestId, safeAmount, origin, ctx);
+    const bonusPercent = Math.max(0, Math.min(100, Number(bot.recharge_bonus_percent || 0)));
+    const bonusAmount = Math.floor(safeAmount * bonusPercent / 100);
+    return { requestId, amountToman: safeAmount, bonusPercent, bonusAmount, invoice };
+  } catch (error) {
+    await env.PASARGUARD_DB.prepare("UPDATE sales_wallet_requests SET status='rejected',updated_at=? WHERE id=?").bind(nowIso(), requestId).run();
+    throw error;
+  }
+}
+
+async function finalizeSalesCubepayWallet(env, bot, payment) {
+  const requestRow = await env.PASARGUARD_DB.prepare("SELECT * FROM sales_wallet_requests WHERE id=? AND bot_id=? AND customer_id=?")
+    .bind(payment.target_id, bot.id, payment.customer_id).first();
+  if (!requestRow) throw new Error("درخواست شارژ مرتبط پیدا نشد");
+  if (requestRow.status === "approved" || payment.processed_at) return { already_processed: true };
+  const bonusPercent = Math.max(0, Math.min(100, Number(bot.recharge_bonus_percent || 0)));
+  const baseAmount = Number(payment.amount_toman || 0), bonusAmount = Math.floor(baseAmount * bonusPercent / 100), creditedAmount = baseAmount + bonusAmount;
+  const token = uniqueProcessedAtToken(), ledgerId = "cled_cubepay_" + String(payment.id).replace(/[^a-zA-Z0-9_]/g, "");
+  const results = await env.PASARGUARD_DB.batch([
+    env.PASARGUARD_DB.prepare(`UPDATE sales_payment_invoices SET processed_at=?,updated_at=?,error_message=NULL WHERE id=? AND processed_at IS NULL AND status='PAID'`).bind(token, token, payment.id),
+    env.PASARGUARD_DB.prepare(`UPDATE sales_wallet_requests SET status='approved',bonus_toman=?,reviewed_at=?,updated_at=? WHERE id=? AND EXISTS(SELECT 1 FROM sales_payment_invoices WHERE id=? AND processed_at=?)`).bind(bonusAmount, token, token, requestRow.id, payment.id, token),
+    env.PASARGUARD_DB.prepare(`UPDATE sales_customers SET wallet_balance=wallet_balance+?,updated_at=? WHERE id=? AND bot_id=? AND EXISTS(SELECT 1 FROM sales_payment_invoices WHERE id=? AND processed_at=?)`).bind(creditedAmount, token, payment.customer_id, bot.id, payment.id, token),
+    env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO sales_customer_ledger(id,bot_id,customer_id,type,amount,balance_after,ref_type,ref_id,description,created_at) SELECT ?,?,?, 'recharge', ?, wallet_balance, 'cubepay', ?, ?, ? FROM sales_customers WHERE id=? AND bot_id=? AND EXISTS(SELECT 1 FROM sales_payment_invoices WHERE id=? AND processed_at=?)`).bind(
+      ledgerId, bot.id, payment.customer_id, creditedAmount, payment.id,
+      bonusAmount > 0 ? ("شارژ CubePay + بونس " + bonusPercent + "٪") : "شارژ خودکار CubePay",
+      token, payment.customer_id, bot.id, payment.id, token
+    )
+  ]);
+  const processed = Number(results?.[0]?.meta?.changes || 0) > 0;
+  if (processed) {
+    const customer = await env.PASARGUARD_DB.prepare("SELECT * FROM sales_customers WHERE id=?").bind(payment.customer_id).first();
+    if (customer) {
+      await createSalesNotification(env, bot, customer, null, "payment_success", "شارژ CubePay موفق", "مبلغ " + botMoney(creditedAmount) + " تومان به کیف پول شما اضافه شد.", "cubepay_wallet:" + payment.id, { sendBot: false });
+      try { await resellerTelegramApi(env, bot, "sendMessage", { chat_id: customer.telegram_id, text: "✅ پرداخت CubePay تأیید شد.\\nمبلغ افزوده‌شده: <b>" + botMoney(creditedAmount) + " تومان</b>", parse_mode: "HTML" }); } catch (_) {}
+    }
+    await salesEvent(env, bot.id, payment.customer_id, "cubepay_wallet_credited", { paymentId: payment.id, baseAmount, bonusAmount, creditedAmount });
+    await queueReportEvent(env, bot.id, "payments", "شارژ خودکار CubePay تأیید شد",
+      "مشتری: <code>" + botEscape(customer?.telegram_id || payment.customer_id) + "</code>\\nمبلغ: <b>" + botMoney(baseAmount) + " تومان</b>" + (bonusAmount > 0 ? "\\nبونس: <b>" + botMoney(bonusAmount) + " تومان</b>" : "") + "\\nفاکتور: <code>" + botEscape(payment.provider_invoice_id) + "</code>",
+      "cubepay-wallet:" + payment.id).catch(() => null);
+  }
+  return { processed, bonusAmount, creditedAmount };
+}
+
+async function reconcileSalesCubepayPayment(env, bot, payment) {
+  if (payment.processed_at) return payment;
+  let stored = {};
+  try { stored = JSON.parse(payment.provider_payload || "{}"); } catch (_) {}
+  if (!stored.callback_received) return payment;
+  const result = await resellerCubepayRequest(env, bot, "verify-payment.php", { authority: payment.provider_invoice_id });
+  const data = result.data || {};
+  const verified = (result.ok && data.success === true && String(data.status || "").toLowerCase() === "verified") || result.status === 409;
+  if (!verified) {
+    if (result.status === 402) return payment;
+    if (result.status === 410) {
+      const ts = nowIso();
+      await env.PASARGUARD_DB.batch([
+        env.PASARGUARD_DB.prepare("UPDATE sales_payment_invoices SET status='EXPIRED',error_message=?,updated_at=? WHERE id=? AND processed_at IS NULL").bind(cleanText(data.message || "فاکتور منقضی یا ناموفق است",800),ts,payment.id),
+        env.PASARGUARD_DB.prepare("UPDATE sales_wallet_requests SET status='rejected',updated_at=? WHERE id=? AND status='payment_pending'").bind(ts,payment.target_id)
+      ]);
+      return env.PASARGUARD_DB.prepare("SELECT * FROM sales_payment_invoices WHERE id=?").bind(payment.id).first();
+    }
+    throw new Error(cleanText(data.message || data.error || ("CubePay HTTP " + result.status), 800));
+  }
+  const verifiedOrder = cleanText(data.order_id || stored?.callback?.order_id || stored?.callback?.query?.order_id, 160);
+  if (verifiedOrder && verifiedOrder !== String(payment.id)) throw new Error("شماره سفارش CubePay تطبیق ندارد");
+  const verifiedAmount = Number(data.amount || stored?.callback?.amount || stored?.callback?.json?.amount || 0);
+  if (verifiedAmount > 0 && verifiedAmount !== Number(payment.amount_rial || 0)) throw new Error("مبلغ تایید CubePay با فاکتور داخلی تطبیق ندارد");
+  const ts = nowIso();
+  await env.PASARGUARD_DB.prepare("UPDATE sales_payment_invoices SET status='PAID',paid_at=COALESCE(paid_at,?),provider_payload=?,updated_at=?,error_message=NULL WHERE id=?")
+    .bind(ts, JSON.stringify({ ...stored, verify: data, verify_http_status: result.status }), ts, payment.id).run();
+  await recordResellerCubepayState(env, bot.id, true).catch(() => null);
+  const fresh = await env.PASARGUARD_DB.prepare("SELECT * FROM sales_payment_invoices WHERE id=?").bind(payment.id).first();
+  if (!fresh.processed_at) await finalizeSalesCubepayWallet(env, bot, fresh);
+  return env.PASARGUARD_DB.prepare("SELECT * FROM sales_payment_invoices WHERE id=?").bind(payment.id).first();
+}
+
+async function resellerCubepayCallback(request, env, botId) {
+  await ensureDb(env);
+  const bot = await getResellerBotById(env, botId);
+  if (!bot) return fail("Not found", 404, "NOT_FOUND");
+  const url = new URL(request.url);
+  let body = {};
+  if (request.method === "POST") { try { body = await parseBody(request); } catch (_) { body = {}; } }
+  const authority = cleanText(body.authority || url.searchParams.get("authority"), 160);
+  const orderId = cleanText(body.order_id || url.searchParams.get("order_id"), 160);
+  const callbackStatus = cleanText(body.status || url.searchParams.get("status"), 50).toLowerCase();
+  const amount = clampInt(body.amount, 0, Number.MAX_SAFE_INTEGER);
+  if (!authority && !orderId) return fail("Invalid callback payload", 400, "INVALID_CALLBACK");
+  let payment = null;
+  if (authority) payment = await env.PASARGUARD_DB.prepare("SELECT * FROM sales_payment_invoices WHERE bot_id=? AND provider='cubepay' AND provider_invoice_id=?").bind(bot.id, authority).first();
+  if (!payment && orderId) payment = await env.PASARGUARD_DB.prepare("SELECT * FROM sales_payment_invoices WHERE bot_id=? AND provider='cubepay' AND id=?").bind(bot.id, orderId).first();
+  if (!payment) return fail("Invoice not found", 404, "NOT_FOUND");
+  if (orderId && orderId !== String(payment.id)) return fail("Order mismatch", 422, "ORDER_MISMATCH");
+  if (amount > 0 && amount !== Number(payment.amount_rial || 0)) return fail("Amount mismatch", 422, "AMOUNT_MISMATCH");
+  let stored = {};
+  try { stored = JSON.parse(payment.provider_payload || "{}"); } catch (_) {}
+  const ts = nowIso();
+  await env.PASARGUARD_DB.prepare("UPDATE sales_payment_invoices SET provider_payload=?,updated_at=? WHERE id=?")
+    .bind(JSON.stringify({ ...stored, callback_received: true, callback: { json: body, query: Object.fromEntries(url.searchParams.entries()), authority, order_id: orderId, status: callbackStatus, amount, received_at: ts } }), ts, payment.id).run();
+  try {
+    const fresh = await env.PASARGUARD_DB.prepare("SELECT * FROM sales_payment_invoices WHERE id=?").bind(payment.id).first();
+    await reconcileSalesCubepayPayment(env, bot, fresh);
+    return json({ received: true });
+  } catch (error) {
+    await recordResellerCubepayState(env, bot.id, false, error.message).catch(() => null);
+    await env.PASARGUARD_DB.prepare("UPDATE sales_payment_invoices SET error_message=?,updated_at=? WHERE id=?").bind(cleanText(error.message,800),nowIso(),payment.id).run();
+    return fail("Callback processing failed", 500, "CALLBACK_FAILED");
+  }
+}
+
 function resellerBlupalConfigured(bot) {
   return Number(bot?.blupal_enabled || 0) === 1 && !!String(bot?.blupal_api_key_enc || "").trim();
 }
@@ -7824,7 +8180,9 @@ async function salesPaymentStatus(env, bot, customer, paymentId) {
   const payment = await env.PASARGUARD_DB.prepare("SELECT * FROM sales_payment_invoices WHERE id=? AND bot_id=? AND customer_id=?")
     .bind(paymentId, bot.id, customer.id).first();
   if (!payment) throw new Error("فاکتور آنلاین پیدا نشد");
-  if (String(payment.provider || "").toLowerCase() === "plisio") return payment;
+  const provider = String(payment.provider || "").toLowerCase();
+  if (provider === "plisio") return payment;
+  if (provider === "cubepay") return reconcileSalesCubepayPayment(env, bot, payment);
   return salesBlupalPaymentStatus(env, bot, customer, paymentId);
 }
 
@@ -7992,8 +8350,10 @@ async function salesMiniAppBootstrap(request, env, botId, ctx = null) {
         payment_default_method: resellerPaymentDefaultMethod(bot, "order"),
         blupal_enabled: resellerPaymentMethodEnabled(bot, "blupal"),
         plisio_enabled: resellerPlisioConfigured(bot),
+        cubepay_enabled: resellerCubepayConfigured(bot),
         online_payment_label: "پرداخت آنلاین بلوپال",
         plisio_payment_label: "پرداخت رمزارزی Plisio",
+        cubepay_payment_label: "کارت‌به‌کارت خودکار CubePay",
         bot_version: APP_VERSION
       },
       customer: {
@@ -8147,6 +8507,11 @@ async function salesMiniAppAction(request, env, botId, ctx = null) {
       const amount = clampInt(body.amount, 0, 1000000000000);
       if (amount < 10000) throw new Error("حداقل مبلغ شارژ ۱۰٬۰۰۰ تومان است");
       const walletPaymentMethod = String(body.payment_method || resellerPaymentDefaultMethod(bot, "recharge") || "card").toLowerCase();
+      if (walletPaymentMethod === "cubepay") {
+        if (!resellerCubepayConfigured(bot)) throw new Error("درگاه CubePay این ربات فعال یا کامل تنظیم نشده است");
+        const requestRow = await createSalesCubepayWalletCharge(env, bot, customer, amount, request.headers.get("x-bluepanel-public-origin") || new URL(request.url).origin, ctx);
+        return json({ success: true, message: "فاکتور کارت‌به‌کارت خودکار CubePay ساخته شد.", online_payment: requestRow.invoice, bonus_percent: requestRow.bonusPercent, bonus_toman: requestRow.bonusAmount });
+      }
       if (walletPaymentMethod === "plisio") {
         if (!resellerPlisioConfigured(bot)) throw new Error("درگاه Plisio این ربات فعال یا کامل تنظیم نشده است");
         const requestRow = await createSalesPlisioWalletCharge(env, bot, customer, amount, request.headers.get("x-bluepanel-public-origin") || new URL(request.url).origin, ctx);
@@ -8242,7 +8607,7 @@ body:after{content:"";position:fixed;z-index:-1;width:190px;height:190px;left:-7
 <div id="planStep" style="display:none"><button id="planBackBtn" class="btn ghost full miniBack" onclick="backToCategories()">→ بازگشت به دسته‌بندی‌ها</button><div class="sectionTitle"><span id="shopTitle">پلن‌های فروش</span><small id="planCount"></small></div><div id="plans" class="planGrid"></div></div>
 </section>
 <section id="services" class="page"><div class="hero"><h1>🧭 مرکز سرویس‌های من</h1><p>حجم، مصرف، انقضا و وضعیت سرویس را ببینید؛ تمدید، افزایش حجم و تعویض لینک نیز از همین بخش انجام می‌شود.</p></div><div class="sectionTitle"><span>سرویس‌ها</span><small>اطلاعات مشترک با پنل</small></div><div id="serviceList"></div></section>
-<section id="wallet" class="page"><div class="hero"><h1>💳 کیف پول</h1><p>فقط روش‌های فعال‌شده توسط نماینده نمایش داده می‌شوند.</p><div class="price" id="walletBalance">۰ تومان</div></div><div class="card"><h3>افزایش موجودی</h3><input id="chargeAmount" class="input" inputmode="numeric" type="number" min="10000" placeholder="مبلغ به تومان"><div class="paymentMethods two" id="walletPaymentMethods"><button class="paymentMethod" id="chargeCardBtn"><b>💳</b>کارت‌به‌کارت</button><button class="paymentMethod online" id="chargeOnlineBtn"><b>💠</b>پرداخت آنلاین</button><button class="paymentMethod online" id="chargePlisioBtn"><b>🪙</b>Plisio رمزارزی</button></div><div id="onlineWalletHint" class="muted" style="margin-top:9px"></div></div><div class="sectionTitle"><span>پرداخت‌های آنلاین</span><small>استعلام خودکار</small></div><div id="onlinePayments"></div><div class="sectionTitle"><span>درخواست‌های شارژ</span><small>وضعیت بررسی</small></div><div id="walletRequests"></div><div class="sectionTitle"><span>گردش حساب</span><small>آخرین تراکنش‌ها</small></div><div id="ledger"></div></section>
+<section id="wallet" class="page"><div class="hero"><h1>💳 کیف پول</h1><p>فقط روش‌های فعال‌شده توسط نماینده نمایش داده می‌شوند.</p><div class="price" id="walletBalance">۰ تومان</div></div><div class="card"><h3>افزایش موجودی</h3><input id="chargeAmount" class="input" inputmode="numeric" type="number" min="10000" placeholder="مبلغ به تومان"><div class="paymentMethods two" id="walletPaymentMethods"><button class="paymentMethod" id="chargeCardBtn"><b>💳</b>کارت‌به‌کارت</button><button class="paymentMethod online" id="chargeOnlineBtn"><b>💠</b>پرداخت آنلاین</button><button class="paymentMethod online" id="chargePlisioBtn"><b>🪙</b>Plisio رمزارزی</button><button class="paymentMethod online" id="chargeCubepayBtn"><b>💳</b>CubePay خودکار</button></div><div id="onlineWalletHint" class="muted" style="margin-top:9px"></div></div><div class="sectionTitle"><span>پرداخت‌های آنلاین</span><small>استعلام خودکار</small></div><div id="onlinePayments"></div><div class="sectionTitle"><span>درخواست‌های شارژ</span><small>وضعیت بررسی</small></div><div id="walletRequests"></div><div class="sectionTitle"><span>گردش حساب</span><small>آخرین تراکنش‌ها</small></div><div id="ledger"></div></section>
 <section id="offers" class="page"><button class="btn secondary full miniBack" onclick="nav('home')">↩️ بازگشت به خانه</button><div class="hero"><h1>🎟 تخفیف و هدیه</h1><p>کد تخفیف یا هدیه نماینده را وارد کنید. کد تخفیف روی خرید بعدی و کد هدیه روی موجودی اعمال می‌شود.</p></div><div id="activePromoCard"></div><div class="card"><h3>فعال‌سازی کد</h3><input id="promoCode" class="input offerCode" maxlength="32" autocomplete="off" placeholder="EXAMPLE20"><button class="btn full" onclick="redeemPromo()">فعال‌سازی</button></div></section>
 <section id="notifications" class="page"><button class="btn secondary full miniBack" onclick="nav('home')">↩️ بازگشت به خانه</button><div class="hero"><h1>🔔 مرکز اعلان‌ها</h1><p>هشدارهای مصرف و انقضا، کش‌بک و رویدادهای مهم حساب در این بخش نگهداری می‌شوند.</p></div><button class="btn secondary full" style="margin:12px 0" onclick="markNotificationsRead()">✅ علامت‌گذاری همه به‌عنوان خوانده‌شده</button><div id="notificationList"></div></section>
 <section id="support" class="page"><button class="btn secondary full miniBack" onclick="nav('home')">↩️ بازگشت به خانه</button><div class="hero"><h1>🎫 مرکز پشتیبانی</h1><p>تیکت جدید ثبت کنید، پاسخ نماینده را ببینید و گفت‌وگو را بدون ارسال پیام‌های پراکنده در ربات ادامه دهید.</p></div><div id="phoneSupport"></div><div id="ticketCreateCard" class="card"><h3>➕ ثبت تیکت جدید</h3><div class="ticketForm"><select id="ticketCategory" class="input select"><option value="technical">🛠 مشکل فنی</option><option value="sales">🛒 خرید و فروش</option><option value="financial">💳 مالی و پرداخت</option><option value="account">👤 حساب کاربری</option><option value="other">📌 سایر</option></select><select id="ticketPriority" class="input select"><option value="normal">اولویت عادی</option><option value="low">اولویت کم</option><option value="high">اولویت مهم</option><option value="urgent">اولویت فوری</option></select><input id="ticketSubject" class="input" maxlength="140" placeholder="موضوع تیکت"><textarea id="ticketMessage" class="input" rows="5" maxlength="3000" placeholder="شرح کامل درخواست"></textarea><button class="btn full" onclick="createTicket()">ثبت تیکت</button></div></div><div class="sectionTitle"><span>تیکت‌های من</span><small id="ticketCount">۰ تیکت</small></div><div id="ticketList"></div></section>
@@ -8327,7 +8692,7 @@ function orderCard(x){var h='<article class="card"><div class="row"><h3>'+(x.ord
 function orderCards(list){return list.length?list.map(orderCard).join(""):'<div class="empty"><div class="emptyIcon">📦</div>هنوز سفارشی ثبت نشده است.</div>'}
 function renderServices(){var services=state.services||[];el("serviceList").innerHTML=services.length?services.map(function(x){var limit=Number(x.remote_data_limit||0),used=Number(x.remote_used_traffic||0),remaining=limit>0?Math.max(0,limit-used):0,pct=limit>0?Math.max(0,Math.min(100,Math.round(used*100/limit))):0,status=String(x.remote_status||"active").toLowerCase(),link=x.subscription_url||"",loc=(x.location_emoji||"🌍")+" "+(x.location_title||"عمومی");return'<article class="card serviceCard"><div class="serviceHead"><div><h3>'+esc(x.plan_title||"سرویس")+'</h3><div class="muted">'+esc(loc)+' · <code>'+esc(x.remote_username)+'</code></div></div><span class="status serviceStatus '+esc(status)+'">'+esc(serviceStatusLabel(status))+'</span></div><div class="serviceMeta"><div><span>حجم کل</span><b>'+(limit>0?gb(limit):"نامحدود")+'</b></div><div><span>مصرف‌شده</span><b>'+gb(used)+'</b></div><div><span>باقی‌مانده</span><b>'+(limit>0?gb(remaining):"نامحدود")+'</b></div><div><span>تاریخ انقضا</span><b>'+esc(faDate(x.remote_expire))+'</b></div></div>'+(limit>0?'<div class="usageTrack"><div class="usageFill" style="width:'+pct+'%"></div></div><div class="muted">'+num(pct)+'٪ مصرف شده</div>':'<div class="muted">حجم این سرویس نامحدود است.</div>')+'<div class="syncLine">آخرین همگام‌سازی: '+esc(timeAgo(x.remote_last_synced_at))+'</div>'+(link?'<div class="serviceLink">'+esc(link)+'</div>':'')+'<div class="serviceActions">'+(link?'<button class="btn secondary" onclick="showQr(\''+encodeURIComponent(link)+'\')">🔗 لینک و QR</button>':'<button class="btn secondary" disabled>لینک موجود نیست</button>')+'<button class="btn secondary" onclick="refreshService(\''+x.id+'\')">🔄 بروزرسانی</button><button class="btn" onclick="selectRenew(\''+x.id+'\')">♻️ تمدید</button><button class="btn" onclick="selectVolume(\''+x.id+'\')">➕ افزایش حجم</button><button class="btn danger wide" onclick="confirmRevokeService(\''+x.id+'\')">🔐 تعویض لینک اشتراک</button></div></article>'}).join(""):'<div class="empty"><div class="emptyIcon">🧭</div>هنوز سرویس تحویل‌شده‌ای ندارید.</div>'}
 function renderWalletRequests(){var list=state.wallet_requests||[];el("walletRequests").innerHTML=list.length?list.map(function(x){var pay=paymentForTarget("wallet",x.id);return'<div class="card"><div class="row"><b>'+money(x.amount_toman)+'</b><span class="status '+esc(x.status)+'">'+esc(statusLabel(x.status))+'</span></div>'+(Number(x.bonus_toman)>0?'<div class="muted">بونس: '+money(x.bonus_toman)+'</div>':"")+(x.origin==="miniapp"&&x.status==="awaiting_receipt"?'<button class="btn full resumeWalletBtn" style="margin-top:9px" data-id="'+esc(x.id)+'">💳 ادامه پرداخت و ثبت رسید</button>':"")+(pay&&x.status==="payment_pending"?'<button class="btn online full resumeOnlineBtn" style="margin-top:9px" data-id="'+esc(pay.id)+'">💠 ادامه پرداخت آنلاین</button>':"")+'</div>'}).join(""):'<div class="empty">درخواست شارژی ثبت نشده است.</div>'}
-function renderOnlinePayments(){var list=(state.payment_invoices||[]).filter(function(p){return !p.processed_at||String(p.status).toUpperCase()==="PAID"}).slice(0,8);el("onlinePayments").innerHTML=list.length?list.map(function(p){var done=!!p.processed_at,status=String(p.status||"PENDING").toUpperCase();var icon=String(p.provider||"").toLowerCase()==="plisio"?"🪙":"💠";return'<article class="card onlinePaymentCard"><div class="row"><div><b>'+icon+' '+(p.target_type==="wallet"?"شارژ کیف پول":"پرداخت سفارش")+'</b><div class="muted"><code>'+esc(p.provider_invoice_id||p.id)+'</code></div></div><span class="status '+(done?"approved":"payment_pending")+'">'+esc(done?"پردازش شد":paymentStatusLabel(status))+'</span></div><div class="muted">مبلغ: '+money(p.amount_toman)+' · '+esc(timeAgo(p.updated_at))+'</div>'+(!done&&["PENDING","PAID"].includes(status)?'<div class="paymentProgress"></div><button class="btn online full resumeOnlineBtn" data-id="'+esc(p.id)+'">ادامه پرداخت / استعلام</button>':"")+(p.error_message?'<div class="muted" style="color:var(--danger);margin-top:8px">'+esc(p.error_message)+'</div>':"")+'</article>'}).join(""):'<div class="empty"><div class="emptyIcon">💠</div>پرداخت آنلاین فعالی ندارید.</div>'}
+function renderOnlinePayments(){var list=(state.payment_invoices||[]).filter(function(p){return !p.processed_at||String(p.status).toUpperCase()==="PAID"}).slice(0,8);el("onlinePayments").innerHTML=list.length?list.map(function(p){var done=!!p.processed_at,status=String(p.status||"PENDING").toUpperCase();var providerKey=String(p.provider||"").toLowerCase(),icon=providerKey==="cubepay"?"💳":providerKey==="plisio"?"🪙":"💠";return'<article class="card onlinePaymentCard"><div class="row"><div><b>'+icon+' '+(p.target_type==="wallet"?"شارژ کیف پول":"پرداخت سفارش")+'</b><div class="muted"><code>'+esc(p.provider_invoice_id||p.id)+'</code></div></div><span class="status '+(done?"approved":"payment_pending")+'">'+esc(done?"پردازش شد":paymentStatusLabel(status))+'</span></div><div class="muted">مبلغ: '+money(p.amount_toman)+' · '+esc(timeAgo(p.updated_at))+'</div>'+(!done&&["PENDING","PAID"].includes(status)?'<div class="paymentProgress"></div><button class="btn online full resumeOnlineBtn" data-id="'+esc(p.id)+'">ادامه پرداخت / استعلام</button>':"")+(p.error_message?'<div class="muted" style="color:var(--danger);margin-top:8px">'+esc(p.error_message)+'</div>':"")+'</article>'}).join(""):'<div class="empty"><div class="emptyIcon">💠</div>پرداخت آنلاین فعالی ندارید.</div>'}
 function bindResumeButtons(){document.querySelectorAll(".resumeOrderBtn").forEach(function(btn){btn.onclick=function(){resumeOrderPayment(btn.dataset.id)}});document.querySelectorAll(".resumeWalletBtn").forEach(function(btn){btn.onclick=function(){resumeWalletPayment(btn.dataset.id)}});document.querySelectorAll(".resumeOnlineBtn").forEach(function(btn){btn.onclick=function(){openOnlinePayment(btn.dataset.id)}})}
 function renderNotifications(){var list=state.notifications||[];el("notificationList").innerHTML=list.length?list.map(function(n){return'<article class="card noticeCard '+(n.status==="unread"?"unread":"")+'"><div class="row"><h3>'+notificationIcon(n.type)+' '+esc(n.title)+'</h3><span class="badge">'+(n.status==="unread"?"جدید":"خوانده‌شده")+'</span></div><div class="muted">'+esc(n.message)+'</div><div class="noticeMeta"><span>'+esc(timeAgo(n.created_at))+'</span><span>'+esc(n.type||"notification")+'</span></div></article>'}).join(""):'<div class="empty"><div class="emptyIcon">🔕</div>هنوز اعلانی ندارید.</div>'}
 function phoneCardHtml(compact){var b=state.bot,c=state.customer,verified=!!c.phone_verified;if(verified)return compact?"":'<div class="phoneBanner ok"><strong>✅ شماره موبایل تأیید شده</strong><div class="muted">'+esc(c.phone_number||"شماره متعلق به حساب تلگرام")+'</div></div>';if(!b.phone_verification_required&&compact)return"";return'<div class="phoneBanner"><strong>📱 '+(b.phone_verification_required?"تأیید شماره الزامی است":"تأیید شماره موبایل")+'</strong><div class="muted">'+(b.phone_verification_required?"برای خرید، شارژ، تست رایگان و ثبت تیکت باید شماره متعلق به همین حساب تلگرام تأیید شود.":"با تأیید شماره، پیگیری حساب و پشتیبانی امن‌تر می‌شود.")+'</div><button class="btn full" style="margin-top:9px" onclick="verifyPhone()">ارسال و تأیید شماره من</button></div>'}
@@ -8336,7 +8701,7 @@ function renderTickets(){var b=state.bot,list=state.tickets||[];el("ticketCount"
 function render(){var b=state.bot,c=state.customer,o=state.orders||[],promo=c.active_promo;if(!isTelegram&&!document.getElementById("webLogoutBtn")){var top=document.querySelector(".appbar");if(top){var x=document.createElement("button");x.id="webLogoutBtn";x.className="btn secondary logoutWeb";x.textContent="خروج";x.onclick=webLogout;top.appendChild(x)}}el("brand").textContent=b.brand_name;el("hello").textContent="سلام "+(c.first_name||c.username||"کاربر");el("version").textContent="نسخه "+(b.bot_version||state.version);el("homeBalance").textContent=money(c.wallet_balance);el("walletBalance").textContent=money(c.wallet_balance);el("homeServices").textContent=num((state.services||[]).length);el("homeOrders").innerHTML=orderCards(o.slice(0,4));el("trialQuick").innerHTML=b.trial_enabled?'<button class="btn ok full" onclick="trial()">🎁 دریافت تست رایگان '+gb(b.trial_data_limit_bytes)+" / "+num(b.trial_duration_hours||24)+' ساعت</button>':"";
 var promoHtml=promo?'<div class="promoBanner"><strong>🎟 کد فعال: '+esc(promo.code)+'</strong><div class="muted">'+esc(promo.description||"این تخفیف روی خرید بعدی اعمال می‌شود.")+'</div></div>':"";
 el("activePromoBanner").innerHTML=promoHtml;var cashbackHtml=b.cashback_enabled?'<div class="cashbackBanner"><strong>💸 کش‌بک خرید '+num(b.cashback_percent)+'٪</strong><div class="muted">'+(Number(b.cashback_min_purchase_toman)>0?'حداقل خرید '+money(b.cashback_min_purchase_toman)+' · ':'')+(Number(b.cashback_max_toman)>0?'سقف هر سفارش '+money(b.cashback_max_toman):'بدون سقف پاداش')+'</div></div>':"";el("cashbackBanner").innerHTML=cashbackHtml;el("notificationQuickText").textContent=Number(state.unread_notifications||0)>0?num(state.unread_notifications)+" اعلان جدید":"هشدارها و پاداش‌ها";el("activePromoCard").innerHTML=promoHtml||'<div class="card"><h3>کد فعالی ندارید</h3><div class="muted">کد تخفیف یا هدیه‌ای که از نماینده دریافت کرده‌اید وارد کنید.</div></div>';
-renderShop();renderServices();renderWalletRequests();renderOnlinePayments();renderNotifications();renderPhone();renderTickets();el("chargeCardBtn").style.display=b.payment_card_enabled?"block":"none";el("chargeOnlineBtn").style.display=b.blupal_enabled?"block":"none";el("chargePlisioBtn").style.display=b.plisio_enabled?"block":"none";var walletMethodsBox=el("walletPaymentMethods"),walletMethodNodes={card:el("chargeCardBtn"),blupal:el("chargeOnlineBtn"),plisio:el("chargePlisioBtn")};(b.payment_methods_order||["card","blupal"]).forEach(function(method){if(walletMethodNodes[method])walletMethodsBox.appendChild(walletMethodNodes[method])});if(walletMethodNodes.plisio)walletMethodsBox.appendChild(walletMethodNodes.plisio);var rechargeMethods=[];if(b.payment_card_enabled)rechargeMethods.push("کارت‌به‌کارت");if(b.blupal_enabled)rechargeMethods.push("بلوپال");if(b.plisio_enabled)rechargeMethods.push("Plisio");walletMethodsBox.className="paymentMethods "+(rechargeMethods.length===1?"one":rechargeMethods.length===2?"two":"three");el("onlineWalletHint").textContent=rechargeMethods.length?("روش‌های فعال شارژ: "+rechargeMethods.join(" و ")):"در حال حاضر روشی برای شارژ کیف پول فعال نیست.";el("ledger").innerHTML=(state.ledger||[]).length?(state.ledger||[]).map(function(x){return'<div class="card"><div class="row"><b>'+(Number(x.amount)>=0?"+":"")+money(x.amount)+'</b><span class="badge">مانده '+money(x.balance_after)+'</span></div><div class="muted">'+esc(x.description||"تراکنش")+"</div></div>"}).join(""):'<div class="empty">تراکنشی ثبت نشده است.</div>';
+renderShop();renderServices();renderWalletRequests();renderOnlinePayments();renderNotifications();renderPhone();renderTickets();el("chargeCardBtn").style.display=b.payment_card_enabled?"block":"none";el("chargeOnlineBtn").style.display=b.blupal_enabled?"block":"none";el("chargePlisioBtn").style.display=b.plisio_enabled?"block":"none";el("chargeCubepayBtn").style.display=b.cubepay_enabled?"block":"none";var walletMethodsBox=el("walletPaymentMethods"),walletMethodNodes={card:el("chargeCardBtn"),blupal:el("chargeOnlineBtn"),plisio:el("chargePlisioBtn"),cubepay:el("chargeCubepayBtn")};(b.payment_methods_order||["card","blupal"]).forEach(function(method){if(walletMethodNodes[method])walletMethodsBox.appendChild(walletMethodNodes[method])});if(walletMethodNodes.plisio)walletMethodsBox.appendChild(walletMethodNodes.plisio);if(walletMethodNodes.cubepay)walletMethodsBox.appendChild(walletMethodNodes.cubepay);var rechargeMethods=[];if(b.payment_card_enabled)rechargeMethods.push("کارت‌به‌کارت");if(b.blupal_enabled)rechargeMethods.push("بلوپال");if(b.plisio_enabled)rechargeMethods.push("Plisio");if(b.cubepay_enabled)rechargeMethods.push("CubePay");walletMethodsBox.className="paymentMethods "+(rechargeMethods.length===1?"one":rechargeMethods.length===2?"two":"three");el("onlineWalletHint").textContent=rechargeMethods.length?("روش‌های فعال شارژ: "+rechargeMethods.join(" و ")):"در حال حاضر روشی برای شارژ کیف پول فعال نیست.";el("ledger").innerHTML=(state.ledger||[]).length?(state.ledger||[]).map(function(x){return'<div class="card"><div class="row"><b>'+(Number(x.amount)>=0?"+":"")+money(x.amount)+'</b><span class="badge">مانده '+money(x.balance_after)+'</span></div><div class="muted">'+esc(x.description||"تراکنش")+"</div></div>"}).join(""):'<div class="empty">تراکنشی ثبت نشده است.</div>';
 var loyaltyLabels={bronze:"برنزی",silver:"نقره‌ای",gold:"طلایی",vip:"VIP"},loyaltyIcons={bronze:"🥉",silver:"🥈",gold:"🥇",vip:"💎"},loyaltyLabel=loyaltyLabels[c.loyalty_level]||"برنزی";
 el("loyaltyBanner").innerHTML=b.loyalty_enabled?'<div class="cashbackBanner"><strong>'+ (loyaltyIcons[c.loyalty_level]||"🥉") +' باشگاه مشتریان · '+esc(loyaltyLabel)+'</strong><div class="muted">مجموع خرید: '+money(c.lifetime_spend_toman||0)+(Number(c.loyalty_discount_percent||0)>0?' · تخفیف خودکار '+num(c.loyalty_discount_percent)+'٪':' · با خرید بیشتر سطح شما ارتقا می‌یابد')+'</div></div>':'';
 el("accountCard").innerHTML='<div class="card"><div class="row"><h3>👤 حساب کاربری</h3><span class="badge">'+esc(c.customer_type||"retail")+'</span></div><div>نام: <b>'+esc(c.first_name||c.username||"کاربر")+'</b></div><div class="muted">شناسه: '+esc(c.telegram_id)+'</div><div style="margin-top:8px">موجودی: <b>'+money(c.wallet_balance)+'</b></div><div class="muted" style="margin-top:8px">'+(loyaltyIcons[c.loyalty_level]||"🥉")+' سطح باشگاه: <b>'+esc(loyaltyLabel)+'</b> · مجموع خرید: <b>'+money(c.lifetime_spend_toman||0)+'</b></div>'+(Number(c.discount_percent||0)>0?'<div class="priceSave">تخفیف کاربر عمده: '+num(c.discount_percent)+'٪</div>':"")+(Number(c.loyalty_discount_percent||0)>0?'<div class="priceSave">تخفیف باشگاه: '+num(c.loyalty_discount_percent)+'٪</div>':"")+(b.fraud_protection_enabled?'<div class="securityPill">🛡️ حفاظت خرید و کنترل ضدتقلب فعال است</div>':"")+'</div>';
@@ -8370,7 +8735,7 @@ window.closeModal=function(){el("modal").classList.remove("show");pendingPayment
 function onlinePaymentById(id){return(state&&state.payment_invoices||[]).find(function(p){return String(p.id)===String(id)})}
 window.openOnlinePayment=function(id){var p=onlinePaymentById(id);if(!p)return toast("فاکتور آنلاین پیدا نشد");showOnlinePayment(p)};
 window.launchOnlinePayment=function(){if(!pendingOnlinePayment||!pendingOnlinePayment.payment_link)return toast("لینک پرداخت موجود نیست");var url=pendingOnlinePayment.payment_link;if(tg&&tg.openLink)tg.openLink(url,{try_instant_view:false});else location.href=url};
-function showOnlinePayment(p){pendingOnlinePayment=p;if(onlinePollTimer)clearInterval(onlinePollTimer);var isPlisio=String(p.provider||"").toLowerCase()==="plisio",provider=isPlisio?"Plisio":"بلوپال",icon=isPlisio?"🪙":"💠",finalRial=Number(p.final_amount_rial||0),card=!isPlisio&&p.card_number?'<div class="paymentLine"><span>کارت مقصد بلوپال</span><b><code>'+esc(p.card_number)+'</code></b></div>':"",help=isPlisio?"بعد از پرداخت، Callback امضاشده Plisio حساب را بدون تأیید دستی شارژ می‌کند.":"بعد از پرداخت، وضعیت از API استعلام و سفارش یا کیف پول بدون ارسال پیام اضافی بروزرسانی می‌شود.";openModal(icon+" پرداخت آنلاین "+provider,'<div class="providerBanner"><div><strong>پرداخت امن و خودکار</strong><small>'+help+'</small></div><div class="providerLogo">'+icon+'</div></div><div class="paymentBox"><div class="paymentLine"><span>شماره فاکتور</span><b><code>'+esc(p.provider_invoice_id||p.invoice_id||p.id)+'</code></b></div><div class="paymentLine"><span>مبلغ سفارش</span><b>'+money(p.amount_toman)+'</b></div>'+(!isPlisio&&finalRial?'<div class="paymentLine"><span>مبلغ نهایی بلوپال</span><b>'+num(finalRial)+' ریال</b></div>':"")+card+'</div><div id="onlinePaymentState" class="onlineState">در انتظار پرداخت و تأیید '+provider+'</div><div class="onlineActions"><button class="btn online full" onclick="launchOnlinePayment()">بازکردن صفحه پرداخت</button><button id="checkOnlineBtn" class="btn secondary full" onclick="checkOnlinePayment(pendingOnlinePayment.id)">🔄 بررسی وضعیت پرداخت</button></div>');onlinePollTimer=setInterval(function(){checkOnlinePayment(p.id,true)},5000)}
+function showOnlinePayment(p){pendingOnlinePayment=p;if(onlinePollTimer)clearInterval(onlinePollTimer);var key=String(p.provider||"").toLowerCase(),isPlisio=key==="plisio",isCubepay=key==="cubepay",provider=isCubepay?"CubePay":isPlisio?"Plisio":"بلوپال",icon=isCubepay?"💳":isPlisio?"🪙":"💠",finalRial=Number(p.final_amount_rial||0),card=!isPlisio&&!isCubepay&&p.card_number?'<div class="paymentLine"><span>کارت مقصد بلوپال</span><b><code>'+esc(p.card_number)+'</code></b></div>':"",help=isCubepay?"مبلغ دقیق صفحه CubePay را واریز کنید؛ Callback و سپس API تایید نهایی را انجام می‌دهند.":isPlisio?"بعد از پرداخت، Callback امضاشده Plisio حساب را بدون تأیید دستی شارژ می‌کند.":"بعد از پرداخت، وضعیت از API استعلام و سفارش یا کیف پول بدون ارسال پیام اضافی بروزرسانی می‌شود.";openModal(icon+" پرداخت آنلاین "+provider,'<div class="providerBanner"><div><strong>پرداخت امن و خودکار</strong><small>'+help+'</small></div><div class="providerLogo">'+icon+'</div></div><div class="paymentBox"><div class="paymentLine"><span>شماره فاکتور</span><b><code>'+esc(p.provider_invoice_id||p.invoice_id||p.id)+'</code></b></div><div class="paymentLine"><span>مبلغ سفارش</span><b>'+money(p.amount_toman)+'</b></div>'+((isCubepay||!isPlisio)&&finalRial?'<div class="paymentLine"><span>'+(isCubepay?'مبلغ دقیق قابل پرداخت':'مبلغ نهایی بلوپال')+'</span><b>'+num(finalRial)+' ریال</b></div>':"")+card+'</div><div id="onlinePaymentState" class="onlineState">در انتظار پرداخت و تأیید '+provider+'</div><div class="onlineActions"><button class="btn online full" onclick="launchOnlinePayment()">بازکردن صفحه پرداخت</button><button id="checkOnlineBtn" class="btn secondary full" onclick="checkOnlinePayment(pendingOnlinePayment.id)">🔄 بررسی وضعیت پرداخت</button></div>');onlinePollTimer=setInterval(function(){checkOnlinePayment(p.id,true)},5000)}
 window.checkOnlinePayment=async function(id,silent){var btn=el("checkOnlineBtn");if(btn&&!silent)btn.disabled=true;try{var d=await api("action",{action:"payment_status",payment_id:id}),p=d.payment||{};pendingOnlinePayment=Object.assign({},pendingOnlinePayment||{},p);var stateEl=el("onlinePaymentState");if(p.processed_at){if(stateEl){stateEl.className="onlineState paid";stateEl.textContent="پرداخت تأیید و با موفقیت پردازش شد"}if(onlinePollTimer){clearInterval(onlinePollTimer);onlinePollTimer=null}await refresh(false);setTimeout(function(){closeModal();nav(p.target_type==="wallet"?"wallet":"services")},900);if(!silent)toast("پرداخت با موفقیت انجام شد")}else{var terminal=["EXPIRED","CANCELED","FAILED"].includes(String(p.status||"").toUpperCase());if(stateEl){stateEl.className="onlineState";stateEl.textContent=paymentStatusLabel(p.status)+" — بروزرسانی "+timeAgo(p.updated_at)}if(terminal&&onlinePollTimer){clearInterval(onlinePollTimer);onlinePollTimer=null}if(!silent)toast(d.message||"وضعیت بروزرسانی شد")}}catch(e){if(!silent)toast(e.message)}finally{if(btn)btn.disabled=false}};
 window.showQr=function(x){var value=decodeURIComponent(x);openModal("QR Code اشتراک",'<img class="qr" src="https://api.qrserver.com/v1/create-qr-code/?size=420x420&data='+encodeURIComponent(value)+'"><div class="serviceLink">'+esc(value)+'</div><button class="btn full" onclick="copyValue(\''+encodeURIComponent(value)+'\')">📋 کپی لینک واقعی</button>')};
 function showDelivery(d){var link=d.subscription_url||"",extra=d.duration_hours?'<div class="muted">اعتبار: '+num(d.duration_hours)+' ساعت · حجم: '+gb(d.data_limit_bytes)+'</div>':"",cashback=Number(d.cashback_toman||0)>0?'<div class="promoBanner"><strong>💸 کش‌بک خرید</strong><div class="muted">'+money(d.cashback_toman)+' به کیف پول شما اضافه شد.</div></div>':"";openModal(d.order_type==="trial"?"تست رایگان آماده شد":(d.order_type==="renewal"?"تمدید انجام شد":d.order_type==="volume"?"افزایش حجم انجام شد":"سرویس آماده شد"),'<div class="paymentBox"><div class="paymentLine"><span>نام کاربری</span><b><code>'+esc(d.username||"")+'</code></b></div></div>'+extra+cashback+(link?'<img class="qr" src="https://api.qrserver.com/v1/create-qr-code/?size=420x420&data='+encodeURIComponent(link)+'"><div class="serviceLink">'+esc(link)+'</div><button class="btn full" onclick="copyValue(\''+encodeURIComponent(link)+'\')">📋 کپی لینک واقعی</button>':""))}
@@ -8381,7 +8746,7 @@ window.submitReceipt=async function(){if(!pendingPayment)return;var input=el("re
 function readFile(file){return new Promise(function(resolve,reject){var reader=new FileReader();reader.onload=function(){resolve(String(reader.result||""))};reader.onerror=function(){reject(new Error("خواندن فایل رسید ناموفق بود"))};reader.readAsDataURL(file)})}
 window.trial=async function(){try{var d=await api("action",{action:"trial"});if(d.delivery)showDelivery(d.delivery);toast(d.message);await refresh()}catch(e){toast(e.message)}};
 async function startWalletCharge(method){try{var amount=Number(el("chargeAmount").value||0),d=await api("action",{action:"wallet_charge",amount:amount,payment_method:method});if(d.online_payment)showOnlinePayment(d.online_payment);else if(d.payment)showPayment(d.payment);toast(d.message)}catch(e){toast(e.message)}}
-el("chargeCardBtn").onclick=function(){startWalletCharge("card")};el("chargeOnlineBtn").onclick=function(){startWalletCharge("blupal")};el("chargePlisioBtn").onclick=function(){startWalletCharge("plisio")};
+el("chargeCardBtn").onclick=function(){startWalletCharge("card")};el("chargeOnlineBtn").onclick=function(){startWalletCharge("blupal")};el("chargePlisioBtn").onclick=function(){startWalletCharge("plisio")};el("chargeCubepayBtn").onclick=function(){startWalletCharge("cubepay")};
 function showWebLogin(message){el("app").style.display="none";el("nav").style.display="none";var msg=message?'<div class="webLoginNote" style="color:var(--danger)">'+esc(message)+'</div>':'';el("loading").style.display="grid";el("loading").innerHTML='<div class="webLogin"><div class="webLoginLogo">BP</div><h2>ورود به نسخه وب</h2><div class="muted">نام کاربری تلگرام یا Telegram ID خود را وارد کنید تا کد ورود توسط همین ربات برایتان ارسال شود.</div>'+msg+'<div id="webLoginStep1" class="webLoginStep"><input id="webIdentifier" class="input ltr" autocomplete="username" placeholder="@username یا Telegram ID"><button id="requestWebCode" class="btn full">دریافت کد ورود</button></div><div id="webLoginStep2" class="webLoginStep" style="display:none"><input id="webCode" class="input ltr" inputmode="numeric" maxlength="6" placeholder="کد ۶ رقمی"><button id="verifyWebCode" class="btn full">ورود امن</button><button id="changeWebIdentifier" class="btn secondary full" style="margin-top:8px">تغییر شناسه</button></div><div class="webLoginNote">برای دریافت کد باید قبلاً یک‌بار ربات را Start کرده باشید. نشست وب با کوکی امن و HttpOnly نگهداری می‌شود.</div></div>';
   el("requestWebCode").onclick=async function(){var idn=el("webIdentifier").value.trim(),btn=this;if(!idn)return toast("شناسه را وارد کنید");btn.disabled=true;try{var r=await fetch("/sales-auth/"+encodeURIComponent(BOT_ID)+"/request-code",{method:"POST",credentials:"same-origin",headers:{"content-type":"application/json"},body:JSON.stringify({identifier:idn})}),d=await r.json();if(!r.ok||d.success===false)throw Object.assign(new Error(d.error||"ارسال کد ناموفق بود"),{code:d.code});el("webLoginStep1").style.display="none";el("webLoginStep2").style.display="block";el("webCode").focus();toast(d.message)}catch(e){toast(e.message)}finally{btn.disabled=false}};
   el("verifyWebCode").onclick=async function(){var idn=el("webIdentifier").value.trim(),code=el("webCode").value.trim(),btn=this;if(code.length!==6)return toast("کد ۶ رقمی را وارد کنید");btn.disabled=true;try{var r=await fetch("/sales-auth/"+encodeURIComponent(BOT_ID)+"/verify-code",{method:"POST",credentials:"same-origin",headers:{"content-type":"application/json"},body:JSON.stringify({identifier:idn,code:code})}),d=await r.json();if(!r.ok||d.success===false)throw new Error(d.error||"ورود ناموفق بود");el("loading").innerHTML='<div><div class="spinner"></div><div class="muted">در حال ورود…</div></div>';await refresh(true)}catch(e){toast(e.message)}finally{btn.disabled=false}};
@@ -9636,7 +10001,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
   if(el('focusAgencyForm'))el('focusAgencyForm').onclick=function(){el('agencyCreateCard').scrollIntoView({behavior:'smooth',block:'start'});setTimeout(function(){el('agencyTitle').focus()},350)};
   if(el('settingsForm'))el('settingsForm').addEventListener('input',function(){if(el('saveStatus')){el('saveStatus').textContent='تغییر ذخیره‌نشده وجود دارد.';el('saveStatus').style.color='var(--warn)'}});
   el('modalClose').onclick=closeModal;el('modal').onclick=function(e){if(e.target===el('modal'))closeModal()};
-  el('paymentForm').onsubmit=async function(e){e.preventDefault();try{var d=await api('/api/payments/blupal/create',{method:'POST',body:JSON.stringify({amount:el('paymentAmount').value})}),x=d.payment;el('newPayment').style.display='block';el('newPayment').innerHTML='<div class="row"><b>فاکتور آماده پرداخت</b>'+badge('PENDING')+'</div><div class="credential-row"><span>شارژ کیف پول</span><b>'+money(x.amount)+' تومان</b></div><div class="credential-row"><span>مبلغ دقیق</span><b>'+rial(x.final_amount_rial)+'</b></div>'+(x.card_number?'<div class="credential-row"><span>شماره کارت</span><span class="credential-value">'+esc(x.card_number)+'</span><button class="copy-mini" data-copy="'+esc(x.card_number)+'">کپی</button></div>':'')+'<button id="openPaymentBtn" class="btn" style="margin-top:11px">ورود به صفحه پرداخت</button>';bindCopyButtons(el('newPayment'));el('openPaymentBtn').onclick=function(){if(tg&&tg.openLink)tg.openLink(x.payment_link);else location.href=x.payment_link};toast('فاکتور بلوپال ساخته شد');e.target.reset();document.querySelectorAll('.amount-chip').forEach(function(x){x.classList.remove('active')});await load()}catch(err){toast(err.message)}};
+  el('paymentForm').onsubmit=async function(e){e.preventDefault();try{var provider=String(state.settings.payment_provider||'blupal').toLowerCase(),d=await api('/api/payments/'+provider+'/create',{method:'POST',body:JSON.stringify({amount:el('paymentAmount').value})}),x=d.payment,label=provider==='cubepay'?'CubePay':provider==='plisio'?'Plisio':'بلوپال';el('newPayment').style.display='block';el('newPayment').innerHTML='<div class="row"><b>فاکتور '+esc(label)+' آماده پرداخت</b>'+badge('PENDING')+'</div><div class="credential-row"><span>شارژ کیف پول</span><b>'+money(x.amount||x.amount_toman)+' تومان</b></div>'+(Number(x.final_amount_rial||0)?'<div class="credential-row"><span>'+(provider==='cubepay'?'مبلغ دقیق قابل پرداخت':'مبلغ ثبت‌شده')+'</span><b>'+rial(x.final_amount_rial)+'</b></div>':'')+(x.card_number?'<div class="credential-row"><span>شماره کارت</span><span class="credential-value">'+esc(x.card_number)+'</span><button class="copy-mini" data-copy="'+esc(x.card_number)+'">کپی</button></div>':'')+'<button id="openPaymentBtn" class="btn" style="margin-top:11px">ورود به صفحه پرداخت</button>';bindCopyButtons(el('newPayment'));el('openPaymentBtn').onclick=function(){if(tg&&tg.openLink)tg.openLink(x.payment_link);else location.href=x.payment_link};toast('فاکتور '+label+' ساخته شد');e.target.reset();document.querySelectorAll('.amount-chip').forEach(function(x){x.classList.remove('active')});await load()}catch(err){toast(err.message)}};
   el('agencyForm').onsubmit=async function(e){e.preventDefault();try{var d=await api('/api/agencies',{method:'POST',body:JSON.stringify({title:el('agencyTitle').value,username:el('agencyUsername').value,password:el('agencyPassword').value})});el('newCredentials').innerHTML='<div class="credentials"><b>اطلاعات پنل ساخته‌شده</b><div class="credential-row"><span>آدرس پنل</span><span class="credential-value ltr" style="word-break:break-all">'+esc(d.agency.panel_url)+'</span><button class="copy-mini" data-copy="'+esc(d.agency.panel_url)+'">کپی</button></div><div class="credential-row"><span>نام کاربری</span><span class="credential-value">'+esc(d.agency.username)+'</span><button class="copy-mini" data-copy="'+esc(d.agency.username)+'">کپی</button></div><div class="credential-row"><span>رمز عبور</span><span class="credential-value">'+esc(d.agency.password)+'</span><button class="copy-mini" data-copy="'+esc(d.agency.password)+'">کپی</button></div><button class="btn panelLinkBtn" data-link="'+esc(d.agency.panel_url)+'" style="margin-top:11px;width:100%">ورود به پنل</button><div class="card-sub" style="margin-top:9px">این اطلاعات را در جای امن ذخیره کنید.</div><div class="insight-strip good" style="margin-top:10px"><b>موجودی شما کسر نشد</b><span>حداقل موجودی فقط شرط ساخت پنل است و از این پس هزینه براساس مصرف واقعی محاسبه می‌شود.</span></div></div>';bindCopyButtons(el('newCredentials'));bindPanelLinks(el('newCredentials'));toast('پنل ساخته شد');e.target.reset();await load()}catch(err){toast(err.message)}};
   el('settingsForm').onsubmit=async function(e){e.preventDefault();try{var body={brand_name:el('setBrand').value,price_per_gb:el('setPrice').value,setup_fee:el('setSetupFee').value,reseller_store_bot_setup_fee:el('setStoreBotFee').value,reseller_store_bot_license_renewal_fee:el('setStoreBotLicenseFee').value,reseller_master_bot_setup_fee:el('setMasterBotFee').value,reseller_master_bot_license_renewal_fee:el('setMasterBotLicenseFee').value,master_min_markup_toman:el('setMasterMarkupFee').value,central_recharge_bonus_percent:el('setCentralBonus').value,central_trial_enabled:el('setCentralTrialEnabled').checked,central_trial_data_limit_bytes:Number(el('setCentralTrialMb').value||1024)*1048576,central_trial_duration_hours:el('setCentralTrialHours').value,min_recharge:el('setMinRecharge').value,support_username:el('setSupport').value,app_url:el('setAppUrl').value,admin_ids:el('setAdminIds').value,usage_sync_enabled:el('setUsageSync').checked,payment_poll_enabled:el('setPaymentPoll').checked,auto_delete_pending_invoices:el('setAutoDeletePending').checked,pending_invoice_ttl_hours:el('setPendingTtl').value,auto_update:true,bot_token:el('setBotToken').value,telegram_webhook_secret:el('setWebhookSecret').value,app_encryption_key:el('setEncryptionKey').value,auth_max_age_seconds:el('setAuthAge').value,allow_dev_auth:el('setDevAuth').checked,dev_telegram_id:el('setDevTelegramId').value,blupal_base_url:el('setBlupalBase').value,blupal_api_key:el('setBlupalApiKey').value,blupal_card_number:el('setBlupalCard').value,pasarguard_panel_url:el('setPgUrl').value,pasarguard_admin_username:el('setPgUsername').value,pasarguard_admin_password:el('setPgPassword').value,pasarguard_access_token:el('setPgToken').value,pasarguard_sales_role_id:el('setPgSalesRoleId').value,pasarguard_sales_role_name:el('setPgSalesRoleName').value,pasarguard_master_role_id:el('setPgMasterRoleId').value,pasarguard_master_role_name:el('setPgMasterRoleName').value,pasarguard_reseller_role_id:el('setPgSalesRoleId').value,pasarguard_reseller_role_name:el('setPgSalesRoleName').value,pasarguard_admin_data_limit_bytes:el('setPgDataLimit').value,pasarguard_sub_domain:el('setPgSubDomain').value,pasarguard_support_url:el('setPgSupportUrl').value,pasarguard_set_telegram_id:true,github_repo:el('setGithubRepo').value,github_branch:el('setGithubBranch').value,github_worker_file:el('setGithubWorkerFile').value,github_version_file:el('setGithubVersionFile').value,github_token:el('setGithubToken').value,cf_account_id:el('setCfAccount').value,cf_worker_name:el('setCfWorker').value,cf_api_token:el('setCfToken').value,python_helper_auto_provision:true,python_helper_worker_name:el('setPythonWorker').value};await api('/api/admin/settings',{method:'POST',body:JSON.stringify(body)});['setBotToken','setWebhookSecret','setEncryptionKey','setBlupalApiKey','setPgPassword','setPgToken','setGithubToken','setCfToken'].forEach(function(k){el(k).value=''});toast('همه تنظیمات ذخیره شد');if(el('saveStatus')){el('saveStatus').textContent='تنظیمات ذخیره شد.';el('saveStatus').style.color='var(--ok)'}await load()}catch(err){toast(err.message)}};
   el('showWebhookBtn').onclick=async function(){try{var d=await api('/api/admin/payments/blupal/webhook-url');el('webhookBox').style.display='block';el('webhookBox').innerHTML='<b>Webhook بلوپال</b><div class="credential-row"><span class="credential-value" style="word-break:break-all">'+esc(d.webhook_url)+'</span><button class="copy-mini" data-copy="'+esc(d.webhook_url)+'">کپی</button></div><b style="display:block;margin-top:14px">صفحه بازگشت بلوپال</b><div class="credential-row"><span class="credential-value" style="word-break:break-all">'+esc(d.return_url||d.callback_url)+'</span><button class="copy-mini" data-copy="'+esc(d.return_url||d.callback_url)+'">کپی</button></div><div class="muted" style="margin-top:8px">این آدرس را در بخش Return URL یا Callback URL تنظیمات API بلوپال ثبت کنید.</div>';bindCopyButtons(el('webhookBox'))}catch(e){toast(e.message)}};
@@ -9703,7 +10068,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_EDGE_VERSION='3.1.5';
+const BLUEPANEL_EDGE_VERSION='3.1.6';
 function bluePanelEdgeJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function bluePanelEdgeInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
 function bluePanelEdgeRuntimeBinding(env,name){const value=env?.[name];return{name,exact_key_present:Object.prototype.hasOwnProperty.call(env||{},name),value_present:value!==undefined&&value!==null,fetch_callable:Boolean(value&&typeof value.fetch==='function'),constructor_name:value?.constructor?.name||''}}
@@ -9728,6 +10093,7 @@ export default {
   if(['/', '/app','/miniapp'].includes(path)&&request.method==='GET')return new Response(MINI_APP_HTML.replaceAll('__APP_VERSION__',APP_VERSION).replaceAll('__CONTROL_MODE__','false'),{headers:bluePanelStaticHeaders()});
   const wh=path.match(/^\/sales-bot\/([^/]+)\/webhook$/);if(wh&&request.method==='POST')return resellerSalesWebhook(request,runtime,decodeURIComponent(wh[1]),ctx);
   const pwh=path.match(/^\/sales-payments\/([^/]+)\/blupal\/webhook$/);if(pwh&&request.method==='POST')return resellerBlupalWebhook(request,runtime,ctx,decodeURIComponent(pwh[1]));
+  const ccback=path.match(/^\/sales-payments\/([^/]+)\/cubepay\/callback$/);if(ccback&&['GET','POST'].includes(request.method))return resellerCubepayCallback(request,runtime,decodeURIComponent(ccback[1]));
   const pcback=path.match(/^\/sales-payments\/([^/]+)\/plisio\/callback$/);if(pcback&&request.method==='POST')return resellerPlisioCallback(request,runtime,decodeURIComponent(pcback[1]));
   const pcret=path.match(/^\/sales-payments\/([^/]+)\/plisio\/return$/);if(pcret&&request.method==='GET'){await ensureDb(runtime);const bot=await getResellerBotById(runtime,decodeURIComponent(pcret[1]));if(!bot)return new Response('Not found',{status:404});return new Response(resellerPlisioReturnPage(bot,request.headers.get('x-bluepanel-public-origin')||url.origin,url),{headers:bluePanelStaticHeaders()});}
   const pret=path.match(/^\/sales-payments\/([^/]+)\/return$/);if(pret&&request.method==='GET'){await ensureDb(runtime);const bot=await getResellerBotById(runtime,decodeURIComponent(pret[1]));if(!bot)return new Response('Not found',{status:404});return new Response(resellerBlupalReturnPage(bot,request.headers.get('x-bluepanel-public-origin')||url.origin),{headers:bluePanelStaticHeaders()});}

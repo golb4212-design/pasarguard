@@ -1,6 +1,6 @@
 {
-  "version": "3.1.5",
-  "release_id": "3.1.5-20260715-plisio-invoice-fast-path",
+  "version": "3.1.6",
+  "release_id": "3.1.6-20260715-cubepay-plisio-dual-gateway",
   "architecture": "fully-split-three-worker",
   "files": {
     "core": "core/worker.js",
@@ -8,13 +8,13 @@
     "processor": "processor/worker.js"
   },
   "sha256": {
-    "core": "f71b50ad31c520d3ecbb6297ba851c07985280dacf538f68008abb67075bcfcf",
-    "edge": "7032f7eb195f669ee80203fe2450c7db9453db14c3d878404a805ff5cddbf412",
-    "processor": "47c8f37bb62a4563b1ac4a22c7c4c3a308d49a6d4d0c9273d93fee8ae89dccfc"
+    "core": "a7d8adb5bd81b19b347185993d24b191b832a8b13aaf6bae861b2c5e933bc81c",
+    "edge": "0ba58c2d18341a4c849355fb9fe7abb8dd5c6cb998ff50dece9ab44010cbe02a",
+    "processor": "9d4162e4adf9c7b077175b2355fef06029d1049243e686f0b3d19a8d108c6d8f"
   },
   "roles": {
-    "core": "central bot, finance, licenses, PasarGuard integration, Plisio invoice fast path and D1 authority",
-    "edge": "web panels, reseller bots, customer miniapps and fast reseller Plisio invoice creation",
+    "core": "central bot, central wallet, PasarGuard integration, Plisio, CubePay callback verification and D1 authority",
+    "edge": "web panels, reseller bots, customer miniapps, reseller Plisio and reseller CubePay payments",
     "processor": "report retries, topic repair, daily reports, backups and background jobs"
   },
   "bindings": {
@@ -35,20 +35,25 @@
     ]
   },
   "features": [
-    "use a valid cached USD-to-toman rate immediately while refreshing an old rate in the background",
-    "fall back to the configured manual rate without blocking invoice creation on the FX provider",
-    "cache decrypted central and reseller Plisio secrets for a short period inside each Worker isolate",
-    "move non-critical Plisio status writes, audits and reseller sales events behind waitUntil",
-    "avoid invalidating the complete central settings cache after every Plisio invoice status heartbeat",
-    "remove an extra settings lookup from Telegram reseller invoice creation",
-    "add a bounded timeout for Plisio API calls and retain idempotent return_existing behavior",
-    "preserve callback verification, one-time wallet crediting, report topics and PasarGuard 5.1 support",
+    "add CubePay card-to-card payment beside Plisio for the central bot and central wallet",
+    "add independent CubePay configuration and wallet recharge for every reseller bot",
+    "store CubePay API tokens encrypted and delete Telegram messages containing secrets after saving",
+    "create invoices with Bearer authentication and convert toman amounts to rial before sending",
+    "preserve and display CubePay exact randomized payable amount returned by pay_amount/pay_amount_toman",
+    "treat CubePay callbacks only as notifications and call verify-payment before crediting a wallet",
+    "enforce order and amount matching and one-time wallet crediting for central and reseller payments",
+    "recover safely from CubePay HTTP 409 already-verified responses through local idempotency guards",
+    "use a separate reseller_cubepay_configs table to avoid the reseller_bots column limit",
+    "resolve the public HTTPS callback origin correctly when API requests are forwarded between Workers",
+    "keep Plisio, automatic USD-to-toman rates, report topics and PasarGuard 5.1 compatibility",
     "README files are excluded"
   ],
   "validation": {
     "javascript_syntax": "passed for core, edge and processor",
-    "critical_invoice_storage": "static assertion: local invoice is still stored before returning the payment link",
-    "fx_safety": "cached rate is used only inside max-stale window; otherwise manual fallback or synchronous refresh is required",
-    "live_plisio_latency": "not run; no live Plisio secret was supplied"
+    "sqlite_schema": "SCHEMA_SQL executed successfully in SQLite; CubePay tables and invoice columns verified",
+    "invoice_storage": "central and reseller CubePay INSERT statements executed in a schema smoke test",
+    "idempotency": "central credit SQL replay test credited the wallet once and created one ledger record",
+    "callback_security": "static assertion: callback evidence is stored, then verify-payment is required before credit",
+    "live_cubepay_payment": "not run; no live CubePay merchant API token was supplied"
   }
 }
