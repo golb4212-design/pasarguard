@@ -1,11 +1,11 @@
 /* BLUEPANEL_PROCESSOR_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.2.14
+ * Version: 3.3.0
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = "3.2.14";
+const APP_VERSION = "3.3.0";
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
@@ -19,7 +19,10 @@ const RESELLER_BACKUP_FIELDS = Object.freeze([
   "sales_automation_enabled","abandoned_reminder_minutes","winback_days","loyalty_enabled","loyalty_profile",
   "fraud_protection_enabled","order_cooldown_seconds","max_pending_orders","daily_order_limit",
   "daily_wallet_charge_limit_toman","duplicate_receipt_protection","auto_block_risk_score",
-  "payment_card_enabled","payment_wallet_enabled","payment_method_order","payment_default_method"
+  "payment_card_enabled","payment_wallet_enabled","payment_method_order","payment_default_method",
+  "auto_renew_enabled","smart_recommendations_enabled","upsell_enabled","favorite_plan_enabled","gift_service_enabled",
+  "service_health_enabled","auto_failover_enabled","guarantee_enabled","low_balance_alert_enabled",
+  "low_balance_threshold_toman","low_balance_recharge_amount_toman","reseller_tier","reseller_tier_discount_percent"
 ]);
 
 
@@ -1167,9 +1170,9 @@ async function refreshSalesCustomerLoyalty(env, bot, customerId, options = {}) {
   const next = salesLoyaltyLevelForSpend(bot, spend);
   const previous = String(customer.loyalty_level || "bronze");
   await env.PASARGUARD_DB.prepare(`
-    UPDATE sales_customers SET lifetime_spend_toman=?,loyalty_level=?,loyalty_discount_percent=?,last_purchase_at=?,updated_at=?
+    UPDATE sales_customers SET lifetime_spend_toman=?,loyalty_points=?,loyalty_level=?,loyalty_discount_percent=?,last_purchase_at=?,updated_at=?
     WHERE id=? AND bot_id=?
-  `).bind(spend, next.level, next.discount, stats?.last_purchase || null, nowIso(), customer.id, bot.id).run();
+  `).bind(spend, Math.floor(spend / 10000), next.level, next.discount, stats?.last_purchase || null, nowIso(), customer.id, bot.id).run();
   if (previous !== next.level && next.level !== "bronze" && options.notify !== false) {
     await createSalesNotification(env, bot, customer, null, "loyalty", "ارتقای سطح باشگاه مشتریان",
       "سطح شما به " + salesLoyaltyLabel(next.level) + " ارتقا یافت و از " + next.discount + "٪ تخفیف خودکار بهره‌مند شدید.",
@@ -1399,7 +1402,7 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
       created = await agencyPasarguardRequest(env, agency, "PUT", "/api/user/" + encodeURIComponent(username), payload);
       subscriptionUrl = cleanText(created.subscription_url || current.subscription_url || created?.data?.subscription_url, 2000);
     } else {
-      username = normalizeUsername("ord_" + String(order.id).replace(/[^a-zA-Z0-9]/g, "").slice(-24));
+      username = order.remote_username ? normalizeUsername(order.remote_username) : normalizeUsername("ord_" + String(order.id).replace(/[^a-zA-Z0-9]/g, "").slice(-24));
       const expiresAt = Number(order.duration_days) > 0 ? new Date(Date.now() + Number(order.duration_days) * 86400000).toISOString() : 0;
       const payload = {
         username,
@@ -1969,9 +1972,238 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_PROCESSOR_VERSION='3.2.14';
+const BLUEPANEL_PROCESSOR_VERSION='3.3.0';
 let processorSchemaPromise=null;
 function processorJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
+
+async function recordSystemError(env, scope, botId, errorCode, message, context = {}) {
+  const ts = nowIso();
+  const normalizedBot = cleanText(botId || "", 120);
+  const code = cleanText(errorCode || "UNKNOWN_ERROR", 120);
+  const text = cleanText(message || "خطای نامشخص", 1500);
+  try {
+    await env.PASARGUARD_DB.prepare(`
+      INSERT INTO system_error_center(id,scope,bot_id,error_code,message,context_json,occurrence_count,status,first_seen_at,last_seen_at)
+      VALUES(?,?,?,?,?,?,1,'open',?,?)
+      ON CONFLICT(scope,bot_id,error_code,status) DO UPDATE SET
+        message=excluded.message,context_json=excluded.context_json,
+        occurrence_count=system_error_center.occurrence_count+1,last_seen_at=excluded.last_seen_at
+    `).bind(id("err"), cleanText(scope,80), normalizedBot, code, text, JSON.stringify(context || {}), ts, ts).run();
+  } catch (_) {}
+}
+
+function resellerTierForRevenue(revenue) {
+  const amount = Math.max(0, Number(revenue || 0));
+  if (amount >= 15000000) return { tier: "vip", discount: 8 };
+  if (amount >= 5000000) return { tier: "gold", discount: 5 };
+  if (amount >= 1000000) return { tier: "silver", discount: 2 };
+  return { tier: "bronze", discount: 0 };
+}
+
+function resellerTierLabel(tier) {
+  return ({ bronze: "برنزی", silver: "نقره‌ای", gold: "طلایی", vip: "VIP" })[String(tier || "bronze")] || "برنزی";
+}
+
+async function processResellerTiers(env, limit = 100) {
+  const rows = await env.PASARGUARD_DB.prepare(`
+    SELECT rb.id,rb.user_id,rb.reseller_tier,rb.bot_token_enc,rb.brand_name,
+      COALESCE((SELECT SUM(o.amount_toman) FROM sales_orders o
+        WHERE o.bot_id=rb.id AND o.status='delivered' AND o.updated_at>=?),0) AS revenue
+    FROM reseller_bots rb WHERE rb.status='active' ORDER BY rb.updated_at ASC LIMIT ?
+  `).bind(new Date(Date.now()-90*86400000).toISOString(), Math.max(1,Math.min(300,Number(limit||100)))).all();
+  let checked=0,changed=0,failed=0;
+  for (const row of rows.results || []) {
+    checked++;
+    try {
+      const next=resellerTierForRevenue(row.revenue), previous=String(row.reseller_tier||"bronze");
+      await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET reseller_tier=?,reseller_tier_discount_percent=?,updated_at=? WHERE id=?")
+        .bind(next.tier,next.discount,nowIso(),row.id).run();
+      if (previous!==next.tier) {
+        changed++;
+        await env.PASARGUARD_DB.prepare("INSERT INTO reseller_tier_history(id,bot_id,previous_tier,new_tier,revenue_toman,created_at) VALUES(?,?,?,?,?,?)")
+          .bind(id("tier"),row.id,previous,next.tier,Math.max(0,Number(row.revenue||0)),nowIso()).run();
+        try {
+          const bot=await getResellerBotById(env,row.id);
+          await resellerTelegramApi(env,bot,"sendMessage",{chat_id:bot.owner_telegram_id,text:"🏆 <b>سطح نمایندگی شما ارتقا یافت</b>\nسطح جدید: <b>"+botEscape(resellerTierLabel(next.tier))+"</b>\nفروش ۹۰ روزه: <b>"+botMoney(row.revenue)+" تومان</b>\nمزیت سطح: <b>"+next.discount+"٪ تخفیف</b>",parse_mode:"HTML"});
+        } catch (_) {}
+      }
+    } catch (error) { failed++; await recordSystemError(env,"reseller_tier",row.id,"TIER_UPDATE_FAILED",error.message,{revenue:row.revenue}); }
+  }
+  return {checked,changed,failed};
+}
+
+async function processRepresentativeLowBalance(env, limit = 60) {
+  const rows=await env.PASARGUARD_DB.prepare(`
+    SELECT rb.id AS bot_id,rb.user_id,rb.brand_name,rb.low_balance_threshold_toman,rb.low_balance_recharge_amount_toman,
+           u.telegram_id,u.wallet_balance
+    FROM reseller_bots rb JOIN users u ON u.id=rb.user_id
+    WHERE rb.status='active' AND COALESCE(rb.low_balance_alert_enabled,1)=1
+      AND u.wallet_balance<=COALESCE(rb.low_balance_threshold_toman,200000)
+    ORDER BY u.wallet_balance ASC LIMIT ?
+  `).bind(Math.max(1,Math.min(200,Number(limit||60)))).all();
+  let checked=0,notified=0,failed=0;
+  const day=nowIso().slice(0,10);
+  for(const row of rows.results||[]){
+    checked++;
+    const dedupe="low-balance:"+row.bot_id+":"+day;
+    try{
+      const claim=await env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO auto_recharge_alerts(
+        id,user_id,bot_id,wallet_balance,threshold_toman,recommended_amount_toman,status,dedupe_key,created_at,updated_at
+      ) VALUES(?,?,?,?,?,?,'notified',?,?,?)`).bind(id("recharge"),row.user_id,row.bot_id,Number(row.wallet_balance||0),Number(row.low_balance_threshold_toman||200000),Number(row.low_balance_recharge_amount_toman||500000),dedupe,nowIso(),nowIso()).run();
+      if(!Number(claim?.meta?.changes||0))continue;
+      await telegramApi(env,"sendMessage",{chat_id:row.telegram_id,text:"⚠️ <b>موجودی نمایندگی رو به اتمام است</b>\nنمایندگی: <b>"+botEscape(row.brand_name||row.bot_id)+"</b>\nموجودی فعلی: <b>"+botMoney(row.wallet_balance)+" تومان</b>\nمبلغ پیشنهادی شارژ: <b>"+botMoney(row.low_balance_recharge_amount_toman||500000)+" تومان</b>",parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:"💳 شارژ کیف پول",callback_data:"bot:wallet"}]]}});
+      notified++;
+    }catch(error){failed++;await recordSystemError(env,"low_balance",row.bot_id,"LOW_BALANCE_ALERT_FAILED",error.message,{userId:row.user_id});}
+  }
+  return {checked,notified,failed};
+}
+
+async function processAutoRenewals(env, limit = 30) {
+  const dueAt=new Date(Date.now()+7*86400000).toISOString();
+  const rows=await env.PASARGUARD_DB.prepare(`
+    SELECT pref.*,o.remote_expire,o.remote_status,o.id AS service_order_id,o.remote_username AS service_username,
+           c.wallet_balance,c.telegram_id,c.discount_percent,c.loyalty_discount_percent,
+           rb.user_id AS owner_user_id,rb.auto_renew_enabled AS bot_auto_renew_enabled
+    FROM sales_service_preferences pref
+    JOIN sales_orders o ON o.id=pref.root_order_id AND o.status='delivered'
+    JOIN sales_customers c ON c.id=pref.customer_id
+    JOIN reseller_bots rb ON rb.id=pref.bot_id
+    WHERE pref.auto_renew_enabled=1 AND COALESCE(rb.auto_renew_enabled,1)=1
+      AND o.remote_expire IS NOT NULL AND o.remote_expire<>'' AND o.remote_expire<=?
+      AND o.remote_status NOT IN ('disabled','deleted')
+    ORDER BY o.remote_expire ASC LIMIT ?
+  `).bind(dueAt,Math.max(1,Math.min(100,Number(limit||30)))).all();
+  let checked=0,renewed=0,insufficient=0,failed=0;
+  for(const row of rows.results||[]){
+    checked++;
+    const expire=String(row.remote_expire||"");
+    try{
+      let plan=null;
+      if(row.renewal_plan_id)plan=await env.PASARGUARD_DB.prepare("SELECT * FROM sales_plans WHERE id=? AND bot_id=? AND status='active' AND plan_type='renew'").bind(row.renewal_plan_id,row.bot_id).first();
+      if(!plan)plan=await env.PASARGUARD_DB.prepare("SELECT * FROM sales_plans WHERE bot_id=? AND status='active' AND plan_type='renew' ORDER BY sort_order,price_toman,duration_days LIMIT 1").bind(row.bot_id).first();
+      if(!plan)continue;
+      const daysBefore=Math.max(0,Math.min(30,Number(row.renew_days_before||2)));
+      const expireMs=Date.parse(expire);
+      if(!Number.isFinite(expireMs)||expireMs-Date.now()>daysBefore*86400000)continue;
+      const claim=await env.PASARGUARD_DB.prepare(`UPDATE sales_service_preferences SET last_auto_renew_expire=?,last_auto_renew_at=?,updated_at=?
+        WHERE bot_id=? AND customer_id=? AND remote_username=? AND COALESCE(last_auto_renew_expire,'')<>?`)
+        .bind(expire,nowIso(),nowIso(),row.bot_id,row.customer_id,row.remote_username,expire).run();
+      if(!Number(claim?.meta?.changes||0))continue;
+      const discount=Math.max(0,Math.min(95,Number(row.discount_percent||0),100));
+      const loyalty=Math.max(0,Math.min(95,Number(row.loyalty_discount_percent||0)));
+      const percent=Math.max(discount,loyalty);
+      const original=Math.max(0,Number(plan.price_toman||0));
+      const amount=Math.max(1000,Math.round(original*(100-percent)/100));
+      if(Number(row.wallet_balance||0)<amount){
+        insufficient++;
+        const bot=await getResellerBotById(env,row.bot_id);
+        await createSalesNotification(env,bot,{id:row.customer_id,telegram_id:row.telegram_id},row.service_order_id,"auto_renew_insufficient","تمدید خودکار انجام نشد","موجودی کیف پول برای تمدید خودکار سرویس "+row.remote_username+" کافی نیست. مبلغ لازم: "+botMoney(amount)+" تومان.","auto-renew-insufficient:"+row.bot_id+":"+row.remote_username+":"+expire,{sendBot:true});
+        await env.PASARGUARD_DB.prepare("UPDATE sales_service_preferences SET last_auto_renew_expire=NULL,updated_at=? WHERE bot_id=? AND customer_id=? AND remote_username=?").bind(nowIso(),row.bot_id,row.customer_id,row.remote_username).run();
+        continue;
+      }
+      const orderId=id("ord");
+      const ts=nowIso();
+      await env.PASARGUARD_DB.prepare(`INSERT INTO sales_orders(
+        id,bot_id,plan_id,customer_id,amount_toman,original_amount_toman,discount_toman,status,remote_username,
+        order_type,target_order_id,payment_method,origin,created_at,updated_at
+      ) VALUES(?,?,?,?,?,?,?,'pending_review',?,'renewal',?,'wallet','auto_renew',?,?)`)
+        .bind(orderId,row.bot_id,plan.id,row.customer_id,amount,original,Math.max(0,original-amount),row.remote_username,row.service_order_id,ts,ts).run();
+      await adjustSalesCustomerBalance(env,row.bot_id,row.customer_id,-amount,"auto_renew","sales_order",orderId,"تمدید خودکار سرویس "+row.remote_username);
+      try{
+        await provisionSalesOrder(env,{id:row.owner_user_id},orderId);
+        renewed++;
+        await env.PASARGUARD_DB.prepare("UPDATE sales_service_preferences SET renewal_plan_id=?,last_auto_renew_at=?,updated_at=? WHERE bot_id=? AND customer_id=? AND remote_username=?")
+          .bind(plan.id,nowIso(),nowIso(),row.bot_id,row.customer_id,row.remote_username).run();
+      }catch(error){
+        try{await adjustSalesCustomerBalance(env,row.bot_id,row.customer_id,amount,"refund","sales_order",orderId,"بازگشت وجه تمدید خودکار ناموفق");}catch(_){}
+        await env.PASARGUARD_DB.prepare("UPDATE sales_orders SET status='cancelled',error_message=?,updated_at=? WHERE id=?").bind(cleanText(error.message,800),nowIso(),orderId).run();
+        await env.PASARGUARD_DB.prepare("UPDATE sales_service_preferences SET last_auto_renew_expire=NULL,updated_at=? WHERE bot_id=? AND customer_id=? AND remote_username=?").bind(nowIso(),row.bot_id,row.customer_id,row.remote_username).run();
+        throw error;
+      }
+    }catch(error){failed++;await recordSystemError(env,"auto_renew",row.bot_id,"AUTO_RENEW_FAILED",error.message,{username:row.remote_username,customerId:row.customer_id});}
+  }
+  return {checked,renewed,insufficient,failed};
+}
+
+function serviceHealthScore(remote, latencyMs) {
+  const status=String(remote?.status||"active").toLowerCase();
+  const expire=salesRemoteExpireValue(remote?.expire);
+  if(["disabled","expired","limited"].includes(status))return {status,score:25};
+  if(expire&&Date.parse(expire)<Date.now())return {status:"expired",score:20};
+  if(latencyMs>8000)return {status:"slow",score:60};
+  if(latencyMs>3500)return {status:"degraded",score:75};
+  return {status:"healthy",score:95};
+}
+
+async function tryServiceFailover(env, row, consecutiveFailures) {
+  if(Number(row.auto_failover_enabled||0)!==1||consecutiveFailures<3)return {queued:false};
+  const target=await env.PASARGUARD_DB.prepare(`SELECT * FROM sales_locations WHERE bot_id=? AND status='active' AND id<>COALESCE(?, '')
+    AND group_ids_json IS NOT NULL AND group_ids_json<>'[]' ORDER BY sort_order,created_at LIMIT 1`).bind(row.bot_id,row.from_location_id||"").first();
+  if(!target)return {queued:false,reason:"no_target"};
+  const jobId=id("failover"),ts=nowIso();
+  await env.PASARGUARD_DB.prepare("DELETE FROM sales_failover_jobs WHERE bot_id=? AND remote_username=? AND status IN ('failed','completed')").bind(row.bot_id,row.remote_username).run();
+  const claim=await env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO sales_failover_jobs(
+    id,bot_id,customer_id,root_order_id,remote_username,from_location_id,to_location_id,status,attempts,created_at,updated_at
+  ) VALUES(?,?,?,?,?,?,?,'pending',0,?,?)`).bind(jobId,row.bot_id,row.customer_id,row.root_order_id,row.remote_username,row.from_location_id||null,target.id,ts,ts).run();
+  if(!Number(claim?.meta?.changes||0))return {queued:false,reason:"duplicate"};
+  try{
+    const groups=salesGroupIds(target);
+    if(!groups.length)throw new Error("لوکیشن جایگزین گروه معتبر ندارد");
+    await agencyPasarguardRequest(env,{id:row.agency_id,panel_username:row.panel_username,panel_password_enc:row.panel_password_enc},"PUT","/api/user/"+encodeURIComponent(row.remote_username),{group_ids:groups,note:"BluePanel automatic failover "+jobId});
+    await env.PASARGUARD_DB.prepare("UPDATE sales_failover_jobs SET status='completed',attempts=1,finished_at=?,updated_at=? WHERE id=?").bind(nowIso(),nowIso(),jobId).run();
+    await queueReportEvent(env,row.bot_id,"services","انتقال خودکار سرویس انجام شد","سرویس: <code>"+botEscape(row.remote_username)+"</code>\nلوکیشن جدید: <b>"+botEscape(target.title)+"</b>","failover:"+jobId);
+    return {queued:true,completed:true,target:target.id};
+  }catch(error){
+    await env.PASARGUARD_DB.prepare("UPDATE sales_failover_jobs SET status='failed',attempts=1,last_error=?,finished_at=?,updated_at=? WHERE id=?").bind(cleanText(error.message,800),nowIso(),nowIso(),jobId).run();
+    await recordSystemError(env,"service_failover",row.bot_id,"FAILOVER_FAILED",error.message,{username:row.remote_username,jobId});
+    return {queued:true,completed:false,error:error.message};
+  }
+}
+
+async function processServiceHealthAndFailover(env, limit = 40) {
+  const cutoff=new Date(Date.now()-30*60000).toISOString();
+  const rows=await env.PASARGUARD_DB.prepare(`
+    SELECT pref.*,o.remote_expire,o.remote_status,p.location_id AS from_location_id,
+      rb.service_health_enabled,rb.auto_failover_enabled,rb.user_id AS owner_user_id,
+      a.id AS agency_id,a.panel_username,a.panel_password_enc
+    FROM sales_service_preferences pref
+    JOIN sales_orders o ON o.id=pref.root_order_id AND o.status='delivered'
+    JOIN sales_plans p ON p.id=o.plan_id
+    JOIN reseller_bots rb ON rb.id=pref.bot_id
+    LEFT JOIN reseller_bots parent_rb ON parent_rb.id=rb.parent_bot_id
+    JOIN agencies a ON a.id=CASE WHEN rb.parent_bot_id IS NOT NULL THEN parent_rb.agency_id ELSE rb.agency_id END
+    WHERE pref.health_monitor_enabled=1 AND COALESCE(rb.service_health_enabled,1)=1
+      AND COALESCE(pref.last_health_at,'')<?
+    ORDER BY COALESCE(pref.last_health_at,pref.created_at) ASC LIMIT ?
+  `).bind(cutoff,Math.max(1,Math.min(120,Number(limit||40)))).all();
+  let checked=0,healthy=0,failed=0,failovers=0;
+  for(const row of rows.results||[]){
+    checked++;
+    const started=Date.now();
+    let status="error",score=0,details={},consecutive=0;
+    try{
+      const remote=await agencyPasarguardRequest(env,{id:row.agency_id,panel_username:row.panel_username,panel_password_enc:row.panel_password_enc},"GET","/api/user/"+encodeURIComponent(row.remote_username));
+      const result=serviceHealthScore(remote,Date.now()-started);status=result.status;score=result.score;healthy++;
+      details={remote_status:remote?.status||"",expire:salesRemoteExpireValue(remote?.expire)};
+      consecutive=0;
+    }catch(error){
+      failed++;details={error:cleanText(error.message,800)};
+      const prev=await env.PASARGUARD_DB.prepare("SELECT consecutive_failures FROM sales_service_health WHERE bot_id=? AND remote_username=? ORDER BY checked_at DESC LIMIT 1").bind(row.bot_id,row.remote_username).first();
+      consecutive=Math.max(0,Number(prev?.consecutive_failures||0))+1;
+      await recordSystemError(env,"service_health",row.bot_id,"SERVICE_HEALTH_FAILED",error.message,{username:row.remote_username,consecutive});
+    }
+    await env.PASARGUARD_DB.prepare(`INSERT INTO sales_service_health(
+      id,bot_id,customer_id,root_order_id,remote_username,status,score,latency_ms,consecutive_failures,details_json,checked_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)`).bind(id("health"),row.bot_id,row.customer_id,row.root_order_id,row.remote_username,status,score,Date.now()-started,consecutive,JSON.stringify(details),nowIso()).run();
+    await env.PASARGUARD_DB.prepare("UPDATE sales_service_preferences SET last_health_status=?,last_health_at=?,updated_at=? WHERE bot_id=? AND customer_id=? AND remote_username=?")
+      .bind(status,nowIso(),nowIso(),row.bot_id,row.customer_id,row.remote_username).run();
+    if(status==="error"){
+      const f=await tryServiceFailover(env,row,consecutive);if(f.completed)failovers++;
+    }
+  }
+  return {checked,healthy,failed,failovers};
+}
+
 function processorInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
 async function ensureProcessorDb(env){if(!env.PROCESSOR_DB)throw new Error('PROCESSOR_DB متصل نیست');if(!processorSchemaPromise)processorSchemaPromise=(async()=>{for(const sql of [
  `CREATE TABLE IF NOT EXISTS processor_jobs (id TEXT PRIMARY KEY,method TEXT NOT NULL,path_query TEXT NOT NULL,headers_json TEXT NOT NULL DEFAULT '{}',body_text TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at TEXT NOT NULL,last_error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)`,
@@ -2000,10 +2232,15 @@ async function runProcessorBusinessJobs(runtime, options = {}){
   await processResellerAutoBackups(runtime,50);
   await processResellerScheduledHealth(runtime,30);
   await processResellerLicenseNotifications(runtime,100);
+  const autoRenew=await processAutoRenewals(runtime,30);
+  const lowBalance=await processRepresentativeLowBalance(runtime,60);
+  const tiers=await processResellerTiers(runtime,100);
+  const serviceHealth=await processServiceHealthAndFailover(runtime,40);
   await pollPendingSalesBlupalPayments(runtime,60);
   const outboxAfter=await processReportOutbox(runtime,200);
   const result={
     started_at:startedAt,duration_ms:Date.now()-started,topic_sync:topicSync,
+    auto_renew:autoRenew,low_balance:lowBalance,reseller_tiers:tiers,service_health:serviceHealth,
     outbox:{checked:Number(outboxBefore?.checked||0)+Number(outboxAfter?.checked||0),delivered:Number(outboxBefore?.delivered||0)+Number(outboxAfter?.delivered||0),failed:Number(outboxBefore?.failed||0)+Number(outboxAfter?.failed||0)}
   };
   const ts=nowIso();

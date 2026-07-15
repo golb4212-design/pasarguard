@@ -1,15 +1,30 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.2.14
+ * Version: 3.3.0
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.2.14";
+const APP_VERSION = "3.3.0";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.0": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🚀", text: "افزودن بسته کامل رشد، وفاداری، سلامت سرویس و اتوماسیون پیشرفته نمایندگان" },
+      { emoji: "🛡", text: "انتشار مرحله‌ای Edge-first، ثبت وضعیت Rollout و جلوگیری از جایگزینی Core در صورت ناسالم‌بودن Worker دوم" },
+      { emoji: "🧰", text: "مرکز خطا و تعمیر خودکار با ثبت نتیجه هر عملیات و گزارش Topic" },
+      { emoji: "📊", text: "سطح‌بندی نمایندگان، هشدار کمبود موجودی و داشبورد سود واقعی" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "♻️", text: "تمدید خودکار سرویس از کیف پول با تنظیم مستقل برای هر سرویس" },
+      { emoji: "🎯", text: "پیشنهاد هوشمند پلن، ارتقای پلن، پلن محبوب و خرید سریع" },
+      { emoji: "🎁", text: "هدیه‌دادن سرویس به کاربر دیگر، ضمانت پلن و باشگاه امتیازی" },
+      { emoji: "🩺", text: "پایش سلامت سرویس، ثبت اختلال و صف انتقال خودکار به لوکیشن جایگزین" },
+      { emoji: "📷", text: "اتصال سرویس قبلی با لینک یا تصویر QR" }
+    ])
+  }),
   "3.2.10": Object.freeze({
     central: Object.freeze([
       { emoji: "🔗", text: "پذیرش لینک‌های اشتراک HTTPS روی پورت‌های استاندارد جایگزین مانند 2053" }
@@ -99,7 +114,10 @@ const RESELLER_BACKUP_FIELDS = Object.freeze([
   "sales_automation_enabled","abandoned_reminder_minutes","winback_days","loyalty_enabled","loyalty_profile",
   "fraud_protection_enabled","order_cooldown_seconds","max_pending_orders","daily_order_limit",
   "daily_wallet_charge_limit_toman","duplicate_receipt_protection","auto_block_risk_score",
-  "payment_card_enabled","payment_wallet_enabled","payment_method_order","payment_default_method"
+  "payment_card_enabled","payment_wallet_enabled","payment_method_order","payment_default_method",
+  "auto_renew_enabled","smart_recommendations_enabled","upsell_enabled","favorite_plan_enabled","gift_service_enabled",
+  "service_health_enabled","auto_failover_enabled","guarantee_enabled","low_balance_alert_enabled",
+  "low_balance_threshold_toman","low_balance_recharge_amount_toman","reseller_tier","reseller_tier_discount_percent"
 ]);
 
 
@@ -189,6 +207,7 @@ let centralPlisioSecretCache = { source: "", value: "", at: 0 };
 let centralCubepayTokenCache = { source: "", value: "", at: 0 };
 
 const resellerTokenCache = new Map();
+const resellerTierDiscountCache = new Map();
 
 const joinStatusCache = new Map();
 
@@ -739,6 +758,19 @@ CREATE TABLE IF NOT EXISTS reseller_bots (
   payment_wallet_enabled INTEGER NOT NULL DEFAULT 1,
   payment_method_order TEXT NOT NULL DEFAULT 'card,blupal,wallet',
   payment_default_method TEXT NOT NULL DEFAULT 'card',
+  auto_renew_enabled INTEGER NOT NULL DEFAULT 1,
+  smart_recommendations_enabled INTEGER NOT NULL DEFAULT 1,
+  upsell_enabled INTEGER NOT NULL DEFAULT 1,
+  favorite_plan_enabled INTEGER NOT NULL DEFAULT 1,
+  gift_service_enabled INTEGER NOT NULL DEFAULT 1,
+  service_health_enabled INTEGER NOT NULL DEFAULT 1,
+  auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
+  guarantee_enabled INTEGER NOT NULL DEFAULT 1,
+  low_balance_alert_enabled INTEGER NOT NULL DEFAULT 1,
+  low_balance_threshold_toman INTEGER NOT NULL DEFAULT 200000,
+  low_balance_recharge_amount_toman INTEGER NOT NULL DEFAULT 500000,
+  reseller_tier TEXT NOT NULL DEFAULT 'bronze',
+  reseller_tier_discount_percent REAL NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY(user_id) REFERENCES users(id),
@@ -815,6 +847,9 @@ CREATE TABLE IF NOT EXISTS sales_plans (
   category_id TEXT,
   location_id TEXT,
   plan_type TEXT NOT NULL DEFAULT 'sale',
+  upsell_plan_id TEXT,
+  guarantee_hours INTEGER NOT NULL DEFAULT 24,
+  guarantee_policy TEXT NOT NULL DEFAULT 'تعویض لوکیشن یا بازگشت اعتبار در صورت عدم اتصال تاییدشده',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY(bot_id) REFERENCES reseller_bots(id)
@@ -848,6 +883,8 @@ CREATE TABLE IF NOT EXISTS sales_customers (
   risk_level TEXT NOT NULL DEFAULT 'normal',
   last_security_event_at TEXT,
   security_note TEXT,
+  loyalty_points INTEGER NOT NULL DEFAULT 0,
+  favorite_plan_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY(bot_id) REFERENCES reseller_bots(id),
@@ -890,6 +927,8 @@ CREATE TABLE IF NOT EXISTS sales_orders (
   cashback_toman INTEGER NOT NULL DEFAULT 0,
   qr_sent INTEGER NOT NULL DEFAULT 0,
   origin TEXT NOT NULL DEFAULT 'bot',
+  gift_sender_customer_id TEXT,
+  gift_message TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   reviewed_at TEXT,
@@ -1286,6 +1325,166 @@ CREATE TABLE IF NOT EXISTS sales_bot_events (
 );
 CREATE INDEX IF NOT EXISTS idx_sales_bot_events_bot ON sales_bot_events(bot_id,event_type,created_at DESC);
 
+CREATE TABLE IF NOT EXISTS sales_service_preferences (
+  bot_id TEXT NOT NULL,
+  customer_id TEXT NOT NULL,
+  root_order_id TEXT NOT NULL,
+  remote_username TEXT NOT NULL,
+  auto_renew_enabled INTEGER NOT NULL DEFAULT 0,
+  renewal_plan_id TEXT,
+  renew_days_before INTEGER NOT NULL DEFAULT 2,
+  health_monitor_enabled INTEGER NOT NULL DEFAULT 1,
+  last_auto_renew_expire TEXT,
+  last_auto_renew_at TEXT,
+  last_health_status TEXT,
+  last_health_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(bot_id,customer_id,remote_username),
+  FOREIGN KEY(bot_id) REFERENCES reseller_bots(id),
+  FOREIGN KEY(customer_id) REFERENCES sales_customers(id),
+  FOREIGN KEY(root_order_id) REFERENCES sales_orders(id)
+);
+CREATE INDEX IF NOT EXISTS idx_service_preferences_due ON sales_service_preferences(auto_renew_enabled,last_health_at,updated_at);
+
+CREATE TABLE IF NOT EXISTS sales_gifts (
+  id TEXT PRIMARY KEY,
+  bot_id TEXT NOT NULL,
+  sender_customer_id TEXT NOT NULL,
+  recipient_customer_id TEXT NOT NULL,
+  order_id TEXT NOT NULL UNIQUE,
+  plan_id TEXT NOT NULL,
+  gift_message TEXT,
+  status TEXT NOT NULL DEFAULT 'processing',
+  created_at TEXT NOT NULL,
+  delivered_at TEXT,
+  FOREIGN KEY(bot_id) REFERENCES reseller_bots(id),
+  FOREIGN KEY(sender_customer_id) REFERENCES sales_customers(id),
+  FOREIGN KEY(recipient_customer_id) REFERENCES sales_customers(id),
+  FOREIGN KEY(order_id) REFERENCES sales_orders(id)
+);
+CREATE INDEX IF NOT EXISTS idx_sales_gifts_sender ON sales_gifts(sender_customer_id,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sales_gifts_recipient ON sales_gifts(recipient_customer_id,created_at DESC);
+
+CREATE TABLE IF NOT EXISTS sales_service_health (
+  id TEXT PRIMARY KEY,
+  bot_id TEXT NOT NULL,
+  customer_id TEXT NOT NULL,
+  root_order_id TEXT NOT NULL,
+  remote_username TEXT NOT NULL,
+  status TEXT NOT NULL,
+  score INTEGER NOT NULL DEFAULT 0,
+  latency_ms INTEGER,
+  consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  details_json TEXT NOT NULL DEFAULT '{}',
+  checked_at TEXT NOT NULL,
+  FOREIGN KEY(bot_id) REFERENCES reseller_bots(id),
+  FOREIGN KEY(customer_id) REFERENCES sales_customers(id)
+);
+CREATE INDEX IF NOT EXISTS idx_sales_service_health_service ON sales_service_health(bot_id,remote_username,checked_at DESC);
+
+CREATE TABLE IF NOT EXISTS sales_failover_jobs (
+  id TEXT PRIMARY KEY,
+  bot_id TEXT NOT NULL,
+  customer_id TEXT NOT NULL,
+  root_order_id TEXT NOT NULL,
+  remote_username TEXT NOT NULL,
+  from_location_id TEXT,
+  to_location_id TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  finished_at TEXT,
+  UNIQUE(bot_id,remote_username,status)
+);
+CREATE INDEX IF NOT EXISTS idx_sales_failover_due ON sales_failover_jobs(status,updated_at);
+
+CREATE TABLE IF NOT EXISTS sales_guarantee_claims (
+  id TEXT PRIMARY KEY,
+  bot_id TEXT NOT NULL,
+  customer_id TEXT NOT NULL,
+  order_id TEXT NOT NULL,
+  remote_username TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT 'connection_problem',
+  status TEXT NOT NULL DEFAULT 'pending',
+  resolution TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(bot_id,order_id,status)
+);
+CREATE INDEX IF NOT EXISTS idx_guarantee_claims_bot ON sales_guarantee_claims(bot_id,status,created_at DESC);
+
+CREATE TABLE IF NOT EXISTS reseller_tier_history (
+  id TEXT PRIMARY KEY,
+  bot_id TEXT NOT NULL,
+  previous_tier TEXT,
+  new_tier TEXT NOT NULL,
+  revenue_toman INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reseller_tier_history_bot ON reseller_tier_history(bot_id,created_at DESC);
+
+CREATE TABLE IF NOT EXISTS auto_recharge_alerts (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  bot_id TEXT,
+  wallet_balance INTEGER NOT NULL DEFAULT 0,
+  threshold_toman INTEGER NOT NULL DEFAULT 0,
+  recommended_amount_toman INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'notified',
+  dedupe_key TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS system_error_center (
+  id TEXT PRIMARY KEY,
+  scope TEXT NOT NULL,
+  bot_id TEXT,
+  error_code TEXT NOT NULL,
+  message TEXT NOT NULL,
+  context_json TEXT NOT NULL DEFAULT '{}',
+  occurrence_count INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'open',
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  resolved_at TEXT,
+  UNIQUE(scope,bot_id,error_code,status)
+);
+CREATE INDEX IF NOT EXISTS idx_error_center_open ON system_error_center(status,last_seen_at DESC);
+
+CREATE TABLE IF NOT EXISTS repair_runs (
+  id TEXT PRIMARY KEY,
+  scope TEXT NOT NULL,
+  bot_id TEXT,
+  action TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'running',
+  result_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  finished_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS release_rollouts (
+  id TEXT PRIMARY KEY,
+  version TEXT NOT NULL,
+  release_id TEXT,
+  mode TEXT NOT NULL DEFAULT 'edge_first',
+  status TEXT NOT NULL DEFAULT 'pending',
+  edge_status TEXT,
+  processor_status TEXT,
+  core_status TEXT,
+  previous_core_version TEXT,
+  previous_edge_version TEXT,
+  previous_processor_version TEXT,
+  details_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_release_rollouts_version ON release_rollouts(version,created_at DESC);
+
 CREATE TABLE IF NOT EXISTS report_forums (
   scope_key TEXT PRIMARY KEY,
   scope_type TEXT NOT NULL,
@@ -1570,7 +1769,20 @@ async function ensureDbInternal(env) {
       ["payment_card_enabled", "INTEGER NOT NULL DEFAULT 1"],
       ["payment_wallet_enabled", "INTEGER NOT NULL DEFAULT 1"],
       ["payment_method_order", "TEXT NOT NULL DEFAULT 'card,blupal,wallet'"],
-      ["payment_default_method", "TEXT NOT NULL DEFAULT 'card'"]
+      ["payment_default_method", "TEXT NOT NULL DEFAULT 'card'"],
+      ["auto_renew_enabled", "INTEGER NOT NULL DEFAULT 1"],
+      ["smart_recommendations_enabled", "INTEGER NOT NULL DEFAULT 1"],
+      ["upsell_enabled", "INTEGER NOT NULL DEFAULT 1"],
+      ["favorite_plan_enabled", "INTEGER NOT NULL DEFAULT 1"],
+      ["gift_service_enabled", "INTEGER NOT NULL DEFAULT 1"],
+      ["service_health_enabled", "INTEGER NOT NULL DEFAULT 1"],
+      ["auto_failover_enabled", "INTEGER NOT NULL DEFAULT 0"],
+      ["guarantee_enabled", "INTEGER NOT NULL DEFAULT 1"],
+      ["low_balance_alert_enabled", "INTEGER NOT NULL DEFAULT 1"],
+      ["low_balance_threshold_toman", "INTEGER NOT NULL DEFAULT 200000"],
+      ["low_balance_recharge_amount_toman", "INTEGER NOT NULL DEFAULT 500000"],
+      ["reseller_tier", "TEXT NOT NULL DEFAULT 'bronze'"],
+      ["reseller_tier_discount_percent", "REAL NOT NULL DEFAULT 0"]
     ],
     reseller_usage_events: [
       ["parent_bot_id", "TEXT"],
@@ -1588,7 +1800,10 @@ async function ensureDbInternal(env) {
     sales_plans: [
       ["category_id", "TEXT"],
       ["location_id", "TEXT"],
-      ["plan_type", "TEXT NOT NULL DEFAULT 'sale'"]
+      ["plan_type", "TEXT NOT NULL DEFAULT 'sale'"],
+      ["upsell_plan_id", "TEXT"],
+      ["guarantee_hours", "INTEGER NOT NULL DEFAULT 24"],
+      ["guarantee_policy", "TEXT NOT NULL DEFAULT 'تعویض لوکیشن یا بازگشت اعتبار در صورت عدم اتصال تاییدشده'"]
     ],
     sales_customers: [
       ["wallet_balance", "INTEGER NOT NULL DEFAULT 0"],
@@ -1609,7 +1824,9 @@ async function ensureDbInternal(env) {
       ["risk_score", "INTEGER NOT NULL DEFAULT 0"],
       ["risk_level", "TEXT NOT NULL DEFAULT 'normal'"],
       ["last_security_event_at", "TEXT"],
-      ["security_note", "TEXT"]
+      ["security_note", "TEXT"],
+      ["loyalty_points", "INTEGER NOT NULL DEFAULT 0"],
+      ["favorite_plan_id", "TEXT"]
     ],
     sales_wallet_requests: [
       ["bonus_toman", "INTEGER NOT NULL DEFAULT 0"],
@@ -1641,7 +1858,9 @@ async function ensureDbInternal(env) {
       ["remote_expire", "TEXT"],
       ["remote_online_at", "TEXT"],
       ["remote_last_synced_at", "TEXT"],
-      ["receipt_unique_id", "TEXT"]
+      ["receipt_unique_id", "TEXT"],
+      ["gift_sender_customer_id", "TEXT"],
+      ["gift_message", "TEXT"]
     ]
   };
   for (const [table, columns] of Object.entries(requiredColumns)) {
@@ -3779,8 +3998,21 @@ async function createCentralTrial(request, env) {
   }
 }
 
+async function agencyTierDiscount(env, userId) {
+  const key=String(userId||"");
+  const cached=resellerTierDiscountCache.get(key);
+  if(cached&&Date.now()-cached.at<300000)return cached.value;
+  let value=0;
+  try{const tier=await env.PASARGUARD_DB.prepare("SELECT MAX(COALESCE(reseller_tier_discount_percent,0)) AS discount FROM reseller_bots WHERE user_id=? AND status='active'").bind(userId).first();value=Math.max(0,Math.min(30,Number(tier?.discount||0)));}catch(_){}
+  resellerTierDiscountCache.set(key,{value,at:Date.now()});
+  if(resellerTierDiscountCache.size>500)resellerTierDiscountCache.delete(resellerTierDiscountCache.keys().next().value);
+  return value;
+}
+
 async function billAgency(env, agency, currentUsageBytes, pricePerGb) {
   if (Number(agency.is_trial || 0) === 1) return enforceCentralTrialAgency(env, agency, currentUsageBytes);
+  const discount=await agencyTierDiscount(env,agency.user_id);
+  pricePerGb = Math.max(0, Math.round(Number(pricePerGb || 0) * (100 - discount) / 100));
   const oldUsage = Number(agency.last_billed_bytes || 0);
   let epoch = Number(agency.usage_epoch || 0);
   if (currentUsageBytes < oldUsage) {
@@ -7212,30 +7444,55 @@ async function deploySelfFromGithub(env, force = false, prechecked = null) {
 async function deployClusterFromGithub(env, force = false, prechecked = null) {
   const check = prechecked || await checkUpdate(env);
   const shouldSync = force || check.available || check.cluster_sync_required;
+  const settings = await getSettings(env);
+  const rolloutId = id("rollout"), ts = nowIso();
   let edge_update = { skipped: true, reason: "no_cluster_update_required" };
   let processor_update = { skipped: true, reason: "no_cluster_update_required" };
-
-  // Deploy the dependent workers before replacing Core. Updating Core first can end the
-  // current request while Edge is still old, leaving reseller bots on stale code.
-  if (shouldSync) {
-    try {
-      edge_update = await deployEdgeWorkerFromGithub(env, true, check.latest || APP_VERSION);
-    } catch (error) {
-      await setSettings(env, { edge_worker_last_error: cleanText(error?.message || error, 800) });
-      edge_update = { deployed: false, verified: false, error: error?.message || String(error) };
-    }
-    try {
-      processor_update = await deployProcessorWorkerFromGithub(env, true, check.latest || APP_VERSION);
-    } catch (error) {
-      await setSettings(env, { processor_worker_last_error: cleanText(error?.message || error, 800) });
-      processor_update = { deployed: false, error: error?.message || String(error) };
-    }
-  }
-
   let core = { ...check, deployed: false };
-  if (check.available || force) core = await deploySelfFromGithub(env, force, check);
-  const deployed = Boolean(core.deployed || edge_update?.deployed || processor_update?.deployed);
-  return { ...check, ...core, deployed, core_deployed: Boolean(core.deployed), edge_update, processor_update };
+  if (!shouldSync && !check.available && !force) return { ...check, deployed: false, edge_update, processor_update };
+
+  await env.PASARGUARD_DB.prepare(`INSERT INTO release_rollouts(
+    id,version,release_id,mode,status,edge_status,processor_status,core_status,
+    previous_core_version,previous_edge_version,previous_processor_version,details_json,created_at,updated_at
+  ) VALUES(?,?,?,'edge_first','running','pending','pending','pending',?,?,?,?,?,?)`)
+    .bind(rolloutId,check.latest||APP_VERSION,check.release_id||"",APP_VERSION,
+      settings.edge_worker_last_version||"",settings.processor_worker_last_version||"",JSON.stringify({force}),ts,ts).run();
+
+  try {
+    if (shouldSync) {
+      edge_update = await deployEdgeWorkerFromGithub(env, true, check.latest || APP_VERSION);
+      const edgeReady = edge_update?.verified === true || (edge_update?.skipped && edge_update?.reason === "up_to_date" && String(edge_update?.version||"") === String(check.latest||APP_VERSION));
+      await env.PASARGUARD_DB.prepare("UPDATE release_rollouts SET edge_status=?,details_json=?,updated_at=? WHERE id=?")
+        .bind(edgeReady?"verified":"failed",JSON.stringify({force,edge_update}),nowIso(),rolloutId).run();
+      if (!edgeReady) throw new Error("نسخه Edge پس از نصب تأیید نشد؛ نصب Core متوقف شد");
+
+      if (hasProcessorServiceBinding(env)) {
+        processor_update = await deployProcessorWorkerFromGithub(env, true, check.latest || APP_VERSION);
+        const processorReady = processor_update?.deployed === true || (processor_update?.skipped && processor_update?.reason === "up_to_date");
+        await env.PASARGUARD_DB.prepare("UPDATE release_rollouts SET processor_status=?,details_json=?,updated_at=? WHERE id=?")
+          .bind(processorReady?"deployed":"failed",JSON.stringify({force,edge_update,processor_update}),nowIso(),rolloutId).run();
+        if (!processorReady) throw new Error("نصب Processor کامل نشد؛ نصب Core متوقف شد");
+      } else {
+        processor_update={skipped:true,reason:"processor_service_binding_missing"};
+        await env.PASARGUARD_DB.prepare("UPDATE release_rollouts SET processor_status='skipped',updated_at=? WHERE id=?").bind(nowIso(),rolloutId).run();
+      }
+    }
+
+    if (check.available || force) core = await deploySelfFromGithub(env, force, check);
+    const deployed = Boolean(core.deployed || edge_update?.deployed || processor_update?.deployed);
+    await env.PASARGUARD_DB.prepare("UPDATE release_rollouts SET status='completed',core_status=?,details_json=?,finished_at=?,updated_at=? WHERE id=?")
+      .bind(core.deployed?"deployed":"unchanged",JSON.stringify({force,edge_update,processor_update,core:{deployed:core.deployed,version:check.latest}}),nowIso(),nowIso(),rolloutId).run();
+    return { ...check, ...core, deployed, rollout_id:rolloutId, rollout_status:"completed", core_deployed:Boolean(core.deployed), edge_update, processor_update };
+  } catch (error) {
+    await env.PASARGUARD_DB.prepare("UPDATE release_rollouts SET status='failed',core_status='blocked',details_json=?,finished_at=?,updated_at=? WHERE id=?")
+      .bind(JSON.stringify({force,edge_update,processor_update,error:cleanText(error.message,1000)}),nowIso(),nowIso(),rolloutId).run();
+    await setSettings(env,{auto_update_last_status:"failed_staged",auto_update_last_error:cleanText(error.message,800)});
+    try { await env.PASARGUARD_DB.prepare(`INSERT INTO system_error_center(id,scope,bot_id,error_code,message,context_json,occurrence_count,status,first_seen_at,last_seen_at)
+      VALUES(?,'release_rollout','','STAGED_DEPLOY_FAILED',?,?,1,'open',?,?)
+      ON CONFLICT(scope,bot_id,error_code,status) DO UPDATE SET message=excluded.message,context_json=excluded.context_json,occurrence_count=system_error_center.occurrence_count+1,last_seen_at=excluded.last_seen_at`)
+      .bind(id("err"),cleanText(error.message,1500),JSON.stringify({rolloutId,edge_update,processor_update}),nowIso(),nowIso()).run(); } catch (_) {}
+    throw error;
+  }
 }
 
 function autoUpdateConfigurationReady(settings) {
@@ -8995,9 +9252,9 @@ async function refreshSalesCustomerLoyalty(env, bot, customerId, options = {}) {
   const next = salesLoyaltyLevelForSpend(bot, spend);
   const previous = String(customer.loyalty_level || "bronze");
   await env.PASARGUARD_DB.prepare(`
-    UPDATE sales_customers SET lifetime_spend_toman=?,loyalty_level=?,loyalty_discount_percent=?,last_purchase_at=?,updated_at=?
+    UPDATE sales_customers SET lifetime_spend_toman=?,loyalty_points=?,loyalty_level=?,loyalty_discount_percent=?,last_purchase_at=?,updated_at=?
     WHERE id=? AND bot_id=?
-  `).bind(spend, next.level, next.discount, stats?.last_purchase || null, nowIso(), customer.id, bot.id).run();
+  `).bind(spend, Math.floor(spend / 10000), next.level, next.discount, stats?.last_purchase || null, nowIso(), customer.id, bot.id).run();
   if (previous !== next.level && next.level !== "bronze" && options.notify !== false) {
     await createSalesNotification(env, bot, customer, null, "loyalty", "ارتقای سطح باشگاه مشتریان",
       "سطح شما به " + salesLoyaltyLabel(next.level) + " ارتقا یافت و از " + next.discount + "٪ تخفیف خودکار بهره‌مند شدید.",
@@ -9058,7 +9315,7 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
       created = await agencyPasarguardRequest(env, agency, "PUT", "/api/user/" + encodeURIComponent(username), payload);
       subscriptionUrl = cleanText(created.subscription_url || current.subscription_url || created?.data?.subscription_url, 2000);
     } else {
-      username = normalizeUsername("ord_" + String(order.id).replace(/[^a-zA-Z0-9]/g, "").slice(-24));
+      username = order.remote_username ? normalizeUsername(order.remote_username) : normalizeUsername("ord_" + String(order.id).replace(/[^a-zA-Z0-9]/g, "").slice(-24));
       const expiresAt = Number(order.duration_days) > 0 ? new Date(Date.now() + Number(order.duration_days) * 86400000).toISOString() : 0;
       const payload = {
         username,
@@ -9327,6 +9584,43 @@ async function botAdminResellerOpsView(env, account) {
     "💠 پرداخت معلق: <b>"+botMoney(stats?.pending_payments)+"</b> · رسید فروش: <b>"+botMoney(stats?.pending_orders)+"</b>\n"+
     "⏱ آخرین Cron: <b>"+botEscape(cron?.value?botDate(cron.value):"ثبت نشده")+"</b>",
     reply_markup:{inline_keyboard:[[{text:"🩺 پایش سلامت همه",callback_data:"bot:admin:reseller_health_all"}],[{text:"🗄 پشتیبان‌گیری همه",callback_data:"bot:admin:reseller_backup_all"}],[{text:"🔄 بروزرسانی",callback_data:"bot:admin:reseller_ops"}],[{text:"⚙️ زیرساخت و نگهداری",callback_data:"bot:admin:group:system"}]]}};
+}
+
+
+async function botAdminErrorCenterView(env, account) {
+  if(!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+  const stats=await env.PASARGUARD_DB.prepare(`SELECT
+    (SELECT COUNT(*) FROM system_error_center WHERE status='open') AS open_errors,
+    (SELECT COALESCE(SUM(occurrence_count),0) FROM system_error_center WHERE status='open') AS occurrences,
+    (SELECT COUNT(*) FROM repair_runs WHERE status='running') AS running_repairs,
+    (SELECT COUNT(*) FROM release_rollouts WHERE status='failed') AS failed_rollouts`).first();
+  const errors=await env.PASARGUARD_DB.prepare("SELECT * FROM system_error_center WHERE status='open' ORDER BY last_seen_at DESC LIMIT 8").all();
+  const rollout=await env.PASARGUARD_DB.prepare("SELECT * FROM release_rollouts ORDER BY created_at DESC LIMIT 1").first();
+  const lines=(errors.results||[]).map((x,i)=>(i+1)+". 🔴 <b>"+botEscape(x.error_code)+"</b> · "+botEscape(x.scope)+
+    (x.bot_id?" · <code>"+botEscape(x.bot_id)+"</code>":"")+"\n   "+botEscape(cleanText(x.message,220))+"\n   تکرار: "+botMoney(x.occurrence_count)+" · "+botDate(x.last_seen_at)).join("\n\n")||"✅ خطای باز ثبت نشده است.";
+  const rolloutText=rollout?"\n\n<b>آخرین انتشار مرحله‌ای</b>\nنسخه: <code>"+botEscape(rollout.version)+"</code> · وضعیت: <b>"+botEscape(rollout.status)+"</b>\nEdge: "+botEscape(rollout.edge_status||"—")+" · Processor: "+botEscape(rollout.processor_status||"—")+" · Core: "+botEscape(rollout.core_status||"—"):"";
+  return {text:"🧯 <b>مرکز خطا و تعمیر خودکار</b>\n━━━━━━━━━━━━━━\n"+
+    "خطاهای باز: <b>"+botMoney(stats?.open_errors)+"</b> · مجموع تکرار: <b>"+botMoney(stats?.occurrences)+"</b>\n"+
+    "تعمیر در حال اجرا: <b>"+botMoney(stats?.running_repairs)+"</b> · انتشار ناموفق: <b>"+botMoney(stats?.failed_rollouts)+"</b>\n\n"+lines+rolloutText,
+    reply_markup:{inline_keyboard:[
+      [{text:"🧰 تعمیر همه اجزا",callback_data:"bot:admin:repair_all"}],
+      [{text:"✅ بستن خطاهای فعلی",callback_data:"bot:admin:errors:resolve"}],
+      [{text:"🔄 بروزرسانی",callback_data:"bot:admin:errors"},{text:"⚙️ مدیریت سامانه",callback_data:"bot:admin"}]
+    ]}};
+}
+
+async function runCentralRepairAll(env, account) {
+  const runId=id("repair"),ts=nowIso(),result={menus:false,health:false,backups:false,reports:false,processor:false};
+  await env.PASARGUARD_DB.prepare("INSERT INTO repair_runs(id,scope,action,status,result_json,created_at) VALUES(?,'central','repair_all','running','{}',?)").bind(runId,ts).run();
+  try{await syncAllResellerBotMenus(env,false);result.menus=true;}catch(_){}
+  try{await runAllResellerHealthChecks(env,100);result.health=true;}catch(_){}
+  try{await createAllResellerBackups(env,100);result.backups=true;}catch(_){}
+  try{await processReportOutboxOnCore(env,300);result.reports=true;}catch(_){}
+  try{const p=await triggerProcessorBusinessJobs(env,"central_repair_all");result.processor=p?.success!==false;}catch(_){}
+  const status=Object.values(result).filter(Boolean).length>=3?"completed":"partial";
+  await env.PASARGUARD_DB.prepare("UPDATE repair_runs SET status=?,result_json=?,finished_at=? WHERE id=?").bind(status,JSON.stringify(result),nowIso(),runId).run();
+  await audit(env,account.user.id,"central_repair_all",{runId,status,result});
+  return {runId,status,...result};
 }
 
 function parseAdminTelegramIds(raw) {
@@ -10022,7 +10316,8 @@ async function botAdminView(env, account) {
       [{ text: "📊 مصرف پنل نمایندگان", callback_data: "bot:admin:agency_usage" }, { text: "📡 همگام‌سازی مصرف", callback_data: "bot:admin:sync_usage" }],
       [{ text: "🔄 استعلام پرداخت‌ها", callback_data: "bot:admin:sync_payments" }],
       [{ text: "🧹 حذف فاکتورهای معلق", callback_data: "bot:admin:cleanup" }, { text: "📣 کانال آپدیت‌ها", callback_data: "bot:admin:release_channel" }],
-      [{ text: "🧭 سلامت نمایندگان", callback_data: "bot:admin:reseller_ops" }, { text: "⚙️ تنظیمات سامانه", callback_data: "bot:admin:settings" }],
+      [{ text: "🧭 سلامت نمایندگان", callback_data: "bot:admin:reseller_ops" }, { text: "🧯 مرکز خطاها", callback_data: "bot:admin:errors" }],
+      [{ text: "⚙️ تنظیمات سامانه", callback_data: "bot:admin:settings" }],
       [{ text: "📦 آپلود ZIP به GitHub", callback_data: "bot:admin:github_zip" }],
       [{ text: "🖥 داشبورد مدیریت وب", url: managementUrl }],
       [{ text: "🤖 ربات مرکزی", callback_data: "bot:admin:central_bot" }, { text: "🐍 Python Helper", callback_data: "bot:admin:python" }],
@@ -10112,9 +10407,10 @@ async function botAdminGroupView(env, account, group) {
     system: {
       title: "⚙️ زیرساخت و نگهداری",
       body: "ترمیم سرویس‌ها و تنظیمات نگهداری فنی سامانه.",
-      chart: ["🧭 پایداری نمایندگان", "🐍 Python Helper", "🛠 ربات مرکزی", "⚙️ تنظیمات مرکزی"],
+      chart: ["🧭 پایداری نمایندگان", "🧯 مرکز خطا و تعمیر", "🐍 Python Helper", "🛠 ربات مرکزی", "⚙️ تنظیمات مرکزی"],
       rows: [
         [{ text: "🧭 پایداری و پشتیبان نمایندگان", callback_data: "bot:admin:reseller_ops" }],
+        [{ text: "🧯 مرکز خطا و تعمیر خودکار", callback_data: "bot:admin:errors" }],
         [{ text: "🐍 ترمیم Python Helper", callback_data: "bot:admin:python" }],
         [{ text: "🤖 مدیریت ربات مرکزی", callback_data: "bot:admin:central_bot" }],
         [{ text: "⚙️ مرکز تنظیمات", callback_data: "bot:admin:settings" }]
@@ -10582,6 +10878,7 @@ async function botRenderView(env, account, view) {
   if (view === "admin_release_channel") return botReleaseChannelView(env, account);
   if (view === "admin_github_zip") return botGithubZipView(env, account);
   if (view === "admin_reseller_ops") return botAdminResellerOpsView(env, account);
+  if (view === "admin_errors") return botAdminErrorCenterView(env, account);
   return botHomeView(env, account);
 }
 
@@ -10932,7 +11229,7 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
     "bot:admin:central_bot": "admin_central_bot", "bot:admin:trial": "admin_trial", "bot:admin:agency_usage": "admin_agency_usage:0",
     "bot:admin:group:users": "admin_group_users", "bot:admin:group:finance": "admin_group_finance",
     "bot:admin:group:operations": "admin_group_operations", "bot:admin:group:communications": "admin_group_communications",
-    "bot:admin:group:system": "admin_group_system", "bot:admin:reseller_ops": "admin_reseller_ops",
+    "bot:admin:group:system": "admin_group_system", "bot:admin:reseller_ops": "admin_reseller_ops", "bot:admin:errors": "admin_errors",
     "bot:admin:join_channels": "admin_join_channels", "bot:admin:github_zip": "admin_github_zip"
   };
   if (simpleViews[data]) {
@@ -10982,6 +11279,17 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
       "✅ <b>اتصال GitHub برقرار است</b>\n\nمخزن: <code>" + botEscape(info.repository) + "</code>\nBranch: <code>" + botEscape(info.branch) + "</code>\nنوع مخزن: " + (info.private ? "خصوصی" : "عمومی") + "\nدسترسی نوشتن: " + (info.push_allowed ? "✅" : "⚠️ نامشخص"),
       [[{ text: "↩️ آپلود ZIP", callback_data: "bot:admin:github_zip" }]]
     );
+    return;
+  }
+  if (data === "bot:admin:errors:resolve") {
+    if(!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+    await env.PASARGUARD_DB.prepare("UPDATE system_error_center SET status='resolved',resolved_at=? WHERE status='open'").bind(nowIso()).run();
+    return botSendOrEdit(env,{account,chatId,messageId},"admin_errors");
+  }
+  if (data === "bot:admin:repair_all") {
+    if(!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+    const result=await runCentralRepairAll(env,account);
+    await botPrompt(env,chatId,"🧰 <b>تعمیر خودکار پایان یافت</b>\nوضعیت: <b>"+botEscape(result.status)+"</b>\nمنوها: "+(result.menus?"✅":"❌")+" · سلامت: "+(result.health?"✅":"❌")+" · بکاپ: "+(result.backups?"✅":"❌")+" · گزارش: "+(result.reports?"✅":"❌")+" · Processor: "+(result.processor?"✅":"❌"),[[{text:"↩️ مرکز خطا",callback_data:"bot:admin:errors"}]]);
     return;
   }
   if (data === "bot:admin:reseller_backup_all") {
@@ -13456,7 +13764,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.2.14';
+const BLUEPANEL_CORE_VERSION = '3.3.0';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {

@@ -1,7 +1,7 @@
 {
-  "version": "3.2.14",
-  "release_id": "3.2.14-20260715-service-button-callback-length-fix",
-  "architecture": "fully-split-three-worker-edge-first-verified-deployment",
+  "version": "3.3.0",
+  "release_id": "3.3.0-20260715-growth-loyalty-health-automation-suite",
+  "architecture": "fully-split-three-worker-growth-and-reliability-suite",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -32,10 +32,15 @@
     ]
   },
   "features": [
-    "fixes Telegram BUTTON_DATA_INVALID when opening imported service details",
-    "shortens service refresh, revoke confirmation and revoke callback identifiers below Telegram 64-byte limit",
-    "keeps backward compatibility with previously sent legacy service buttons",
-    "subscription import, active-token ownership checks and edge-first deployment remain included",
+    "per-service automatic renewal from customer wallet with idempotent renewal runs",
+    "automatic low-balance alert and prepared recharge recommendation for representatives",
+    "smart plan recommendation, dynamic upsell, favorite plan and one-tap repurchase",
+    "abandoned-cart and win-back automation, gift service purchases, gift codes and loyalty points",
+    "service health snapshots, optional automatic failover queue and plan guarantee claims",
+    "real-profit and reseller tier dashboards",
+    "QR subscription import using an optional QR decoder endpoint",
+    "edge-first staged updates, rollout records, error center and repair-all workflow",
+    "existing Plisio, CubePay, live usage, topic reports and PasarGuard compatibility are preserved",
     "README files are excluded"
   ],
   "deployment": {
@@ -51,21 +56,34 @@
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "telegram_callback_data_max_bytes": "passed",
-    "legacy_service_callback_compatibility": "passed",
-    "release_manifest_hashes": "recalculated",
-    "zip_integrity": "passed"
+    "top_level_module_execution": "passed",
+    "sqlite_schema_tables": 55,
+    "schema_creation": "passed",
+    "auto_renew_exactly_once_claim": "passed; first claim accepted, duplicate claim rejected",
+    "customer_wallet_debit_model": "passed",
+    "low_balance_daily_dedupe": "passed",
+    "error_center_upsert_occurrence_count": "passed",
+    "telegram_literal_callback_max_64_bytes": "passed",
+    "release_notes_current_version_filter": "passed",
+    "readme_excluded": true,
+    "live_telegram_cloudflare_pasarguard_payments": "not run without production credentials"
   },
   "sha256": {
-    "core": "31af3a207b74b8b928c2d9344e02a5c97df468540f9acf34ef0f98a8ad7ce349",
-    "edge": "0c740243147fffa1ae57701f77d268f7c1b06fed6ce15569f72d460f6c530d85",
-    "processor": "8d53db28cb21994b9f6b03653651b7800fce65358782b27bbb6d4b96a396035d",
+    "core": "288de03e4ef47e8c75e07a2946e148a632cbf7dd44d5d273792fb70be7e3eba6",
+    "edge": "823d0b877a3737ed17f0453bce896757b57d76eb49c97b203b3911c4648e9264",
+    "processor": "048bc4d3c493b45bacaf95c0300b9aba5ddee6835233945bf4ab6539dd09cd70",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "hashes": {
-    "core/worker.js": "31af3a207b74b8b928c2d9344e02a5c97df468540f9acf34ef0f98a8ad7ce349",
-    "edge/worker.js": "0c740243147fffa1ae57701f77d268f7c1b06fed6ce15569f72d460f6c530d85",
-    "processor/worker.js": "8d53db28cb21994b9f6b03653651b7800fce65358782b27bbb6d4b96a396035d",
+    "core/worker.js": "288de03e4ef47e8c75e07a2946e148a632cbf7dd44d5d273792fb70be7e3eba6",
+    "edge/worker.js": "823d0b877a3737ed17f0453bce896757b57d76eb49c97b203b3911c4648e9264",
+    "processor/worker.js": "048bc4d3c493b45bacaf95c0300b9aba5ddee6835233945bf4ab6539dd09cd70",
     "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
-  }
+  },
+  "limitations": [
+    "representative low-balance automation sends a deduplicated alert and prepared recharge recommendation; it does not charge a bank card without a payment mandate",
+    "QR subscription import is optional and sends the selected QR image to the external qrserver decoder endpoint",
+    "staged deployment verifies Edge before Core and records failures, but cannot restore previous Worker bytes unless a previous artifact is supplied",
+    "automatic failover changes PasarGuard user group_ids after three consecutive API health failures and must be explicitly enabled by the reseller"
+  ]
 }

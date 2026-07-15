@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.2.14
+ * Version: 3.3.0
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = "3.2.14";
+const APP_VERSION = "3.3.0";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -38,7 +38,10 @@ const RESELLER_BACKUP_FIELDS = Object.freeze([
   "sales_automation_enabled","abandoned_reminder_minutes","winback_days","loyalty_enabled","loyalty_profile",
   "fraud_protection_enabled","order_cooldown_seconds","max_pending_orders","daily_order_limit",
   "daily_wallet_charge_limit_toman","duplicate_receipt_protection","auto_block_risk_score",
-  "payment_card_enabled","payment_wallet_enabled","payment_method_order","payment_default_method"
+  "payment_card_enabled","payment_wallet_enabled","payment_method_order","payment_default_method",
+  "auto_renew_enabled","smart_recommendations_enabled","upsell_enabled","favorite_plan_enabled","gift_service_enabled",
+  "service_health_enabled","auto_failover_enabled","guarantee_enabled","low_balance_alert_enabled",
+  "low_balance_threshold_toman","low_balance_recharge_amount_toman","reseller_tier","reseller_tier_discount_percent"
 ]);
 
 
@@ -825,7 +828,7 @@ function resellerCallbackPermission(data) {
   if (value.startsWith("owner:campaign") || value.startsWith("owner:broadcast")) return "campaigns";
   if (value.startsWith("owner:audit")) return "audit";
   if (value.startsWith("owner:executive")) return "reports";
-  if (value.startsWith("owner:automation")) return "automation";
+  if (value.startsWith("owner:automation") || value.startsWith("owner:growth")) return "automation";
   if (value.startsWith("owner:security")) return "security";
   if (value.startsWith("owner:health")) return "health";
   if (value.startsWith("owner:backup")) return "backups";
@@ -2942,6 +2945,195 @@ async function replySalesTicketByOwner(env, bot, ownerUserId, ticketId, rawMessa
   return { ...ticket, status: "answered", last_message_at: ts, updated_at: ts };
 }
 
+function resellerFeatureEnabled(bot, key, fallback = true) {
+  const value = bot?.[key];
+  if (value === undefined || value === null || value === "") return fallback;
+  return Number(value) === 1 || value === true || value === "true";
+}
+
+async function getSalesServicePreference(env, bot, customer, service) {
+  const username = String(service?.remote_username || "").trim();
+  if (!username) return null;
+  const rootOrderId = String(service?.id || service?.root_order_id || "");
+  let row = await env.PASARGUARD_DB.prepare(`
+    SELECT * FROM sales_service_preferences WHERE bot_id=? AND customer_id=? AND remote_username=?
+  `).bind(bot.id, customer.id, username).first();
+  if (!row) {
+    const ts = nowIso();
+    await env.PASARGUARD_DB.prepare(`
+      INSERT INTO sales_service_preferences(bot_id,customer_id,root_order_id,remote_username,auto_renew_enabled,renew_days_before,health_monitor_enabled,created_at,updated_at)
+      VALUES(?,?,?,?,0,2,1,?,?)
+      ON CONFLICT(bot_id,customer_id,remote_username) DO NOTHING
+    `).bind(bot.id, customer.id, rootOrderId, username, ts, ts).run();
+    row = await env.PASARGUARD_DB.prepare(`SELECT * FROM sales_service_preferences WHERE bot_id=? AND customer_id=? AND remote_username=?`)
+      .bind(bot.id, customer.id, username).first();
+  }
+  return row;
+}
+
+async function toggleSalesServiceAutoRenew(env, bot, customer, serviceId) {
+  if (!resellerFeatureEnabled(bot, "auto_renew_enabled", true)) throw new Error("تمدید خودکار توسط مدیر این ربات غیرفعال است");
+  const service = await getSalesServiceOrder(env, bot, customer, serviceId);
+  const pref = await getSalesServicePreference(env, bot, customer, service);
+  let renewalPlanId = pref?.renewal_plan_id || null;
+  if (!renewalPlanId) {
+    const plan = await env.PASARGUARD_DB.prepare(`
+      SELECT id FROM sales_plans WHERE bot_id=? AND status='active' AND plan_type='renew'
+      ORDER BY sort_order,price_toman,duration_days LIMIT 1
+    `).bind(bot.id).first();
+    if (!plan) throw new Error("برای تمدید خودکار هنوز پلن تمدید فعالی ثبت نشده است");
+    renewalPlanId = plan.id;
+  }
+  const next = Number(pref?.auto_renew_enabled || 0) === 1 ? 0 : 1;
+  await env.PASARGUARD_DB.prepare(`
+    UPDATE sales_service_preferences SET auto_renew_enabled=?,renewal_plan_id=?,updated_at=?
+    WHERE bot_id=? AND customer_id=? AND remote_username=?
+  `).bind(next, renewalPlanId, nowIso(), bot.id, customer.id, service.remote_username).run();
+  await salesEvent(env, bot.id, customer.id, "service_auto_renew_toggled", { serviceId, username: service.remote_username, enabled: next === 1, renewalPlanId });
+  return next === 1;
+}
+
+async function toggleSalesServiceHealthMonitor(env, bot, customer, serviceId) {
+  const service = await getSalesServiceOrder(env, bot, customer, serviceId);
+  const pref = await getSalesServicePreference(env, bot, customer, service);
+  const next = Number(pref?.health_monitor_enabled ?? 1) === 1 ? 0 : 1;
+  await env.PASARGUARD_DB.prepare(`UPDATE sales_service_preferences SET health_monitor_enabled=?,updated_at=? WHERE bot_id=? AND customer_id=? AND remote_username=?`)
+    .bind(next, nowIso(), bot.id, customer.id, service.remote_username).run();
+  return next === 1;
+}
+
+function serviceHealthFromSnapshot(service) {
+  const status = String(service?.remote_status || "unknown").toLowerCase();
+  const expireMs = service?.remote_expire ? Date.parse(service.remote_expire) : NaN;
+  const onlineMs = service?.remote_online_at ? Date.parse(service.remote_online_at) : NaN;
+  const staleHours = Number.isFinite(onlineMs) ? Math.max(0, (Date.now() - onlineMs) / 3600000) : null;
+  let score = 92, label = "سالم", icon = "🟢";
+  if (["expired","disabled","limited"].includes(status)) { score = 25; label = "نیازمند بررسی"; icon = "🔴"; }
+  else if (Number.isFinite(expireMs) && expireMs < Date.now()) { score = 20; label = "منقضی"; icon = "🔴"; }
+  else if (staleHours != null && staleHours > 72) { score = 62; label = "بدون اتصال اخیر"; icon = "🟡"; }
+  return { score, label, icon, staleHours };
+}
+
+async function salesRecommendedPlan(env, bot, customer) {
+  if (!resellerFeatureEnabled(bot, "smart_recommendations_enabled", true)) return null;
+  const service = await env.PASARGUARD_DB.prepare(`
+    SELECT remote_data_limit,remote_used_traffic,remote_expire FROM sales_orders
+    WHERE bot_id=? AND customer_id=? AND status='delivered' AND remote_username IS NOT NULL
+    ORDER BY updated_at DESC LIMIT 1
+  `).bind(bot.id, customer.id).first();
+  const targetBytes = Math.max(1024*1024*1024, Number(service?.remote_used_traffic || 0) * 1.25, Number(service?.remote_data_limit || 0) * .75);
+  const plan = await env.PASARGUARD_DB.prepare(`
+    SELECT * FROM sales_plans WHERE bot_id=? AND status='active' AND plan_type='sale' AND data_limit_bytes>=?
+    ORDER BY data_limit_bytes ASC,duration_days ASC,price_toman ASC LIMIT 1
+  `).bind(bot.id, targetBytes).first();
+  if (plan) return plan;
+  return env.PASARGUARD_DB.prepare(`SELECT * FROM sales_plans WHERE bot_id=? AND status='active' AND plan_type='sale' ORDER BY data_limit_bytes DESC,price_toman ASC LIMIT 1`).bind(bot.id).first();
+}
+
+async function salesDynamicUpsell(env, bot, plan) {
+  if (!resellerFeatureEnabled(bot, "upsell_enabled", true) || !plan || String(plan.plan_type||"sale") !== "sale") return null;
+  if (plan.upsell_plan_id) {
+    const fixed = await env.PASARGUARD_DB.prepare(`SELECT * FROM sales_plans WHERE id=? AND bot_id=? AND status='active'`).bind(plan.upsell_plan_id, bot.id).first();
+    if (fixed) return fixed;
+  }
+  return env.PASARGUARD_DB.prepare(`
+    SELECT * FROM sales_plans WHERE bot_id=? AND status='active' AND plan_type='sale' AND id<>?
+      AND (data_limit_bytes>? OR duration_days>?) AND price_toman>?
+    ORDER BY (price_toman-?) ASC,data_limit_bytes ASC LIMIT 1
+  `).bind(bot.id, plan.id, Number(plan.data_limit_bytes||0), Number(plan.duration_days||0), Number(plan.price_toman||0), Number(plan.price_toman||0)).first();
+}
+
+async function setSalesFavoritePlan(env, bot, customer, planId) {
+  if (!resellerFeatureEnabled(bot, "favorite_plan_enabled", true)) throw new Error("پلن محبوب در این ربات غیرفعال است");
+  const plan = await env.PASARGUARD_DB.prepare(`SELECT id FROM sales_plans WHERE id=? AND bot_id=? AND status='active' AND plan_type='sale'`).bind(planId, bot.id).first();
+  if (!plan) throw new Error("پلن انتخاب‌شده فعال نیست");
+  await env.PASARGUARD_DB.prepare(`UPDATE sales_customers SET favorite_plan_id=?,updated_at=? WHERE id=? AND bot_id=?`).bind(planId, nowIso(), customer.id, bot.id).run();
+  await salesEvent(env, bot.id, customer.id, "favorite_plan_set", { planId });
+  return true;
+}
+
+async function salesFavoritePlanView(env, bot, customer) {
+  const planId = String(customer.favorite_plan_id || "");
+  if (!planId) throw new Error("هنوز پلن محبوبی انتخاب نکرده‌اید");
+  const plan = await env.PASARGUARD_DB.prepare(`SELECT * FROM sales_plans WHERE id=? AND bot_id=? AND status='active'`).bind(planId,bot.id).first();
+  if (!plan) throw new Error("پلن محبوب شما دیگر فعال نیست؛ پلن دیگری انتخاب کنید");
+  const price = salesCustomerPlanPrice(plan, customer);
+  return { text: "⭐ <b>پلن محبوب شما</b>\n━━━━━━━━━━━━━━\n📦 حجم: <b>"+botGb(plan.data_limit_bytes)+"</b>\n🗓 مدت: <b>"+salesPlanDurationLabel(plan.duration_days,"sale")+"</b>\n💰 مبلغ: <b>"+botMoney(price)+" تومان</b>", reply_markup:{inline_keyboard:[[{text:"🛒 خرید همین پلن",callback_data:"sale:planpick:"+plan.id}],[{text:"🏠 منوی اصلی",callback_data:"sale:home"}]]} };
+}
+
+async function salesRecommendationView(env, bot, customer) {
+  const plan = await salesRecommendedPlan(env, bot, customer);
+  if (!plan) throw new Error("در حال حاضر پلن پیشنهادی فعالی وجود ندارد");
+  const price = salesCustomerPlanPrice(plan, customer);
+  return { text:"🎯 <b>پیشنهاد هوشمند برای شما</b>\n━━━━━━━━━━━━━━\nبراساس مصرف و خریدهای قبلی، این پلن مناسب‌تر است:\n\n📦 حجم: <b>"+botGb(plan.data_limit_bytes)+"</b>\n🗓 مدت: <b>"+salesPlanDurationLabel(plan.duration_days,"sale")+"</b>\n💰 مبلغ: <b>"+botMoney(price)+" تومان</b>", reply_markup:{inline_keyboard:[[{text:"🚀 انتخاب پلن پیشنهادی",callback_data:"sale:planpick:"+plan.id}],[{text:"⭐ ذخیره به‌عنوان محبوب",callback_data:"sale:pf:"+plan.id}],[{text:"🏠 منوی اصلی",callback_data:"sale:home"}]]} };
+}
+
+async function salesGiftPlansView(env, bot, customer) {
+  if (!resellerFeatureEnabled(bot,"gift_service_enabled",true)) throw new Error("هدیه سرویس در این ربات غیرفعال است");
+  const rows = await env.PASARGUARD_DB.prepare(`SELECT * FROM sales_plans WHERE bot_id=? AND status='active' AND plan_type='sale' ORDER BY sort_order,price_toman LIMIT 15`).bind(bot.id).all();
+  const buttons=(rows.results||[]).map(plan=>[{text:"🎁 "+botGb(plan.data_limit_bytes)+" • "+salesPlanDurationLabel(plan.duration_days,"sale")+" • "+botMoney(salesCustomerPlanPrice(plan,customer))+" تومان",callback_data:"sale:gift:"+plan.id}]);
+  buttons.push([{text:"🏠 منوی اصلی",callback_data:"sale:home"}]);
+  return {text:"🎁 <b>هدیه‌دادن سرویس</b>\n━━━━━━━━━━━━━━\nپلن را انتخاب کنید. مبلغ از کیف پول شما کم می‌شود و سرویس برای شناسه تلگرام دریافت‌کننده ساخته خواهد شد.",reply_markup:{inline_keyboard:buttons}};
+}
+
+async function purchaseGiftPlanFromWallet(env, bot, sender, planId, recipientTelegramId, requestedUsername, giftMessage="") {
+  const recipientId=String(recipientTelegramId||"").replace(/\D/g,"");
+  if (!/^\d{5,20}$/.test(recipientId)) throw new Error("شناسه تلگرام دریافت‌کننده معتبر نیست");
+  if (recipientId===String(sender.telegram_id)) throw new Error("برای خودتان از خرید عادی استفاده کنید");
+  const recipient=await ensureSalesCustomer(env,bot,{id:recipientId,first_name:"دریافت‌کننده هدیه",username:""},"");
+  const order=await createSalesOrder(env,bot,recipient,planId,{paymentMethod:"wallet",status:"pending_review",requestedUsername,origin:"bot",giftSenderCustomerId:sender.id,giftMessage});
+  await adjustSalesCustomerBalance(env,bot.id,sender.id,-Number(order.amountToman),"gift_purchase","sales_order",order.orderId,"خرید هدیه "+order.plan.title);
+  const giftId=id("gift");
+  await env.PASARGUARD_DB.prepare(`INSERT INTO sales_gifts(id,bot_id,sender_customer_id,recipient_customer_id,order_id,plan_id,gift_message,status,created_at) VALUES(?,?,?,?,?,?,?,'processing',?)`)
+    .bind(giftId,bot.id,sender.id,recipient.id,order.orderId,planId,cleanText(giftMessage,500),nowIso()).run();
+  const owner=await env.PASARGUARD_DB.prepare("SELECT * FROM users WHERE id=?").bind(bot.user_id).first();
+  try {
+    const delivered=await provisionSalesOrder(env,owner,order.orderId);
+    await env.PASARGUARD_DB.prepare(`UPDATE sales_gifts SET status='delivered',delivered_at=? WHERE id=?`).bind(nowIso(),giftId).run();
+    await createSalesNotification(env,bot,sender,order.orderId,"gift_sent","هدیه شما تحویل شد","سرویس هدیه برای شناسه "+recipientId+" با موفقیت ساخته شد.","gift-sent:"+giftId,{sendBot:true});
+    return delivered;
+  } catch(error) {
+    try{await adjustSalesCustomerBalance(env,bot.id,sender.id,Number(order.amountToman),"refund","sales_order",order.orderId,"بازگشت وجه هدیه ناموفق");}catch(_){}
+    await env.PASARGUARD_DB.prepare(`UPDATE sales_gifts SET status='failed' WHERE id=?`).bind(giftId).run();
+    throw error;
+  }
+}
+
+async function decodeSubscriptionQrFromTelegramPhoto(env, bot, message) {
+  const photos=Array.isArray(message?.photo)?message.photo:[];
+  if (!photos.length) return "";
+  const fileId=String(photos[photos.length-1]?.file_id||"");
+  if (!fileId) return "";
+  const token=await decryptSecret(bot.bot_token_enc,env);
+  const info=await telegramApiWithToken(token,"getFile",{file_id:fileId});
+  const filePath=String(info?.result?.file_path||"");
+  if (!filePath) throw new Error("فایل QR از تلگرام دریافت نشد");
+  const image=await fetch("https://api.telegram.org/file/bot"+token+"/"+filePath);
+  if (!image.ok) throw new Error("دانلود تصویر QR ناموفق بود");
+  const form=new FormData();
+  form.append("file",new Blob([await image.arrayBuffer()],{type:image.headers.get("content-type")||"image/jpeg"}),"qr.jpg");
+  const response=await fetch("https://api.qrserver.com/v1/read-qr-code/",{method:"POST",body:form});
+  const payload=await response.json().catch(()=>null);
+  const value=cleanText(payload?.[0]?.symbol?.[0]?.data,3000);
+  if (!value) throw new Error("QR قابل خواندن نیست؛ لینک اشتراک را به‌صورت متن ارسال کنید");
+  return value;
+}
+
+async function createGuaranteeClaim(env, bot, customer, serviceId) {
+  if (!resellerFeatureEnabled(bot,"guarantee_enabled",true)) throw new Error("ضمانت خرید در این ربات غیرفعال است");
+  const service=await getSalesServiceOrder(env,bot,customer,serviceId);
+  const plan=await env.PASARGUARD_DB.prepare(`SELECT guarantee_hours,guarantee_policy FROM sales_plans WHERE id=?`).bind(service.plan_id).first();
+  const hours=Math.max(0,Number(plan?.guarantee_hours||0));
+  if (!hours) throw new Error("این پلن ضمانت فعال ندارد");
+  const purchased=Date.parse(service.created_at||"");
+  if (!Number.isFinite(purchased)||Date.now()-purchased>hours*3600000) throw new Error("مهلت استفاده از ضمانت این سرویس پایان یافته است");
+  const claimId=id("gcl");
+  await env.PASARGUARD_DB.prepare(`INSERT INTO sales_guarantee_claims(id,bot_id,customer_id,order_id,remote_username,reason,status,created_at,updated_at) VALUES(?,?,?,?,?,'connection_problem','pending',?,?) ON CONFLICT(bot_id,order_id,status) DO NOTHING`)
+    .bind(claimId,bot.id,customer.id,service.id,service.remote_username,nowIso(),nowIso()).run();
+  await queueReportEvent(env,bot.id,"support","درخواست ضمانت سرویس","کاربر: <code>"+botEscape(customer.telegram_id)+"</code>\nسرویس: <code>"+botEscape(service.remote_username)+"</code>\nسیاست: "+botEscape(plan?.guarantee_policy||"بررسی اتصال"),"guarantee:"+service.id);
+  return true;
+}
+
 async function salesCustomerHomeView(env, bot, customer) {
   const homeBatch = await env.PASARGUARD_DB.batch([
     env.PASARGUARD_DB.prepare(`
@@ -2949,8 +3141,9 @@ async function salesCustomerHomeView(env, bot, customer) {
         (SELECT COUNT(*) FROM sales_plans WHERE bot_id=? AND status='active') AS active_plans,
         (SELECT COUNT(*) FROM sales_orders WHERE customer_id=?) AS orders_count,
         (SELECT COUNT(DISTINCT remote_username) FROM sales_orders WHERE customer_id=? AND status='delivered' AND remote_username IS NOT NULL AND remote_username<>'') AS delivered_count,
-        (SELECT COUNT(*) FROM sales_customers WHERE referrer_customer_id=?) AS referrals_count
-    `).bind(bot.id, customer.id, customer.id, customer.id),
+        (SELECT COUNT(*) FROM sales_customers WHERE referrer_customer_id=?) AS referrals_count,
+        (SELECT COUNT(*) FROM sales_service_preferences WHERE bot_id=? AND customer_id=? AND auto_renew_enabled=1) AS auto_renew_count
+    `).bind(bot.id, customer.id, customer.id, customer.id, bot.id, customer.id),
     env.PASARGUARD_DB.prepare("SELECT text_value FROM reseller_bot_texts WHERE bot_id=? AND text_key='welcome' LIMIT 1").bind(bot.id)
   ]);
   const stats = (homeBatch[0]?.results || [])[0] || {};
@@ -2963,6 +3156,11 @@ async function salesCustomerHomeView(env, bot, customer) {
     [{ text: "👥 زیرمجموعه‌گیری", callback_data: "sale:referral" }, { text: "🎁 تست رایگان", callback_data: "sale:trial" }],
     [{ text: "🎟 تخفیف و هدیه", callback_data: "sale:promo" }, { text: "📚 آموزش و راهنما", callback_data: "sale:help" }]
   ];
+  const growthRow=[];
+  if (resellerFeatureEnabled(bot,"smart_recommendations_enabled",true)) growthRow.push({text:"🎯 پیشنهاد هوشمند",callback_data:"sale:recommend"});
+  if (resellerFeatureEnabled(bot,"favorite_plan_enabled",true) && customer.favorite_plan_id) growthRow.push({text:"⭐ خرید محبوب",callback_data:"sale:favorite"});
+  if (growthRow.length) rows.splice(1,0,growthRow);
+  if (resellerFeatureEnabled(bot,"gift_service_enabled",true)) rows.splice(2,0,[{text:"🎁 هدیه‌دادن سرویس",callback_data:"sale:gift:start"}]);
   if (Number(bot.ticketing_enabled ?? 1) === 1) rows.push([{ text: "🎫 مرکز پشتیبانی", callback_data: "sale:support" }]);
   if (String(customer.telegram_id) === String(bot.owner_telegram_id || "")) rows.push([{ text: "⚙️ مدیریت ربات", callback_data: "owner:home" }]);
   if (supportUrl) rows.push([{ text: "🆘 ارتباط مستقیم", url: supportUrl }]);
@@ -3353,6 +3551,12 @@ async function salesPlanPurchaseMethodsView(env, bot, customer, planId, options 
   const walletCallback = requestedPlanType === "volume" ? "sale:vwbuy:" + plan.id : requestedPlanType === "renew" ? "sale:rwbuy:" + plan.id : "sale:wbuy:" + plan.id;
   const backCallback = requestedPlanType === "volume" ? "sale:volume:" + (options.targetOrderId || "") : requestedPlanType === "renew" ? "sale:renew:" + (options.targetOrderId || "") : "sale:plans";
   const buttons = [];
+  if (requestedPlanType === "sale" && resellerFeatureEnabled(bot,"favorite_plan_enabled",true)) buttons.push([{text:"⭐ انتخاب به‌عنوان پلن محبوب",callback_data:"sale:pf:"+plan.id}]);
+  const upsell = requestedPlanType === "sale" ? await salesDynamicUpsell(env,bot,plan) : null;
+  if (upsell) {
+    const more=Math.max(0,salesCustomerPlanPrice(upsell,customer)-price.finalPrice);
+    buttons.push([{text:"⬆️ ارتقا با "+botMoney(more)+" تومان بیشتر",callback_data:"sale:planpick:"+upsell.id}]);
+  }
   if (resellerPaymentMethodEnabled(bot, "card")) buttons.push([{ text: "💳 کارت‌به‌کارت", callback_data: cardCallback }]);
   if (resellerPaymentMethodEnabled(bot, "blupal")) buttons.push([{ text: "💠 پرداخت آنلاین", callback_data: onlineCallback }]);
   if (resellerPaymentMethodEnabled(bot, "wallet") && customer && Number(customer.wallet_balance || 0) >= price.finalPrice) buttons.push([{ text: "⚡ پرداخت از موجودی", callback_data: walletCallback }]);
@@ -3429,7 +3633,7 @@ async function salesCustomerServicesView(env, bot, customer) {
 async function salesCustomerServiceDetailView(env, bot, customer, serviceId) {
   const target = await getSalesServiceOrder(env, bot, customer, serviceId);
   const rows = await env.PASARGUARD_DB.prepare(`
-    SELECT o.*,p.title AS plan_title,p.category_id,p.location_id,
+    SELECT o.*,p.title AS plan_title,p.category_id,p.location_id,p.guarantee_hours,p.guarantee_policy,
            c.title AS category_title,c.emoji AS category_emoji,
            l.title AS location_title,l.emoji AS location_emoji
     FROM sales_orders o JOIN sales_plans p ON p.id=o.plan_id
@@ -3441,6 +3645,11 @@ async function salesCustomerServiceDetailView(env, bot, customer, serviceId) {
   const limit = Number(service.remote_data_limit || 0), used = Number(service.remote_used_traffic || 0);
   const remaining = limit > 0 ? Math.max(0, limit - used) : 0;
   const expire = service.remote_expire ? botDate(service.remote_expire) : "نامحدود/نامشخص";
+  const pref = await getSalesServicePreference(env,bot,customer,service);
+  const health = serviceHealthFromSnapshot(service);
+  const guaranteeHours=Math.max(0,Number(service.guarantee_hours||0));
+  const purchasedAt=Date.parse(service.created_at||"");
+  const guaranteeActive=guaranteeHours>0 && Number.isFinite(purchasedAt) && Date.now()-purchasedAt<=guaranteeHours*3600000;
   const text = "🧭 <b>جزئیات سرویس</b>\n━━━━━━━━━━━━━━\n" +
     "پلن اولیه: <b>" + botEscape(service.plan_title) + "</b>\n" +
     "نام کاربری: <code>" + botEscape(service.remote_username) + "</code>\n" +
@@ -3449,11 +3658,17 @@ async function salesCustomerServiceDetailView(env, bot, customer, serviceId) {
     "حجم کل: <b>" + (limit > 0 ? botGb(limit) : "نامحدود") + "</b>\n" +
     (limit > 0 ? "باقی‌مانده: <b>" + botGb(remaining) + "</b>\n" : "") +
     "انقضا: <b>" + botEscape(expire) + "</b>\n" +
-    "تمدیدها: <b>" + botMoney(service.renewals_count) + "</b> · افزایش حجم: <b>" + botMoney(service.volume_orders_count) + "</b>";
+    "سلامت: <b>"+health.icon+" "+botEscape(health.label)+"</b> · امتیاز <b>"+botMoney(health.score)+"/۱۰۰</b>\n" +
+    "تمدید خودکار: <b>"+(Number(pref?.auto_renew_enabled||0)===1?"فعال":"غیرفعال")+"</b> · پایش: <b>"+(Number(pref?.health_monitor_enabled??1)===1?"فعال":"غیرفعال")+"</b>\n" +
+    "تمدیدها: <b>" + botMoney(service.renewals_count) + "</b> · افزایش حجم: <b>" + botMoney(service.volume_orders_count) + "</b>" +
+    (guaranteeHours>0?"\n🛡 ضمانت: <b>"+(guaranteeActive?"فعال":"پایان‌یافته")+"</b> · "+botMoney(guaranteeHours)+" ساعت\n"+botEscape(service.guarantee_policy||"بررسی اتصال"):"");
   const buttons = [];
   if (service.subscription_url) buttons.push([{ text: "📋 کپی لینک اشتراک", copy_text: { text: service.subscription_url } }]);
-  buttons.push([{ text: "🔄 بروزرسانی اطلاعات", callback_data: "svc:rf:" + service.id }, { text: "🔐 تعویض لینک", callback_data: "svc:rc:" + service.id }]);
-  buttons.push([{ text: "♻️ تمدید", callback_data: "sale:renew:" + service.id }, { text: "➕ افزایش حجم", callback_data: "sale:volume:" + service.id }]);
+  buttons.push([{ text: "🔄 بروزرسانی اطلاعات", callback_data: "svc:rf:" + service.id }, { text: "🩺 تست سلامت", callback_data: "svc:hc:" + service.id }]);
+  buttons.push([{ text: Number(pref?.auto_renew_enabled||0)===1?"⏸ توقف تمدید خودکار":"♻️ فعال‌کردن تمدید خودکار", callback_data:"svc:ar:"+service.id }, {text:Number(pref?.health_monitor_enabled??1)===1?"🔕 توقف پایش":"🔔 فعال‌کردن پایش",callback_data:"svc:hm:"+service.id}]);
+  buttons.push([{ text: "🔐 تعویض لینک", callback_data: "svc:rc:" + service.id }, { text: "♻️ تمدید", callback_data: "sale:renew:" + service.id }]);
+  buttons.push([{ text: "➕ افزایش حجم", callback_data: "sale:volume:" + service.id }]);
+  if (guaranteeActive) buttons.push([{text:"🛡 استفاده از ضمانت",callback_data:"svc:gu:"+service.id}]);
   buttons.push([{ text: "↩️ سرویس‌های من", callback_data: "sale:services" }]);
   return { text, reply_markup: { inline_keyboard: buttons } };
 }
@@ -3494,6 +3709,8 @@ async function salesCustomerAccountView(env, bot, customer) {
       "شناسه تلگرام: <code>" + botEscape(customer.telegram_id) + "</code>\n" +
       "موجودی: <b>" + botMoney(customer.wallet_balance) + " تومان</b>\n" +
       "نوع حساب: <b>" + (String(customer.customer_type || "retail") === "wholesale" ? "عمده" : "عادی") + "</b>" + (discount > 0 ? " · تخفیف " + discount + "٪" : "") + "\n" +
+      "باشگاه مشتریان: <b>" + botEscape(salesLoyaltyLabel(customer.loyalty_level || "bronze")) + "</b> · امتیاز: <b>" + botMoney(customer.loyalty_points || 0) + "</b>\n" +
+      "پلن محبوب: <b>" + (customer.favorite_plan_id ? "ثبت‌شده ⭐" : "ثبت نشده") + "</b>\n" +
       "کل سفارش‌ها: <b>" + botMoney(stats?.orders_count) + "</b>\n" +
       "سرویس فعال/تحویل‌شده: <b>" + botMoney(stats?.delivered_count) + "</b>\n" +
       "مجموع خرید: <b>" + botMoney(stats?.total_spend) + " تومان</b>\n" +
@@ -3813,12 +4030,13 @@ async function createSalesOrder(env, bot, customer, planId, options = {}) {
     await env.PASARGUARD_DB.prepare(`
       INSERT INTO sales_orders(
         id,bot_id,plan_id,customer_id,amount_toman,original_amount_toman,discount_toman,promo_code_id,promo_code,
-        status,order_type,target_order_id,payment_method,origin,remote_username,created_at,updated_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        status,order_type,target_order_id,payment_method,origin,remote_username,gift_sender_customer_id,gift_message,created_at,updated_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).bind(
       orderId, bot.id, plan.id, customer.id, finalPrice, originalPrice, discountToman,
       promoResult?.promo?.id || null, promoResult?.promo?.code || null,
-      status, options.orderType || "new", options.targetOrderId || null, paymentMethod, origin, requestedUsername, ts, ts
+      status, options.orderType || "new", options.targetOrderId || null, paymentMethod, origin, requestedUsername,
+      options.giftSenderCustomerId || null, cleanText(options.giftMessage,500) || null, ts, ts
     ).run();
   } catch (error) {
     if (promoResult) try { await salesReleasePromoForOrder(env, orderId); } catch (_) {}
@@ -4361,9 +4579,9 @@ async function refreshSalesCustomerLoyalty(env, bot, customerId, options = {}) {
   const next = salesLoyaltyLevelForSpend(bot, spend);
   const previous = String(customer.loyalty_level || "bronze");
   await env.PASARGUARD_DB.prepare(`
-    UPDATE sales_customers SET lifetime_spend_toman=?,loyalty_level=?,loyalty_discount_percent=?,last_purchase_at=?,updated_at=?
+    UPDATE sales_customers SET lifetime_spend_toman=?,loyalty_points=?,loyalty_level=?,loyalty_discount_percent=?,last_purchase_at=?,updated_at=?
     WHERE id=? AND bot_id=?
-  `).bind(spend, next.level, next.discount, stats?.last_purchase || null, nowIso(), customer.id, bot.id).run();
+  `).bind(spend, Math.floor(spend / 10000), next.level, next.discount, stats?.last_purchase || null, nowIso(), customer.id, bot.id).run();
   if (previous !== next.level && next.level !== "bronze" && options.notify !== false) {
     await createSalesNotification(env, bot, customer, null, "loyalty", "ارتقای سطح باشگاه مشتریان",
       "سطح شما به " + salesLoyaltyLabel(next.level) + " ارتقا یافت و از " + next.discount + "٪ تخفیف خودکار بهره‌مند شدید.",
@@ -4466,10 +4684,63 @@ async function resellerOwnerAutomationView(env, bot, account) {
       [{ text: "🔁 بازگشت مشتری: " + botMoney(fresh.winback_days || 30) + " روز", callback_data: "owner:automation:winback" }],
       [{ text: loyaltyEnabled ? "🏅 غیرفعال‌کردن باشگاه" : "🏅 فعال‌کردن باشگاه", callback_data: "owner:automation:loyalty" }],
       [{ text: "🎯 الگوی باشگاه: " + profile.label, callback_data: "owner:automation:profile" }],
+      [{ text: "🚀 امکانات رشد و سرویس", callback_data: "owner:growth" }],
       [{ text: "⚡ اجرای فوری", callback_data: "owner:automation:run" }, { text: "🔄 بروزرسانی", callback_data: "owner:automation" }],
       [{ text: "↩️ مدیریت", callback_data: "owner:home" }]
     ] }
   };
+}
+
+async function resellerOwnerGrowthView(env, bot, account) {
+  resellerRequirePermission(account,"automation");
+  const fresh=await getResellerBotById(env,bot.id);
+  const since=new Date(Date.now()-30*86400000).toISOString();
+  const s=await env.PASARGUARD_DB.prepare(`
+    SELECT
+      (SELECT COALESCE(SUM(amount_toman),0) FROM sales_orders WHERE bot_id=? AND status='delivered' AND created_at>=?) AS revenue_30d,
+      (SELECT COUNT(*) FROM sales_orders WHERE bot_id=? AND status='delivered' AND created_at>=?) AS sales_30d,
+      (SELECT COUNT(*) FROM sales_service_preferences WHERE bot_id=? AND auto_renew_enabled=1) AS auto_renew_services,
+      (SELECT COUNT(*) FROM sales_guarantee_claims WHERE bot_id=? AND status='pending') AS pending_guarantees,
+      (SELECT COUNT(*) FROM sales_failover_jobs WHERE bot_id=? AND status IN ('pending','running')) AS failover_jobs,
+      (SELECT COUNT(*) FROM sales_gifts WHERE bot_id=? AND status='delivered') AS gifts,
+      (SELECT COUNT(*) FROM sales_customers WHERE bot_id=? AND favorite_plan_id IS NOT NULL) AS favorites
+  `).bind(bot.id,since,bot.id,since,bot.id,bot.id,bot.id,bot.id,bot.id).first();
+  const toggles=[
+    ["auto_renew_enabled","♻️ تمدید خودکار"],["smart_recommendations_enabled","🎯 پیشنهاد هوشمند"],
+    ["upsell_enabled","⬆️ ارتقای پلن"],["favorite_plan_enabled","⭐ پلن محبوب"],
+    ["gift_service_enabled","🎁 هدیه سرویس"],["service_health_enabled","🩺 پایش سلامت"],
+    ["auto_failover_enabled","🔀 انتقال خودکار"],["guarantee_enabled","🛡 ضمانت خرید"]
+  ];
+  const rows=toggles.map(([key,label])=>[{text:(resellerFeatureEnabled(fresh,key,key!=="auto_failover_enabled")?"✅ ":"⏸ ")+label,callback_data:"owner:growth:toggle:"+key}]);
+  rows.push([{text:(resellerFeatureEnabled(fresh,"low_balance_alert_enabled",true)?"✅ ":"⏸ ")+"هشدار کمبود موجودی",callback_data:"owner:growth:low"}]);
+  rows.push([{text:"حد هشدار: "+botMoney(fresh.low_balance_threshold_toman||200000)+" تومان",callback_data:"owner:growth:threshold"}]);
+  rows.push([{text:"شارژ پیشنهادی: "+botMoney(fresh.low_balance_recharge_amount_toman||500000)+" تومان",callback_data:"owner:growth:amount"}]);
+  rows.push([{text:"🧰 تعمیر همه",callback_data:"owner:growth:repair"},{text:"⚡ اجرای اتوماسیون",callback_data:"owner:automation:run"}]);
+  rows.push([{text:"↩️ مدیریت",callback_data:"owner:home"}]);
+  return {text:"🚀 <b>مرکز رشد و اتوماسیون پیشرفته</b>\n━━━━━━━━━━━━━━\n"+
+    "سطح نماینده: <b>"+botEscape(fresh.reseller_tier||"bronze")+"</b> · تخفیف سطح: <b>"+Number(fresh.reseller_tier_discount_percent||0)+"٪</b>\n"+
+    "فروش ۳۰ روز: <b>"+botMoney(s?.revenue_30d)+" تومان</b> · سفارش موفق: <b>"+botMoney(s?.sales_30d)+"</b>\n"+
+    "تمدید خودکار فعال: <b>"+botMoney(s?.auto_renew_services)+"</b>\n"+
+    "هدیه تحویل‌شده: <b>"+botMoney(s?.gifts)+"</b> · پلن محبوب: <b>"+botMoney(s?.favorites)+"</b>\n"+
+    "درخواست ضمانت: <b>"+botMoney(s?.pending_guarantees)+"</b> · انتقال در صف: <b>"+botMoney(s?.failover_jobs)+"</b>\n"+
+    "هشدار موجودی: <b>"+(resellerFeatureEnabled(fresh,"low_balance_alert_enabled",true)?"فعال":"غیرفعال")+"</b> · حد: <b>"+botMoney(fresh.low_balance_threshold_toman||200000)+" تومان</b>\n\n"+
+    "هر قابلیت از دکمه مربوطه مستقل فعال یا غیرفعال می‌شود.",reply_markup:{inline_keyboard:rows}};
+}
+
+async function runResellerRepairAll(env, bot, account) {
+  const runId=id("repair"),ts=nowIso();
+  await env.PASARGUARD_DB.prepare(`INSERT INTO repair_runs(id,scope,bot_id,action,status,created_at) VALUES(?,'reseller',?,'repair_all','running',?)`).bind(runId,bot.id,ts).run();
+  const result={webhook:false,topics:false,health:false,automation:false};
+  try{await configureResellerBot(env,bot);result.webhook=true;}catch(_){}
+  try{
+    const forum=await env.PASARGUARD_DB.prepare("SELECT chat_id FROM report_forums WHERE scope_key=? AND status='active'").bind(reportScopeKey(bot.id)).first();
+    if(forum?.chat_id){await configureResellerReportForum(env,bot,{chat:{id:forum.chat_id},from:{id:account.user.telegram_id}},true);result.topics=true;}
+  }catch(_){}
+  try{await runResellerHealthCheck(env,bot);result.health=true;}catch(_){}
+  try{await processResellerSalesAutomation(env,150,bot.id);result.automation=true;}catch(_){}
+  await env.PASARGUARD_DB.prepare(`UPDATE repair_runs SET status='completed',result_json=?,finished_at=? WHERE id=?`).bind(JSON.stringify(result),nowIso(),runId).run();
+  await queueReportEvent(env,bot.id,"system","تعمیر خودکار ربات انجام شد","Webhook: "+(result.webhook?"✅":"❌")+"\nTopicها: "+(result.topics?"✅":"❌")+"\nHealth: "+(result.health?"✅":"❌")+"\nاتوماسیون: "+(result.automation?"✅":"❌"),"repair:"+runId);
+  return result;
 }
 
 async function resellerOwnerSecurityView(env, bot, account) {
@@ -4846,6 +5117,30 @@ async function salesHandleCustomerCallback(env, bot, callback) {
       reply_markup: { inline_keyboard: keyboard }
     });
   }
+  if (data === "sale:recommend") {
+    const view=await salesRecommendationView(env,bot,customer);
+    return resellerTelegramApi(env,bot,"editMessageText",{chat_id:chatId,message_id:callback.message.message_id,text:view.text,parse_mode:"HTML",reply_markup:view.reply_markup});
+  }
+  if (data === "sale:favorite") {
+    const view=await salesFavoritePlanView(env,bot,customer);
+    return resellerTelegramApi(env,bot,"editMessageText",{chat_id:chatId,message_id:callback.message.message_id,text:view.text,parse_mode:"HTML",reply_markup:view.reply_markup});
+  }
+  if (data.startsWith("sale:pf:")) {
+    await setSalesFavoritePlan(env,bot,customer,data.slice("sale:pf:".length));
+    try{await resellerTelegramApi(env,bot,"answerCallbackQuery",{callback_query_id:callback.id,text:"⭐ پلن محبوب ذخیره شد",show_alert:false});}catch(_){}
+    return;
+  }
+  if (data === "sale:gift:start") {
+    const view=await salesGiftPlansView(env,bot,customer);
+    return resellerTelegramApi(env,bot,"editMessageText",{chat_id:chatId,message_id:callback.message.message_id,text:view.text,parse_mode:"HTML",reply_markup:view.reply_markup});
+  }
+  if (data.startsWith("sale:gift:")) {
+    const planId=data.slice("sale:gift:".length);
+    const plan=await env.PASARGUARD_DB.prepare(`SELECT id,title,data_limit_bytes,duration_days,price_toman FROM sales_plans WHERE id=? AND bot_id=? AND status='active'`).bind(planId,bot.id).first();
+    if(!plan)throw new Error("پلن هدیه فعال نیست");
+    await salesSessionSet(env,bot.id,customer.telegram_id,"gift_recipient",{planId});
+    return resellerTelegramApi(env,bot,"editMessageText",{chat_id:chatId,message_id:callback.message.message_id,parse_mode:"HTML",text:"🎁 <b>دریافت‌کننده هدیه</b>\n━━━━━━━━━━━━━━\nشناسه عددی تلگرام دریافت‌کننده را ارسال کنید.\n\nپلن: "+botGb(plan.data_limit_bytes)+" · "+salesPlanDurationLabel(plan.duration_days,"sale")+" · "+botMoney(salesCustomerPlanPrice(plan,customer))+" تومان",reply_markup:{inline_keyboard:[[{text:"لغو",callback_data:"sale:home"}]]}});
+  }
   if (data === "sale:wallet:card" || data === "sale:wallet:online" || data === "sale:wallet:plisio" || data === "sale:wallet:cubepay") {
     const method = data.endsWith(":cubepay") ? "cubepay" : data.endsWith(":plisio") ? "plisio" : data.endsWith(":online") ? "blupal" : "card";
     if (method === "cubepay") {
@@ -4974,9 +5269,28 @@ async function salesHandleCustomerCallback(env, bot, callback) {
     await salesSessionSet(env, bot.id, customer.telegram_id, "import_subscription_link", {});
     return resellerTelegramApi(env, bot, "editMessageText", {
       chat_id: chatId, message_id: callback.message.message_id, parse_mode: "HTML", disable_web_page_preview: true,
-      text: "🔗 <b>افزودن سرویس قبلی</b>\n━━━━━━━━━━━━━━\nلینک اشتراکی را که قبلاً از همین فروشنده یا پنل دریافت کرده‌اید ارسال کنید.\n\nربات لینک را از خود پنل بررسی می‌کند، مالکیت آن را برای این حساب ثبت می‌کند و سپس استعلام، تمدید، افزایش حجم و دریافت لینک از همین ربات انجام می‌شود.\n\n⚠️ لینک را برای شخص دیگری ارسال نکنید؛ دارنده لینک به تنظیمات سرویس دسترسی دارد.",
+      text: "🔗 <b>افزودن سرویس قبلی</b>\n━━━━━━━━━━━━━━\nلینک اشتراکی را که قبلاً از همین فروشنده یا پنل دریافت کرده‌اید ارسال کنید. همچنین می‌توانید تصویر QR اشتراک را بفرستید.\n\nربات لینک را از خود پنل بررسی می‌کند، مالکیت آن را برای این حساب ثبت می‌کند و سپس استعلام، تمدید، افزایش حجم و دریافت لینک از همین ربات انجام می‌شود.\n\n⚠️ لینک را برای شخص دیگری ارسال نکنید؛ دارنده لینک به تنظیمات سرویس دسترسی دارد.",
       reply_markup: { inline_keyboard: [[{ text: "لغو", callback_data: "sale:services" }]] }
     });
+  }
+  if (data.startsWith("svc:ar:")) {
+    const serviceId=data.slice("svc:ar:".length),enabled=await toggleSalesServiceAutoRenew(env,bot,customer,serviceId);
+    try{await resellerTelegramApi(env,bot,"answerCallbackQuery",{callback_query_id:callback.id,text:enabled?"♻️ تمدید خودکار فعال شد":"⏸ تمدید خودکار متوقف شد",show_alert:false});}catch(_){}
+    return salesCustomerSendOrEdit(env,bot,target,"service_detail",{serviceId});
+  }
+  if (data.startsWith("svc:hm:")) {
+    const serviceId=data.slice("svc:hm:".length),enabled=await toggleSalesServiceHealthMonitor(env,bot,customer,serviceId);
+    try{await resellerTelegramApi(env,bot,"answerCallbackQuery",{callback_query_id:callback.id,text:enabled?"🩺 پایش سلامت فعال شد":"🔕 پایش سلامت متوقف شد",show_alert:false});}catch(_){}
+    return salesCustomerSendOrEdit(env,bot,target,"service_detail",{serviceId});
+  }
+  if (data.startsWith("svc:hc:")) {
+    const serviceId=data.slice("svc:hc:".length);await syncSalesService(env,bot,customer,serviceId);
+    return salesCustomerSendOrEdit(env,bot,target,"service_detail",{serviceId});
+  }
+  if (data.startsWith("svc:gu:")) {
+    const serviceId=data.slice("svc:gu:".length);await createGuaranteeClaim(env,bot,customer,serviceId);
+    try{await resellerTelegramApi(env,bot,"answerCallbackQuery",{callback_query_id:callback.id,text:"🛡 درخواست ضمانت ثبت شد",show_alert:true});}catch(_){}
+    return salesCustomerSendOrEdit(env,bot,target,"service_detail",{serviceId});
   }
   if (data.startsWith("svc:rf:") || data.startsWith("sale:service:refresh:")) {
     const serviceId = data.startsWith("svc:rf:") ? data.slice("svc:rf:".length) : data.slice("sale:service:refresh:".length);
@@ -5462,9 +5776,11 @@ async function resellerPeriodStats(env, botId, startIso) {
     (SELECT COALESCE(SUM(amount_toman),0) FROM sales_orders WHERE bot_id=? AND status='delivered' AND created_at>=?) AS revenue,
     (SELECT COALESCE(SUM(discount_toman),0) FROM sales_orders WHERE bot_id=? AND status='delivered' AND created_at>=?) AS discounts,
     (SELECT COALESCE(SUM(cashback_toman),0) FROM sales_orders WHERE bot_id=? AND status='delivered' AND created_at>=?) AS cashback,
+    (SELECT COALESCE(SUM(CASE WHEN amount<0 THEN -amount ELSE 0 END),0) FROM wallet_ledger
+       WHERE user_id=(SELECT user_id FROM reseller_bots WHERE id=?) AND type='usage_charge' AND created_at>=?) AS usage_cost,
     (SELECT COUNT(*) FROM sales_customers WHERE bot_id=? AND created_at>=?) AS new_customers,
     (SELECT COUNT(*) FROM sales_tickets WHERE bot_id=? AND created_at>=?) AS tickets_count`)
-    .bind(botId,startIso,botId,startIso,botId,startIso,botId,startIso,botId,startIso,botId,startIso,botId,startIso).first();
+    .bind(botId,startIso,botId,startIso,botId,startIso,botId,startIso,botId,startIso,botId,startIso,botId,startIso,botId,startIso).first();
 }
 
 async function resellerOwnerExecutiveReportView(env, bot, account) {
@@ -5478,7 +5794,7 @@ async function resellerOwnerExecutiveReportView(env, bot, account) {
     env.PASARGUARD_DB.prepare(`SELECT p.title,COUNT(*) AS c,COALESCE(SUM(o.amount_toman),0) AS revenue FROM sales_orders o JOIN sales_plans p ON p.id=o.plan_id
       WHERE o.bot_id=? AND o.status='delivered' AND o.created_at>=? GROUP BY p.id,p.title ORDER BY c DESC,revenue DESC LIMIT 3`).bind(bot.id,month).all()
   ]);
-  const period=(label,x)=>{const orders=Number(x?.orders_count||0),delivered=Number(x?.delivered_count||0),rate=orders?Math.round(delivered*100/orders):0;return "<b>"+label+"</b>\n🧾 سفارش: "+botMoney(orders)+" · ✅ تحویل: "+botMoney(delivered)+" · تبدیل: "+botMoney(rate)+"٪\n💰 فروش: "+botMoney(x?.revenue||0)+" تومان · تخفیف: "+botMoney(x?.discounts||0)+"\n👤 کاربر جدید: "+botMoney(x?.new_customers||0)+" · 🎫 تیکت: "+botMoney(x?.tickets_count||0);};
+  const period=(label,x)=>{const orders=Number(x?.orders_count||0),delivered=Number(x?.delivered_count||0),rate=orders?Math.round(delivered*100/orders):0,revenue=Number(x?.revenue||0),usageCost=Number(x?.usage_cost||0),cashback=Number(x?.cashback||0),profit=revenue-usageCost-cashback;return "<b>"+label+"</b>\n🧾 سفارش: "+botMoney(orders)+" · ✅ تحویل: "+botMoney(delivered)+" · تبدیل: "+botMoney(rate)+"٪\n💰 فروش: "+botMoney(revenue)+" تومان · هزینه مصرف: "+botMoney(usageCost)+"\n🎁 کش‌بک: "+botMoney(cashback)+" · <b>سود خالص: "+botMoney(profit)+" تومان</b>\n👤 کاربر جدید: "+botMoney(x?.new_customers||0)+" · 🎫 تیکت: "+botMoney(x?.tickets_count||0);};
   const topLines=(top.results||[]).length?(top.results||[]).map((x,i)=>(i+1)+". <b>"+botEscape(x.title)+"</b> · "+botMoney(x.c)+" فروش · "+botMoney(x.revenue)+" تومان").join("\n"):"فروش موفقی در ماه جاری ثبت نشده است.";
   return {text:"📈 <b>گزارش اجرایی نماینده</b>\n━━━━━━━━━━━━━━\n"+period("امروز",d)+"\n\n"+period("هفت روز اخیر",w)+"\n\n"+period("ماه جاری",m)+"\n\n🏆 <b>پلن‌های پرفروش ماه</b>\n"+topLines,
     reply_markup:{inline_keyboard:[[{text:"🔄 بروزرسانی گزارش",callback_data:"owner:executive"}],[{text:"↩️ مدیریت ربات",callback_data:"owner:home"}]]}};
@@ -5728,6 +6044,7 @@ async function resellerOwnerRender(env, bot, account, view = "home", extra = {})
   else if (view === "audit") rendered = await resellerOwnerAuditView(env, bot, account);
   else if (view === "executive") rendered = await resellerOwnerExecutiveReportView(env, bot, account);
   else if (view === "automation") rendered = await resellerOwnerAutomationView(env, bot, account);
+  else if (view === "growth") rendered = await resellerOwnerGrowthView(env, bot, account);
   else if (view === "security") rendered = await resellerOwnerSecurityView(env, bot, account);
   else if (view === "health") rendered = await resellerOwnerHealthView(env, bot, account);
   else if (view === "backups") rendered = await resellerOwnerBackupsView(env, bot, account);
@@ -5843,7 +6160,7 @@ async function resellerOwnerHandleCallback(env, bot, callback) {
     "owner:settings:identity": "settings_identity", "owner:settings:loyalty": "settings_loyalty",
     "owner:settings:support": "settings_support", "owner:settings:automation": "settings_automation",
     "owner:payments": "payments", "owner:payment_methods": "payment_methods", "owner:plisio": "plisio", "owner:cubepay": "cubepay", "owner:campaigns": "campaigns", "owner:staff": "staff", "owner:audit": "audit",
-    "owner:executive": "executive", "owner:automation": "automation", "owner:security": "security", "owner:health": "health", "owner:backups": "backups", "owner:children": "children"
+    "owner:executive": "executive", "owner:automation": "automation", "owner:growth": "growth", "owner:security": "security", "owner:health": "health", "owner:backups": "backups", "owner:children": "children"
   };
   resellerRequirePermission(account, resellerCallbackPermission(data));
   if (!nav[data] && data !== "owner:home") {
@@ -6005,6 +6322,33 @@ async function resellerOwnerHandleCallback(env, bot, callback) {
     return resellerOwnerSendOrEdit(env,await getResellerBotById(env,bot.id),target,"payment_methods");
   }
 
+  if (data === "owner:growth") return resellerOwnerSendOrEdit(env,bot,target,"growth");
+  if (data.startsWith("owner:growth:toggle:")) {
+    const key=data.slice("owner:growth:toggle:".length);
+    const allowed=["auto_renew_enabled","smart_recommendations_enabled","upsell_enabled","favorite_plan_enabled","gift_service_enabled","service_health_enabled","auto_failover_enabled","guarantee_enabled"];
+    if(!allowed.includes(key))throw new Error("قابلیت معتبر نیست");
+    await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET "+key+"=CASE WHEN COALESCE("+key+",1)=1 THEN 0 ELSE 1 END,updated_at=? WHERE id=?").bind(nowIso(),bot.id).run();
+    return resellerOwnerSendOrEdit(env,await getResellerBotById(env,bot.id),target,"growth");
+  }
+  if (data === "owner:growth:low") {
+    await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET low_balance_alert_enabled=CASE WHEN COALESCE(low_balance_alert_enabled,1)=1 THEN 0 ELSE 1 END,updated_at=? WHERE id=?").bind(nowIso(),bot.id).run();
+    return resellerOwnerSendOrEdit(env,await getResellerBotById(env,bot.id),target,"growth");
+  }
+  if (data === "owner:growth:threshold") {
+    const fresh=await getResellerBotById(env,bot.id),values=[50000,100000,200000,500000,1000000],current=Number(fresh.low_balance_threshold_toman||200000),idx=values.indexOf(current),next=values[(idx+1+values.length)%values.length];
+    await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET low_balance_threshold_toman=?,updated_at=? WHERE id=?").bind(next,nowIso(),bot.id).run();
+    return resellerOwnerSendOrEdit(env,await getResellerBotById(env,bot.id),target,"growth");
+  }
+  if (data === "owner:growth:amount") {
+    const fresh=await getResellerBotById(env,bot.id),values=[200000,500000,1000000,2000000,5000000],current=Number(fresh.low_balance_recharge_amount_toman||500000),idx=values.indexOf(current),next=values[(idx+1+values.length)%values.length];
+    await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET low_balance_recharge_amount_toman=?,updated_at=? WHERE id=?").bind(next,nowIso(),bot.id).run();
+    return resellerOwnerSendOrEdit(env,await getResellerBotById(env,bot.id),target,"growth");
+  }
+  if (data === "owner:growth:repair") {
+    const result=await runResellerRepairAll(env,bot,account);
+    try{await resellerTelegramApi(env,bot,"answerCallbackQuery",{callback_query_id:callback.id,text:"تعمیر انجام شد: "+Object.values(result).filter(Boolean).length+" مورد سالم",show_alert:true});}catch(_){}
+    return resellerOwnerSendOrEdit(env,await getResellerBotById(env,bot.id),target,"growth");
+  }
   if (data === "owner:automation:toggle") {
     await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET sales_automation_enabled=CASE WHEN COALESCE(sales_automation_enabled,1)=1 THEN 0 ELSE 1 END,updated_at=? WHERE id=?").bind(nowIso(),bot.id).run();
     return resellerOwnerSendOrEdit(env,await getResellerBotById(env,bot.id),target,"automation");
@@ -7072,7 +7416,7 @@ async function resellerSalesWebhook(request, env, botId, ctx = null) {
       await salesSessionSet(env, bot.id, customer.telegram_id, "import_subscription_link", {});
       await resellerTelegramApi(env, bot, "sendMessage", {
         chat_id: message.chat.id, parse_mode: "HTML", disable_web_page_preview: true,
-        text: "🔗 <b>افزودن سرویس قبلی</b>\nلینک اشتراک سرویس قبلی را ارسال کنید. فقط لینک متعلق به پنل همین نماینده پذیرفته می‌شود.",
+        text: "🔗 <b>افزودن سرویس قبلی</b>\nلینک اشتراک سرویس قبلی را ارسال کنید. فقط لینک متعلق به پنل همین نماینده پذیرفته می‌شود. همچنین می‌توانید تصویر QR اشتراک را بفرستید.",
         reply_markup: { inline_keyboard: [[{ text: "لغو", callback_data: "sale:services" }]] }
       });
       return json({ ok: true });
@@ -7098,7 +7442,8 @@ async function resellerSalesWebhook(request, env, botId, ctx = null) {
     }
     const session = await salesSessionGet(env, bot.id, customer.telegram_id);
     if (session?.state === "import_subscription_link") {
-      const imported = await importSalesServiceBySubscriptionLink(env, bot, customer, text);
+      const subscriptionInput = (Array.isArray(message.photo) && message.photo.length) ? await decodeSubscriptionQrFromTelegramPhoto(env,bot,message) : text;
+      const imported = await importSalesServiceBySubscriptionLink(env, bot, customer, subscriptionInput);
       await salesSessionClear(env, bot.id, customer.telegram_id);
       await resellerTelegramApi(env, bot, "sendMessage", {
         chat_id: message.chat.id, parse_mode: "HTML", disable_web_page_preview: true,
@@ -7107,6 +7452,23 @@ async function resellerSalesWebhook(request, env, botId, ctx = null) {
         reply_markup: { inline_keyboard: [[{ text: "🧭 مشاهده سرویس", callback_data: "sale:service:" + imported.id }], [{ text: "🏠 منوی اصلی", callback_data: "sale:home" }]] }
       });
       return json({ ok: true });
+    }
+    if (session?.state === "gift_recipient") {
+      const recipientId=String(text||"").replace(/\D/g,"");
+      if(!/^\d{5,20}$/.test(recipientId))throw new Error("شناسه عددی تلگرام دریافت‌کننده را ارسال کنید");
+      await salesSessionSet(env,bot.id,customer.telegram_id,"gift_username",{...(session.data||{}),recipientId});
+      await resellerTelegramApi(env,bot,"sendMessage",{chat_id:message.chat.id,parse_mode:"HTML",text:"✍️ نام اشتراک هدیه را ارسال کنید.\nمثال: <code>gift_niko</code>"});
+      return json({ok:true});
+    }
+    if (session?.state === "gift_username") {
+      const requestedUsername=normalizeChosenSubscriptionUsername(text);
+      await assertSalesSubscriptionUsernameAvailable(env,bot,customer,requestedUsername);
+      const planId=cleanText(session.data?.planId,100),recipientId=String(session.data?.recipientId||"");
+      if(!planId||!recipientId)throw new Error("اطلاعات هدیه منقضی شده است");
+      const delivered=await purchaseGiftPlanFromWallet(env,bot,customer,planId,recipientId,requestedUsername,"هدیه از طرف "+(customer.first_name||customer.username||customer.telegram_id));
+      await salesSessionClear(env,bot.id,customer.telegram_id);
+      await resellerTelegramApi(env,bot,"sendMessage",{chat_id:message.chat.id,parse_mode:"HTML",text:"✅ <b>هدیه با موفقیت تحویل شد.</b>\nدریافت‌کننده: <code>"+botEscape(recipientId)+"</code>\nنام سرویس: <code>"+botEscape(delivered.remote_username||requestedUsername)+"</code>"});
+      return json({ok:true});
     }
     if (session?.state === "subscription_username") {
       const requestedUsername = normalizeChosenSubscriptionUsername(text);
@@ -10596,7 +10958,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_EDGE_VERSION='3.2.14';
+const BLUEPANEL_EDGE_VERSION='3.3.0';
 function bluePanelEdgeJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function bluePanelEdgeInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
 function bluePanelEdgeRuntimeBinding(env,name){const value=env?.[name];return{name,exact_key_present:Object.prototype.hasOwnProperty.call(env||{},name),value_present:value!==undefined&&value!==null,fetch_callable:Boolean(value&&typeof value.fetch==='function'),constructor_name:value?.constructor?.name||''}}
