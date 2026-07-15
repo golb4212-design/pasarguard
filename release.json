@@ -1,7 +1,7 @@
 {
-  "version": "3.2.1",
-  "release_id": "3.2.1-20260715-live-usage-manager-function-scope-fix",
-  "architecture": "fully-split-three-worker-durable-live-usage-manager-scope-fixed",
+  "version": "3.2.2",
+  "release_id": "3.2.2-20260715-live-usage-pasarguard-request-scope-fix",
+  "architecture": "fully-split-three-worker-durable-live-usage-request-scope-fixed",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -32,10 +32,11 @@
     ]
   },
   "features": [
-    "fixes live usage failure caused by the undefined pasarguardGetManager symbol",
-    "refreshImportedAgency now calls the existing pasargadGetManager implementation used by billing",
-    "all representative panels continue autonomous usage calculation through Durable Object alarms without cron or user activity",
-    "PasarGuard request retries, API-key permission fallback, exact error diagnostics and billing idempotency are preserved",
+    "fixes live usage failure caused by the undefined pasargadRequest symbol",
+    "all PasarGuard API calls now use the defined pasarguardRequest transport consistently",
+    "the complete live usage call chain was runtime-tested with a mocked PasarGuard admins response",
+    "autonomous representative usage calculation through Durable Object alarms remains independent of cron and user activity",
+    "PasarGuard retries, API-key permission fallback, exact diagnostics and billing idempotency are preserved",
     "subscription import, CubePay, Plisio, automatic USD rates and report topics are preserved",
     "README files are excluded"
   ],
@@ -52,22 +53,23 @@
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "undefined_manager_symbol": "fixed and static verified",
-    "live_usage_call_chain": "refreshImportedAgency -> pasargadGetManager -> pasarguardRequest",
-    "release_manifest_hashes": "recalculated from packaged bytes and uploader-compatible validation passed",
+    "undefined_pasargad_request_symbol": "removed from all executable call sites",
+    "pasarguard_symbol_scan": "passed; no undefined pasargad/pasarguard function calls",
+    "live_usage_runtime_chain": "pasargadGetManager -> pasarguardRequest -> mocked /api/admins response passed",
+    "release_manifest_hashes": "recalculated from packaged bytes and uploader-compatible",
     "zip_integrity": "passed",
     "live_pasarguard_call": "not run without production credentials"
   },
   "sha256": {
-    "core": "f5181e9887eb1a1c374e5fcb962f8d249a230a5d29ebc9de6e4454d2fa503d06",
-    "edge": "07edf8ab7e5c028c2a3c9a346849f8901b1a9bb3f6e1c8b2f8316b846994aaa9",
-    "processor": "73db6a5f52e20c42929c3587f60eebc31fdd418360e825d90d645acc49287cc5",
+    "core": "7c2b98e2bee4238bfa910baf9715294445cbf728fd2f320939609dc591f1efa1",
+    "edge": "b5f81f6771c98fe6d793d454bc938f4729d05b936db9bdbd18f0555555e12478",
+    "processor": "e30ef10bf8b26f5d817c8fb59c1c2d276b248ef581c9a09830456939338fdd37",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "hashes": {
-    "core/worker.js": "f5181e9887eb1a1c374e5fcb962f8d249a230a5d29ebc9de6e4454d2fa503d06",
-    "edge/worker.js": "07edf8ab7e5c028c2a3c9a346849f8901b1a9bb3f6e1c8b2f8316b846994aaa9",
-    "processor/worker.js": "73db6a5f52e20c42929c3587f60eebc31fdd418360e825d90d645acc49287cc5",
+    "core/worker.js": "7c2b98e2bee4238bfa910baf9715294445cbf728fd2f320939609dc591f1efa1",
+    "edge/worker.js": "b5f81f6771c98fe6d793d454bc938f4729d05b936db9bdbd18f0555555e12478",
+    "processor/worker.js": "e30ef10bf8b26f5d817c8fb59c1c2d276b248ef581c9a09830456939338fdd37",
     "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   }
 }

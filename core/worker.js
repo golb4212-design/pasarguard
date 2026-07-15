@@ -1,11 +1,11 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.2.1
+ * Version: 3.2.2
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.2.1";
+const APP_VERSION = "3.2.2";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -3066,7 +3066,7 @@ async function resolvePasarguardRoleId(env, suppliedSettings = null, roleKind = 
   const roleName = String(kind === "master"
     ? (settings.pasarguard_master_role_name || "مستر نمایندگی")
     : (settings.pasarguard_sales_role_name || settings.pasarguard_reseller_role_name || "نماینده فروش")).trim();
-  const data = await pasargadRequest(env, "GET", "/api/admin-roles/simple");
+  const data = await pasarguardRequest(env, "GET", "/api/admin-roles/simple");
   const roles = Array.isArray(data) ? data : (data.roles || data.data || []);
   const role = roles.find(item => String(item.name || "").trim().toLowerCase() === roleName.toLowerCase());
   if (!role?.id) throw new Error("Role پاسارگارد با نام «" + roleName + "» پیدا نشد؛ ابتدا آن را در PasarGuard بسازید یا Role ID را در مدیریت مرکزی ثبت کنید");
@@ -3078,7 +3078,7 @@ async function pasargadSetManagerRole(env, remoteId, roleKind, suppliedSettings 
   if (!remoteId) throw new Error("شناسه مدیر PasarGuard در دسترس نیست");
   const settings = suppliedSettings || await getSettings(env);
   const roleId = await resolvePasarguardRoleId(env, settings, roleKind);
-  await pasargadRequest(env, "PUT", "/api/admin/by-id/" + encodeURIComponent(remoteId), { role_id: roleId });
+  await pasarguardRequest(env, "PUT", "/api/admin/by-id/" + encodeURIComponent(remoteId), { role_id: roleId });
   return roleId;
 }
 
@@ -3136,7 +3136,7 @@ async function pasargadCreateManager(env, input) {
   const dataLimit = Number.parseInt(String(requestedDataLimit || "0"), 10);
   if (Number.isInteger(dataLimit) && dataLimit > 0) payload.data_limit = dataLimit;
   if (settings.pasarguard_sub_domain) payload.sub_domain = String(settings.pasarguard_sub_domain).trim();
-  const data = await pasargadRequest(env, "POST", "/api/admin", payload);
+  const data = await pasarguardRequest(env, "POST", "/api/admin", payload);
   const remoteId = data?.id || data?.data?.id;
   if (!remoteId) throw new Error("شناسه مدیر در پاسخ PasarGuard پیدا نشد");
   return { remoteId: String(remoteId), raw: data };
@@ -3144,7 +3144,7 @@ async function pasargadCreateManager(env, input) {
 
 async function pasargadDeleteManager(env, remoteId) {
   if (!remoteId) return;
-  try { await pasargadRequest(env, "DELETE", "/api/admin/by-id/" + encodeURIComponent(remoteId)); } catch (_) {}
+  try { await pasarguardRequest(env, "DELETE", "/api/admin/by-id/" + encodeURIComponent(remoteId)); } catch (_) {}
 }
 
 function extractUsageBytes(data) {
@@ -3168,7 +3168,7 @@ async function pasargadGetManager(env, remoteId) {
   let lastError = null;
   for (let index = 0; index < attempts.length; index++) {
     try {
-      const data = await pasargadRequest(env, "GET", "/api/admins?" + attempts[index].toString());
+      const data = await pasarguardRequest(env, "GET", "/api/admins?" + attempts[index].toString());
       const admins = Array.isArray(data) ? data : (data.admins || data.data || []);
       const admin = admins.find(item => String(item.id) === remoteKey) || (index === 0 ? admins[0] : null);
       if (admin) return admin;
@@ -3224,7 +3224,7 @@ async function pasarguardFindManagersByTelegramId(env, telegramId) {
 
   for (let page = 0; page < 100 && offset < total; page++) {
     const query = new URLSearchParams({ offset: String(offset), limit: String(pageSize) });
-    const data = await pasargadRequest(env, "GET", "/api/admins?" + query.toString());
+    const data = await pasarguardRequest(env, "GET", "/api/admins?" + query.toString());
     const admins = pasarguardAdminList(data);
     const reportedTotal = Number(data?.total);
     total = Number.isFinite(reportedTotal) ? reportedTotal : Number.POSITIVE_INFINITY;
@@ -3478,7 +3478,7 @@ async function pasargadGetUsage(env, agency) {
 
 async function pasargadSetManagerStatus(env, remoteId, enabled) {
   if (!remoteId) return;
-  await pasargadRequest(env, "PUT", "/api/admin/by-id/" + encodeURIComponent(remoteId), {
+  await pasarguardRequest(env, "PUT", "/api/admin/by-id/" + encodeURIComponent(remoteId), {
     status: enabled ? "active" : "disabled"
   });
 }
@@ -5360,7 +5360,7 @@ async function updateOwnedAgency(env, user, agencyId, input = {}) {
   if (Number.isSafeInteger(telegramId) && telegramId > 0) payload.telegram_id = telegramId;
   if (!hasTitle && !hasSupport && !hasPassword) throw new Error("حداقل یک مورد برای ویرایش ارسال کنید");
 
-  await pasargadRequest(env, "PUT", "/api/admin/by-id/" + encodeURIComponent(agency.remote_manager_id), payload);
+  await pasarguardRequest(env, "PUT", "/api/admin/by-id/" + encodeURIComponent(agency.remote_manager_id), payload);
   await env.PASARGUARD_DB.prepare("UPDATE agencies SET title=?,panel_password_enc=?,updated_at=? WHERE id=? AND user_id=?")
     .bind(nextTitle, nextPasswordEnc, nowIso(), agency.id, user.id).run();
   await audit(env, user.id, "agency_information_updated", {
@@ -13342,7 +13342,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.2.1';
+const BLUEPANEL_CORE_VERSION = '3.2.2';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
