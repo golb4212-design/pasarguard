@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.2.4
+ * Version: 3.2.5
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = "3.2.4";
+const APP_VERSION = "3.2.5";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -3112,18 +3112,28 @@ function salesPlanDurationLabel(days, planType) {
   return botMoney(numericDays) + " روزه";
 }
 
+function salesPlanDisplayTitle(plan, requestedPlanType) {
+  const size = botGb(plan.data_limit_bytes);
+  const duration = salesPlanDurationLabel(plan.duration_days, requestedPlanType);
+  if (requestedPlanType === "volume") return "افزایش حجم | حجم: " + size;
+  if (requestedPlanType === "renew") return "تمدید سرویس | حجم: " + size + " | مدت: " + duration;
+  return "پلن سرویس | حجم: " + size + " | مدت: " + duration;
+}
+
 function salesPlanSummaryButton(plan, finalPrice, requestedPlanType) {
   const size = botGb(plan.data_limit_bytes);
   const duration = salesPlanDurationLabel(plan.duration_days, requestedPlanType);
-  return "🚀 " + size + " | " + duration + " | " + botMoney(finalPrice) + " تومان";
+  return "🚀 حجم: " + size + " • مدت: " + duration + " • قیمت: " + botMoney(finalPrice) + " تومان";
 }
 
 function salesPlanDetailsText(plan, price, requestedPlanType, activePromo, wholesaleDiscount) {
-  return "<b>" + botEscape(plan.title) + "</b>\n" +
+  const registeredTitle = cleanText(plan.title, 120);
+  return "<b>" + botEscape(salesPlanDisplayTitle(plan, requestedPlanType)) + "</b>\n" +
     (plan.location_title ? (plan.location_emoji || "🌍") + " " + botEscape(plan.location_title) + (plan.category_title ? " · " : "") : "") +
     (plan.category_title ? (plan.category_emoji || "📁") + " " + botEscape(plan.category_title) : "") +
     ((plan.location_title || plan.category_title) ? "\n" : "") +
-    "حجم: <b>" + botGb(plan.data_limit_bytes) + "</b>" + (requestedPlanType === "volume" ? " · روی سرویس فعلی" : " · مدت: <b>" + salesPlanDurationLabel(plan.duration_days, requestedPlanType) + "</b>") + "\n" +
+    (registeredTitle ? "نام ثبت‌شده: <b>" + botEscape(registeredTitle) + "</b>\n" : "") +
+    "حجم: <b>" + botGb(plan.data_limit_bytes) + "</b>" + (requestedPlanType === "volume" ? " · روی سرویس فعلی" : "\nمدت: <b>" + salesPlanDurationLabel(plan.duration_days, requestedPlanType) + "</b>") + "\n" +
     "قیمت: <b>" + botMoney(price.finalPrice) + " تومان</b>" +
     ((wholesaleDiscount > 0 || price.promoDiscount > 0) ? " <s>" + botMoney(plan.price_toman) + "</s>" : "") +
     (price.promoDiscount > 0 ? " · کد " + botEscape(activePromo.code) : wholesaleDiscount > 0 ? " · عمده " + wholesaleDiscount + "٪" : "");
@@ -10395,7 +10405,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_EDGE_VERSION='3.2.4';
+const BLUEPANEL_EDGE_VERSION='3.2.5';
 function bluePanelEdgeJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function bluePanelEdgeInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
 function bluePanelEdgeRuntimeBinding(env,name){const value=env?.[name];return{name,exact_key_present:Object.prototype.hasOwnProperty.call(env||{},name),value_present:value!==undefined&&value!==null,fetch_callable:Boolean(value&&typeof value.fetch==='function'),constructor_name:value?.constructor?.name||''}}

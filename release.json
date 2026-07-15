@@ -1,6 +1,6 @@
 {
-  "version": "3.2.4",
-  "release_id": "3.2.4-20260715-usage-wallet-collection-report-fix",
+  "version": "3.2.5",
+  "release_id": "3.2.5-20260715-plan-title-and-order-fix",
   "architecture": "fully-split-three-worker-live-usage-wallet-collection-report-fixed",
   "files": {
     "core": "core/worker.js",
@@ -32,14 +32,11 @@
     ]
   },
   "features": [
-    "every new direct representative-panel usage delta is transactionally deducted from the owner wallet and recorded in wallet_ledger",
-    "central usage sync now reports both billed amount and actual wallet deduction",
-    "live usage reports separate direct billing, direct wallet collection, downline billing, downline collection, outstanding debt and total real collection",
-    "the central representative-traffic view displays owner wallet balances and total actual usage deductions",
-    "manual and background downline billing use the same idempotent event guard to prevent duplicate deductions",
-    "current-version-only update channel notes and the cleaned product picker from 3.2.3 are preserved",
-    "README files are excluded",
-    "pending live-usage report rows from older versions are marked superseded during activation so stale zero-collection messages are not delivered later"
+    "fixes reseller plan-name rendering so the selected plan is shown with a normalized readable title",
+    "moves volume/size to the beginning and price to the end in purchase buttons and plan details",
+    "selected-plan details now show the normalized service title plus the registered internal title",
+    "3.2.4 live-usage wallet collection fixes remain included",
+    "README files are excluded"
   ],
   "deployment": {
     "required_binding_name": "LIVE_USAGE_COORDINATOR",
@@ -54,24 +51,21 @@
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "direct_usage_wallet_deduction": "passed with SQLite first-charge and duplicate-event simulation",
-    "downline_usage_idempotency": "passed with SQLite collection and duplicate-event simulation",
-    "live_report_collection_totals": "passed; direct and downline collections are summed separately and as total real collection",
-    "current_release_notes_filter": "passed; announcement reads RELEASE_NOTES[APP_VERSION] only",
-    "stale_live_report_cleanup": "passed by static activation-path check",
-    "release_manifest_hashes": "recalculated from packaged bytes",
+    "plan_summary_order": "passed",
+    "selected_plan_detail_layout": "passed",
+    "release_manifest_hashes": "recalculated",
     "zip_integrity": "passed"
   },
   "sha256": {
-    "core": "f56791e286a2290ab817f010385427744a5fae58edd83cb12ef1e383ff3dbf16",
-    "edge": "0a669f9a9102aa7cf1425570f361ad68287c52edcd58088156d0946713b5b195",
-    "processor": "9a2be2da33e442c2f6905ffbcfee7215223dbfa3d041edbbbd4fca034bced877",
+    "core": "0be1f428084b032f5937824e06cdf39678ee8e58062495b356c792b0e27ff449",
+    "edge": "943a3e89ee29302dbf6c10f1215d011ccb0890c05467374e019db40661ad997a",
+    "processor": "aa9e8cd1d6623c9f99292db2a5e40c4992fd0870abcb666f0d952de1f1856911",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "hashes": {
-    "core/worker.js": "f56791e286a2290ab817f010385427744a5fae58edd83cb12ef1e383ff3dbf16",
-    "edge/worker.js": "0a669f9a9102aa7cf1425570f361ad68287c52edcd58088156d0946713b5b195",
-    "processor/worker.js": "9a2be2da33e442c2f6905ffbcfee7215223dbfa3d041edbbbd4fca034bced877",
+    "core/worker.js": "0be1f428084b032f5937824e06cdf39678ee8e58062495b356c792b0e27ff449",
+    "edge/worker.js": "943a3e89ee29302dbf6c10f1215d011ccb0890c05467374e019db40661ad997a",
+    "processor/worker.js": "aa9e8cd1d6623c9f99292db2a5e40c4992fd0870abcb666f0d952de1f1856911",
     "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   }
 }
