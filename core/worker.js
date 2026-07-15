@@ -1,15 +1,26 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.9
+ * Version: 3.3.10
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.9';
+const APP_VERSION = '3.3.10';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.10": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🧰", text: "اصلاح نتیجه تعمیر خودکار؛ وضعیت completed فقط با سلامت واقعی Processor نمایش داده می‌شود" },
+      { emoji: "🔁", text: "جلوگیری از پیام تکراری تعمیر با ویرایش همان پیام مرکز خطا به‌جای ارسال پیام جدید" },
+      { emoji: "🩺", text: "تأیید چندمسیره Worker سوم با سلامت مستقیم، نسخه Runtime و اجرای پردازش‌ها" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "🗑", text: "افزودن حذف سرویس داخل صفحه مشاهده سرویس با تأیید دو مرحله‌ای" },
+      { emoji: "🛡", text: "حفظ سوابق خرید و توقف خودکار تمدید، پایش و Failover پس از حذف سرویس" }
+    ])
+  }),
   "3.3.9": Object.freeze({
     central: Object.freeze([
       { emoji: "🧹", text: "حذف نمایش تکراری جزئیات سفارش‌ها در بالای دکمه‌های سرویس" },
@@ -7607,21 +7618,28 @@ async function repairProcessorRuntime(env) {
   const attempts = [];
   let lastError = "";
   const testRuntime = async (stage) => {
-    let health = null;
+    let health = null, versionProbe = null;
     try { health = await inspectProcessorServiceBinding(env); }
     catch (error) { health = { connected: false, error: cleanText(error?.message || error, 500) }; }
+    try { versionProbe = await probeProcessorRuntimeVersion(env, Date.now()); } catch (_) {}
     const run = await triggerProcessorBusinessJobs(env, "central_repair_" + stage);
-    const healthReady = health?.connected === true || Boolean(health?.binding_detected === true && health?.probe?.reachable === true && health?.database_query_ok !== false && String(health?.role || health?.probe?.response_role || "") === "bluepanel-processor");
+    const directRole = String(versionProbe?.role || versionProbe?.response_role || "");
+    const directReady = versionProbe?.ok === true && (!directRole || directRole === "bluepanel-processor");
+    const healthReady = health?.connected === true || health?.probe?.healthy === true || directReady || Boolean(
+      health?.binding_detected === true && health?.probe?.reachable === true && health?.database_query_ok !== false &&
+      String(health?.role || health?.probe?.response_role || "") === "bluepanel-processor"
+    );
     const businessReady = run?.success === true;
     const success = businessReady || healthReady;
     const warning = success && !businessReady ? cleanText(run?.error || "Runtime سالم است اما اجرای دوره‌ای در این تلاش کامل نشد", 700) : cleanText(run?.business?.partial ? ((run.business.errors || []).slice(0, 2).map(x => x.step + ": " + x.error).join(" | ") || "برخی کارهای اختیاری با خطا پایان یافت") : "", 700);
-    lastError = success ? "" : cleanText(run?.error || health?.error || "Processor پاسخ سالم نداد", 700);
-    attempts.push({ stage, success, health_ready: healthReady, business_ready: businessReady, warning, health_status: health?.status || "", health_version: health?.version || health?.probe?.response_version || "", error: lastError, http_status: run?.http_status || null });
-    return { success, health, run, warning };
+    lastError = success ? "" : cleanText(run?.error || health?.error || versionProbe?.error || "Processor پاسخ سالم نداد", 700);
+    const runtimeVersion = cleanText(versionProbe?.version || health?.version || health?.probe?.response_version || "", 80);
+    attempts.push({ stage, success, health_ready: healthReady, business_ready: businessReady, direct_ready: directReady, warning, health_status: health?.status || "", health_version: runtimeVersion, error: lastError, http_status: run?.http_status || null });
+    return { success, health, run, warning, versionProbe, version: runtimeVersion };
   };
 
   const current = await testRuntime("existing");
-  if (current.success) return { success: true, action: "existing_runtime", deployed: false, version: current.health?.version || current.health?.probe?.response_version || "", warning: current.warning || "", attempts, run: current.run };
+  if (current.success) return { success: true, action: "existing_runtime", deployed: false, version: current.version || current.health?.version || current.health?.probe?.response_version || "", warning: current.warning || "", attempts, run: current.run };
 
   let deployment = null;
   try {
@@ -7643,7 +7661,7 @@ async function repairProcessorRuntime(env) {
     const checked = await testRuntime("after_deploy_" + (i + 1));
     if (checked.success) {
       try { await persistProcessorServiceState(env, checked.health, { enable: true }); } catch (_) {}
-      return { success: true, action: "deployed_and_restarted", deployed: true, version: deployment?.version || checked.health?.version || APP_VERSION, warning: checked.warning || "", deployment, attempts, run: checked.run };
+      return { success: true, action: "deployed_and_restarted", deployed: true, version: deployment?.version || checked.version || checked.health?.version || APP_VERSION, warning: checked.warning || "", deployment, attempts, run: checked.run };
     }
   }
   return { success: false, action: "runtime_not_ready", deployed: true, version: deployment?.version || APP_VERSION, error: lastError || "کد Processor نصب شد اما Runtime هنوز پاسخ سالم نداد", deployment, attempts };
@@ -10083,7 +10101,8 @@ async function runCentralRepairAll(env, account) {
     result.processor_deployed=repaired?.deployed===true;
     result.processor_attempts=repaired?.attempts||[];
   }catch(error){result.processor_error=cleanText(error?.message||error,700);console.error("repair processor",error);}
-  const status=result.menus&&result.health&&result.backups&&result.reports&&result.processor?"completed":"partial";
+  result.processor=result.processor===true;
+  const status=(result.menus===true&&result.health===true&&result.backups===true&&result.reports===true&&result.processor===true)?"completed":"partial";
   if(tracking){try{await env.PASARGUARD_DB.prepare("UPDATE repair_runs SET status=?,result_json=?,finished_at=? WHERE id=?").bind(status,JSON.stringify(result),nowIso(),runId).run();}catch(_){}}
   try{await audit(env,account.user.id,"central_repair_all",{runId,status,result});}catch(_){}
   return {runId,status,tracking,...result};
@@ -11754,8 +11773,22 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
   }
   if (data === "bot:admin:repair_all") {
     if(!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+    try { await telegramApi(env,"answerCallbackQuery",{callback_query_id:callback.id,text:"🧰 تعمیر شروع شد…",show_alert:false,cache_time:0}); } catch (_) {}
+    try { await telegramApi(env,"editMessageText",{chat_id:chatId,message_id:messageId,parse_mode:"HTML",text:`🧰 <b>تعمیر خودکار در حال اجراست…</b>
+لطفاً چند لحظه صبر کنید.`,reply_markup:{inline_keyboard:[]}}); } catch (_) {}
     const result=await runCentralRepairAll(env,account);
-    await botPrompt(env,chatId,"🧰 <b>تعمیر خودکار پایان یافت</b>\nوضعیت: <b>"+botEscape(result.status)+"</b>\nمنوها: "+(result.menus?"✅":"❌")+" · سلامت: "+(result.health?"✅":"❌")+" · بکاپ: "+(result.backups?"✅":"❌")+" · گزارش: "+(result.reports?"✅":"❌")+" · Processor: "+(result.processor?"✅":"❌")+(result.processor_version?"\nنسخه Processor: <code>"+botEscape(result.processor_version)+"</code>":"")+(result.processor_deployed?" · Deploy خودکار: ✅":"")+(result.processor_warning?"\n⚠️ هشدار غیرمسدودکننده: <code>"+botEscape(result.processor_warning)+"</code>":"")+(result.processor_error?"\n⚠️ علت: <code>"+botEscape(result.processor_error)+"</code>":""),[[{text:"↩️ مرکز خطا",callback_data:"bot:admin:errors"}]]);
+    const allOk=result.menus===true&&result.health===true&&result.backups===true&&result.reports===true&&result.processor===true;
+    const honestStatus=allOk?"completed":"partial";
+    const resultText=[
+      "🧰 <b>تعمیر خودکار پایان یافت</b>",
+      "وضعیت: <b>"+honestStatus+"</b>",
+      "منوها: "+(result.menus?"✅":"❌")+" · سلامت: "+(result.health?"✅":"❌")+" · بکاپ: "+(result.backups?"✅":"❌")+" · گزارش: "+(result.reports?"✅":"❌")+" · Processor: "+(result.processor?"✅":"❌"),
+      result.processor_version?"نسخه Processor: <code>"+botEscape(result.processor_version)+"</code>"+(result.processor_deployed?" · Deploy خودکار: ✅":""):"",
+      result.processor_warning?"⚠️ هشدار غیرمسدودکننده: <code>"+botEscape(result.processor_warning)+"</code>":"",
+      result.processor_error?"⚠️ علت: <code>"+botEscape(result.processor_error)+"</code>":""
+    ].filter(Boolean).join("\n");
+    try { await telegramApi(env,"editMessageText",{chat_id:chatId,message_id:messageId,parse_mode:"HTML",text:resultText,reply_markup:{inline_keyboard:[[{text:"↩️ مرکز خطا",callback_data:"bot:admin:errors"}]]}}); }
+    catch (_) { await botPrompt(env,chatId,resultText,[[{text:"↩️ مرکز خطا",callback_data:"bot:admin:errors"}]]); }
     return;
   }
   if (data === "bot:admin:reseller_backup_all") {

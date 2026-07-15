@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.9
+ * Version: 3.3.10
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = '3.3.9';
+const APP_VERSION = '3.3.10';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -3757,6 +3757,7 @@ async function salesCustomerServiceDetailView(env, bot, customer, serviceId) {
   buttons.push([{ text: "🔐 تعویض لینک", callback_data: "svc:rc:" + service.id }, { text: "♻️ تمدید", callback_data: "sale:renew:" + service.id }]);
   buttons.push([{ text: "➕ افزایش حجم", callback_data: "sale:volume:" + service.id }]);
   if (guaranteeActive) buttons.push([{text:"🛡 استفاده از ضمانت",callback_data:"svc:gu:"+service.id}]);
+  buttons.push([{ text: "🗑 حذف سرویس", callback_data: "svc:dc:" + service.id }]);
   buttons.push([{ text: "↩️ سرویس‌های من", callback_data: "sale:services" }]);
   return { text, reply_markup: { inline_keyboard: buttons } };
 }
@@ -5399,6 +5400,27 @@ async function salesHandleCustomerCallback(env, bot, callback) {
     const serviceId = data.startsWith("svc:rv:") ? data.slice("svc:rv:".length) : data.slice("sale:service:revoke:".length);
     await revokeSalesServiceSubscription(env, bot, customer, serviceId);
     return salesCustomerSendOrEdit(env, bot, target, "service_detail", { serviceId });
+  }
+  if (data.startsWith("svc:dc:")) {
+    const serviceId=data.slice("svc:dc:".length);
+    const service=await getSalesServiceOrder(env,bot,customer,serviceId);
+    return resellerTelegramApi(env,bot,"editMessageText",{
+      chat_id:chatId,message_id:callback.message.message_id,parse_mode:"HTML",
+      text:`🗑 <b>حذف دائمی سرویس</b>
+━━━━━━━━━━━━━━
+سرویس <code>${botEscape(service.remote_username)}</code> از پنل PasarGuard حذف می‌شود.
+
+⚠️ این عملیات قابل بازگشت نیست؛ لینک اشتراک از کار می‌افتد و تمدید خودکار، پایش سلامت و انتقال خودکار این سرویس متوقف می‌شوند.
+
+برای تأیید نهایی دکمه قرمز را بزنید.`,
+      reply_markup:{inline_keyboard:[[{text:"❌ حذف دائمی سرویس",callback_data:"svc:dd:"+serviceId}],[{text:"لغو و بازگشت",callback_data:"sale:service:"+serviceId}]]}
+    });
+  }
+  if (data.startsWith("svc:dd:")) {
+    const serviceId=data.slice("svc:dd:".length);
+    const result=await deleteSalesService(env,bot,customer,serviceId,{actor:"customer",actorLabel:"مالک سرویس"});
+    try{await resellerTelegramApi(env,bot,"answerCallbackQuery",{callback_query_id:callback.id,text:"✅ سرویس "+cleanText(result.remote_username,32)+" حذف شد",show_alert:true,cache_time:0});}catch(_){}
+    return salesCustomerSendOrEdit(env,bot,target,"services");
   }
   if (data.startsWith("sale:order:")) {
     const orderId = data.slice("sale:order:".length);

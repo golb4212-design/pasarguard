@@ -1,7 +1,7 @@
 {
-  "version": "3.3.9",
-  "release_id": "3.3.9-20260715-service-name-only-telegram-list",
-  "architecture": "fully-split-three-worker-service-name-only-customer-list",
+  "version": "3.3.10",
+  "release_id": "3.3.10-20260716-service-delete-and-repair-truth-fix",
+  "architecture": "fully-split-three-worker-service-delete-repair-truth-fixed",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -32,12 +32,13 @@
     ]
   },
   "features": [
-    "shows only the actual remote service username on customer service buttons",
-    "removes repeated order and service details above the inline keyboard",
-    "deduplicates renewal and volume operations into one button per active service",
-    "opens the service detail page directly from the username button",
-    "keeps safe two-step service deletion, service management and all 3.3.8 runtime repair fixes",
-    "does not add or migrate any D1 table",
+    "adds a two-step permanent service deletion button inside the customer service detail screen",
+    "deletes the remote PasarGuard user while preserving local order and payment history",
+    "stops auto renewal, health monitoring, guarantee and failover jobs after service deletion",
+    "verifies Processor through direct health, runtime version and business execution paths",
+    "never reports repair completed when Processor or another required group failed",
+    "edits the original error-center message during repair to prevent duplicate Telegram result messages",
+    "keeps all previous service-list simplification, normalized D1 schema and recovery protections",
     "README files are excluded"
   ],
   "deployment": {
@@ -53,8 +54,11 @@
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "service_button_labels_username_only": "passed by static assertion",
-    "duplicate_service_text_removed": "passed by static assertion",
+    "service_delete_button_present": "passed by static assertion",
+    "service_delete_two_step_callbacks": "passed by static assertion",
+    "repair_status_requires_processor": "passed by static assertion",
+    "repair_message_edit_in_place": "passed by static assertion",
+    "telegram_callback_size": "passed",
     "release_manifest_hashes": "recalculated",
     "zip_integrity": "passed",
     "live_cloudflare_deployment": "not run without production credentials"
@@ -65,15 +69,15 @@
     "remote service deletion still requires users.delete permission on the connected PasarGuard administrator"
   ],
   "sha256": {
-    "core": "812eb7bf00402f7c9a486fcafa214b99baff9983ce3d280e4a8c05464e61d428",
-    "edge": "eec0d993fb0b8405e599674a24262c8253b4470f2604775792e61dad575fcb80",
-    "processor": "5f93530c9898ce46fc3d6e915f49620a05a6829a27d3b913aee55d2571edc81f",
+    "core": "42973d71f9c8d815ea70790dd9604acba185b823fbb7d1450eb7240d22d266d0",
+    "edge": "5ecd39b76952d31a67b1599af020d217c4a9c5d59a6e9859e5e89cca9026c163",
+    "processor": "cfcfcf784a5c9aec6e57816c995561851045992099cc2579a46aae3204954ec6",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "hashes": {
-    "core/worker.js": "812eb7bf00402f7c9a486fcafa214b99baff9983ce3d280e4a8c05464e61d428",
-    "edge/worker.js": "eec0d993fb0b8405e599674a24262c8253b4470f2604775792e61dad575fcb80",
-    "processor/worker.js": "5f93530c9898ce46fc3d6e915f49620a05a6829a27d3b913aee55d2571edc81f",
+    "core/worker.js": "42973d71f9c8d815ea70790dd9604acba185b823fbb7d1450eb7240d22d266d0",
+    "edge/worker.js": "5ecd39b76952d31a67b1599af020d217c4a9c5d59a6e9859e5e89cca9026c163",
+    "processor/worker.js": "cfcfcf784a5c9aec6e57816c995561851045992099cc2579a46aae3204954ec6",
     "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   }
 }
