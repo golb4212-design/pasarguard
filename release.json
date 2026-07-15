@@ -1,7 +1,7 @@
 {
-  "version": "3.3.11",
-  "release_id": "3.3.11-20260716-panel-runtime-cache-sync",
-  "architecture": "fully-split-three-worker-panel-runtime-version-cache-synced",
+  "version": "3.3.12",
+  "release_id": "3.3.12-20260716-cloudflare-upload-receipt-verification",
+  "architecture": "fully-split-three-worker-upload-receipt-runtime-verification",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -32,50 +32,48 @@
     ]
   },
   "features": [
-    "shows the embedded active Edge build version in central and reseller web panels instead of stale persisted values",
-    "adds versioned management URLs and build-aware API cache-busting after every release",
-    "forces service-worker update, removes legacy browser caches and uses network-only navigation",
-    "adds no-store/no-cache headers and x-bluepanel-version to every panel HTML response",
-    "aligns APP_VERSION with BLUEPANEL_CORE_VERSION, BLUEPANEL_EDGE_VERSION and BLUEPANEL_PROCESSOR_VERSION",
-    "keeps service deletion, service-name-only lists and Processor repair fixes from previous releases",
+    "treats a successful Cloudflare Worker upload response as the authoritative source acceptance receipt",
+    "keeps Content API parsing as diagnostics only so multipart or minified responses cannot create a false deployment failure",
+    "polls Edge and Processor runtime independently and reports propagation as pending instead of failing the update",
+    "fixes Version regex escaping for plain source responses",
+    "keeps panel cache sync, safe service deletion, Processor repair isolation and all previous features",
     "README files are excluded"
   ],
   "deployment": {
-    "automatic_provisioning": "upload the ZIP through the central bot; Edge is deployed first and the new management links include the release version",
+    "automatic_provisioning": "upload the ZIP through the central bot; no manual D1 action is required",
     "required_binding_name": "LIVE_USAGE_COORDINATOR",
     "required_class_name": "LiveUsageCoordinator",
     "migration_tag": "v3.1.9-live-usage (unchanged)",
     "db_schema_revision": "3.3.5 (unchanged; no new schema migration)",
     "cron": "existing schedules may remain",
-    "pasarguard_delete_permission": "the connected panel administrator must have users.delete permission"
+    "pasarguard_delete_permission": "the connected panel administrator must have users.delete permission",
+    "verification_flow": "Cloudflare PUT success receipt -> repeated runtime probe; Content API is diagnostic only"
   },
   "validation": {
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "panel_embedded_build_version": "passed by static assertion",
-    "panel_api_client_version": "passed by static assertion",
-    "panel_cache_headers": "passed by static assertion",
-    "service_worker_cache_reset": "passed by static assertion",
-    "dedicated_runtime_markers": "passed by static assertion",
+    "upload_receipt_fail_open": "passed by static assertion",
+    "runtime_pending_nonblocking": "passed by static assertion",
+    "version_regex_escape": "passed by static assertion",
     "release_manifest_hashes": "recalculated",
     "zip_integrity": "passed",
     "live_cloudflare_deployment": "not run without production credentials"
   },
   "limitations": [
     "production Cloudflare, Telegram and PasarGuard calls were not executed without account credentials",
-    "an already-open browser tab may need to be closed once; all newly opened versioned management links load the current panel build"
+    "a successful Cloudflare upload can be followed by a short runtime propagation delay, which is reported as pending rather than a failed deployment"
   ],
   "sha256": {
-    "core": "78d00f7cc1a60a0b81b056f89d379a8c8bc23e82448b33d289f76018e480ca41",
-    "edge": "e29581be2f7b30d06967f983e6883a6567530ee5c361e422c40a4aa62edb024f",
-    "processor": "e4be031f5dc2ac00e8ba2b292c072dd241087ccd04ff84a44ef5eabaa46dcdf5",
+    "core": "e9429d769cc5dfc79a4f031339e3654de6f017bf75e9961d6fd9f3e350fa9cc2",
+    "edge": "5ddd8623904b5e8383042dc80f5ed883935ac31a180f67ba8fe366f41759be83",
+    "processor": "fd20e99959db3791c94565d2c0791ae5b67442e1ed9adb85a476d0fee215194e",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "hashes": {
-    "core/worker.js": "78d00f7cc1a60a0b81b056f89d379a8c8bc23e82448b33d289f76018e480ca41",
-    "edge/worker.js": "e29581be2f7b30d06967f983e6883a6567530ee5c361e422c40a4aa62edb024f",
-    "processor/worker.js": "e4be031f5dc2ac00e8ba2b292c072dd241087ccd04ff84a44ef5eabaa46dcdf5",
+    "core/worker.js": "e9429d769cc5dfc79a4f031339e3654de6f017bf75e9961d6fd9f3e350fa9cc2",
+    "edge/worker.js": "5ddd8623904b5e8383042dc80f5ed883935ac31a180f67ba8fe366f41759be83",
+    "processor/worker.js": "fd20e99959db3791c94565d2c0791ae5b67442e1ed9adb85a476d0fee215194e",
     "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   }
 }

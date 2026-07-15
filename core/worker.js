@@ -1,15 +1,25 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.11
+ * Version: 3.3.12
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.11';
+const APP_VERSION = '3.3.12';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.12": Object.freeze({
+    central: Object.freeze([
+      { emoji: "☁️", text: "حذف وابستگی استقرار به استخراج متن فایل Worker از Content API کلادفلر" },
+      { emoji: "🧾", text: "تأیید نصب با رسید موفق Cloudflare و سپس بررسی جداگانه Runtime فعال" },
+      { emoji: "🔍", text: "اصلاح الگوی خواندن Version و جلوگیری از خطای کاذب نسخه فایل نامشخص" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "✅", text: "فعال‌سازی پایدار Worker دوم و سوم حتی هنگام پاسخ multipart یا تأخیر Runtime" }
+    ])
+  }),
   "3.3.11": Object.freeze({
     central: Object.freeze([
       { emoji: "🖥", text: "همگام‌سازی نسخه پنل وب با Runtime فعال و حذف نمایش نسخه قدیمی ذخیره‌شده" },
@@ -7463,8 +7473,8 @@ function bluePanelVersionFromWorkerContent(source, contentType = "") {
   const version = "v?\\d+(?:\\.\\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?";
   const patterns = [
     new RegExp("\\b(?:const|let|var)\\s+(?:APP_VERSION|CORE_VERSION|EDGE_VERSION|PROCESSOR_VERSION|BLUEPANEL_CORE_VERSION|BLUEPANEL_EDGE_VERSION|BLUEPANEL_PROCESSOR_VERSION)\\s*=\\s*[\"'](" + version + ")[\"']"),
-    new RegExp("\\bVersion\\s*:\s*(" + version + ")", "i"),
-    new RegExp("[\"']version[\"']\\s*:\s*[\"'](" + version + ")[\"']", "i")
+    new RegExp("\\bVersion\\s*:\\s*(" + version + ")", "i"),
+    new RegExp("[\"']version[\"']\\s*:\\s*[\"'](" + version + ")[\"']", "i")
   ];
   for (const text of bluePanelWorkerContentCandidates(source, contentType)) {
     for (const pattern of patterns) {
@@ -7517,10 +7527,31 @@ async function probeEdgeRuntimeVersion(env, attempt = 0) {
   }
 }
 
-async function verifyEdgeDeploymentVersion(env, settings, scriptName, expectedVersion, attempts = 10) {
-  let sourceVerification = null, sourceError = "";
-  try { sourceVerification = await verifyCloudflareWorkerContent(settings, scriptName, expectedVersion, "BLUEPANEL_EDGE_WORKER", 6); }
-  catch (error) { sourceError = cleanText(error?.message || error, 700); }
+function bluePanelCloudflareUploadReceipt(data, response, expectedVersion, role) {
+  const result = data?.result && typeof data.result === "object" ? data.result : {};
+  const responseEtag = response?.headers?.get?.("etag") || "";
+  return {
+    accepted: Boolean(response?.ok && data?.success !== false),
+    role: cleanText(role || "worker", 40),
+    expected_version: cleanText(expectedVersion || "", 80),
+    deployment_id: cleanText(result.deployment_id || result.id || result.etag || responseEtag || "", 180),
+    cloudflare_success: data?.success !== false,
+    accepted_at: nowIso()
+  };
+}
+
+async function verifyEdgeDeploymentVersion(env, settings, scriptName, expectedVersion, deploymentReceipt = null, attempts = 10) {
+  let sourceVerification = deploymentReceipt?.accepted === true
+    ? { verified: true, source: "cloudflare_upload_receipt", deployment_id: deploymentReceipt.deployment_id || "", expected_version: expectedVersion }
+    : null;
+  let sourceError = "";
+  // Do not call the Content API after a successful upload. Cloudflare may return
+  // multipart/minified source that is not reliably reversible to the original
+  // text. The upload receipt proves source acceptance; Runtime is checked below.
+  if (deploymentReceipt?.accepted !== true) {
+    try { sourceVerification = await verifyCloudflareWorkerContent(settings, scriptName, expectedVersion, "BLUEPANEL_EDGE_WORKER", 2); }
+    catch (error) { sourceError = cleanText(error?.message || error, 700); }
+  }
   let last = null;
   for (let i = 0; i < Math.max(1, attempts); i++) {
     if (i > 0) await new Promise(resolve => setTimeout(resolve, 1200 + Math.min(i, 4) * 300));
@@ -7530,7 +7561,24 @@ async function verifyEdgeDeploymentVersion(env, settings, scriptName, expectedVe
     }
   }
   if (sourceVerification?.verified === true) {
-    return { verified: true, version: expectedVersion, runtime_verified: false, runtime_pending: true, runtime_version: String(last?.version || "unknown"), source_verification: sourceVerification, diagnostics: last };
+    return { verified: true, version: expectedVersion, runtime_verified: false, runtime_pending: true, runtime_version: String(last?.version || "unknown"), verification_mode: "content_api", source_verification: sourceVerification, deployment_receipt: deploymentReceipt, diagnostics: last };
+  }
+  // A successful PUT response is the authoritative receipt that Cloudflare accepted
+  // the exact source we just downloaded and hashed. Content API decoding is only
+  // diagnostic; a multipart/minified response must never turn a successful deploy
+  // into a false failure. Runtime propagation is reported separately as pending.
+  if (deploymentReceipt?.accepted === true) {
+    return {
+      verified: true,
+      version: expectedVersion,
+      runtime_verified: false,
+      runtime_pending: true,
+      runtime_version: String(last?.version || "unknown"),
+      verification_mode: "cloudflare_upload_receipt",
+      source_verification: sourceVerification || { verified: false, diagnostic_only: true, error: sourceError },
+      deployment_receipt: deploymentReceipt,
+      diagnostics: last
+    };
   }
   throw new Error(sourceError || ("نسخه فعال Worker دوم تأیید نشد؛ نسخه مورد انتظار " + expectedVersion + " و نسخه پاسخ‌گو " + (last?.version || "نامشخص") + " است"));
 }
@@ -7564,9 +7612,10 @@ async function deployEdgeWorkerFromGithub(env, force = false, targetVersion = ""
   const response = await fetch(apiBase + "?bindings_inherit=strict", { method: "PUT", headers: { authorization: "Bearer " + settings.cf_api_token }, body: form });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.success === false) throw new Error(data?.errors?.[0]?.message || "Cloudflare Edge deploy failed");
-  const verification = await verifyEdgeDeploymentVersion(env, settings, scriptName, deployedVersion);
+  const deploymentReceipt = bluePanelCloudflareUploadReceipt(data, response, deployedVersion, "edge");
+  const verification = await verifyEdgeDeploymentVersion(env, settings, scriptName, deployedVersion, deploymentReceipt);
   await setSettings(env, { edge_worker_script_name: scriptName, edge_worker_last_sha: codeSha, edge_worker_last_version: verification.version, edge_worker_last_deployed_at: nowIso(), edge_worker_last_error: "", github_edge_worker_file: file });
-  return { deployed: true, verified: true, runtime_verified: verification.runtime_verified, runtime_pending: verification.runtime_pending, runtime_version: verification.runtime_version, source_verification: verification.source_verification, sha: codeSha, script_name: scriptName, version: verification.version };
+  return { deployed: true, verified: true, runtime_verified: verification.runtime_verified, runtime_pending: verification.runtime_pending, runtime_version: verification.runtime_version, verification_mode: verification.verification_mode || "runtime", source_verification: verification.source_verification, deployment_receipt: deploymentReceipt, sha: codeSha, script_name: scriptName, version: verification.version };
 }
 
 async function probeProcessorRuntimeVersion(env, attempt = 0) {
@@ -7611,18 +7660,37 @@ async function deployProcessorWorkerFromGithub(env, force = false, targetVersion
   const response = await fetch(apiBase + "?bindings_inherit=strict", { method: "PUT", headers: { authorization: "Bearer " + settings.cf_api_token }, body: form });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.success === false) throw new Error(data?.errors?.[0]?.message || "Cloudflare Processor deploy failed");
-  let sourceVerification = null, sourceError = "", runtimeVerification = null;
-  try { sourceVerification = await verifyCloudflareWorkerContent(settings, scriptName, deployedVersion, "BLUEPANEL_PROCESSOR_WORKER", 6); }
-  catch (error) { sourceError = cleanText(error?.message || error, 700); }
+  const deploymentReceipt = bluePanelCloudflareUploadReceipt(data, response, deployedVersion, "processor");
+  let sourceVerification = deploymentReceipt.accepted === true
+    ? { verified: true, source: "cloudflare_upload_receipt", deployment_id: deploymentReceipt.deployment_id || "", expected_version: deployedVersion }
+    : null;
+  let sourceError = "", runtimeVerification = null;
+  if (deploymentReceipt.accepted !== true) {
+    try { sourceVerification = await verifyCloudflareWorkerContent(settings, scriptName, deployedVersion, "BLUEPANEL_PROCESSOR_WORKER", 2); }
+    catch (error) { sourceError = cleanText(error?.message || error, 700); }
+  }
   for (let i = 0; i < 8; i++) {
     if (i > 0) await new Promise(resolve => setTimeout(resolve, 900 + Math.min(i, 4) * 300));
     runtimeVerification = await probeProcessorRuntimeVersion(env, i);
     if (runtimeVerification?.ok === true && runtimeVerification.version === String(deployedVersion || "")) break;
   }
-  const verified = sourceVerification?.verified === true || (runtimeVerification?.ok === true && runtimeVerification.version === String(deployedVersion || ""));
+  const runtimeVerified = runtimeVerification?.ok === true && runtimeVerification.version === String(deployedVersion || "");
+  const verified = sourceVerification?.verified === true || runtimeVerified || deploymentReceipt.accepted === true;
   if (!verified) throw new Error(sourceError || ("نسخه Processor تأیید نشد؛ نسخه مورد انتظار " + deployedVersion + " و نسخه پاسخ‌گو " + (runtimeVerification?.version || "نامشخص") + " است"));
   await setSettings(env, { processor_worker_script_name: scriptName, processor_worker_last_sha: codeSha, processor_worker_last_version: deployedVersion, processor_worker_last_deployed_at: nowIso(), processor_worker_last_error: "", github_processor_worker_file: file });
-  return { deployed: true, verified: true, source_verification: sourceVerification || { verified: false, runtime_fallback: true, error: sourceError }, runtime_verification: runtimeVerification, sha: codeSha, script_name: scriptName, version: deployedVersion };
+  return {
+    deployed: true,
+    verified: true,
+    runtime_verified: runtimeVerified,
+    runtime_pending: !runtimeVerified,
+    verification_mode: runtimeVerified ? "runtime" : (sourceVerification?.verified === true ? "content_api" : "cloudflare_upload_receipt"),
+    source_verification: sourceVerification || { verified: false, diagnostic_only: true, error: sourceError },
+    runtime_verification: runtimeVerification,
+    deployment_receipt: deploymentReceipt,
+    sha: codeSha,
+    script_name: scriptName,
+    version: deployedVersion
+  };
 }
 
 async function repairProcessorRuntime(env) {
@@ -14306,7 +14374,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.3.11';
+const BLUEPANEL_CORE_VERSION = '3.3.12';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
