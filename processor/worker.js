@@ -1,11 +1,11 @@
 /* BLUEPANEL_PROCESSOR_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.15
+ * Version: 3.3.16
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = '3.3.15';
+const APP_VERSION = '3.3.16';
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
@@ -1996,7 +1996,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_PROCESSOR_VERSION='3.3.15';
+const BLUEPANEL_PROCESSOR_VERSION='3.3.16';
 let processorSchemaPromise=null;
 function processorJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 
@@ -2009,6 +2009,8 @@ async function recordSystemError(env, scope, botId, errorCode, message, context 
   const text = cleanText(message || "خطای نامشخص", 1500);
   const contextJson = JSON.stringify(context || {});
   try {
+    // Compatible with both the legacy four-column UNIQUE table and the new
+    // partial unique index used during staged Core/Processor deployment.
     await env.PASARGUARD_DB.batch([
       env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO system_error_center(
         id,scope,bot_id,error_code,message,context_json,occurrence_count,status,first_seen_at,last_seen_at

@@ -1,15 +1,26 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.15
+ * Version: 3.3.16
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.15';
+const APP_VERSION = '3.3.16';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.16": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🧱", text: "بازسازی ساختار مرکز خطا و حذف کامل UNIQUE چهارتایی مشکل‌دار از خود دیتابیس" },
+      { emoji: "🩹", text: "ایجاد کلید یکتای جزئی فقط برای خطاهای باز؛ Resolve و بازشدن دوباره خطا بدون برخورد" },
+      { emoji: "🔗", text: "خواندن نسخه آپلودشده از Commit دقیق GitHub برای جلوگیری از گیرکردن بروزرسانی پشت کش Raw" },
+      { emoji: "🧬", text: "سازگاری هم‌زمان با Core و Processor قدیمی هنگام انتشار مرحله‌ای" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "🔄", text: "همگام‌سازی مطمئن‌تر پنل‌ها و Workerها از Commit دقیق بسته آپلودشده" }
+    ])
+  }),
   "3.3.15": Object.freeze({
     central: Object.freeze([
       { emoji: "🧯", text: "رفع قطعی برخورد UNIQUE هنگام تغییر وضعیت خطا از باز به رفع‌شده و پاک‌سازی امن رکوردهای قدیمی" },
@@ -342,10 +353,12 @@ const SALES_TEXT_LABELS = Object.freeze({
 let schemaReady = false;
 
 let schemaReadyPromise = null;
+let errorCenterSchemaReady = false;
+let errorCenterSchemaPromise = null;
 
 // Persistent schema marker: avoids replaying the full D1 migration sweep whenever
 // Cloudflare starts a fresh isolate after an idle period.
-const DB_SCHEMA_REVISION = "3.3.5";
+const DB_SCHEMA_REVISION = "3.3.16";
 
 let settingsCache = null;
 
@@ -614,6 +627,8 @@ const DEFAULT_SETTINGS = {
   github_zip_last_version: "",
   github_zip_last_uploaded_at: "",
   github_zip_last_error: "",
+  auto_update_target_commit_sha: "",
+  auto_update_target_version: "",
   cf_account_id: "",
   cf_api_token: "",
   cf_worker_name: "",
@@ -1605,7 +1620,7 @@ CREATE TABLE IF NOT EXISTS auto_recharge_alerts (
 CREATE TABLE IF NOT EXISTS system_error_center (
   id TEXT PRIMARY KEY,
   scope TEXT NOT NULL,
-  bot_id TEXT,
+  bot_id TEXT NOT NULL DEFAULT '',
   error_code TEXT NOT NULL,
   message TEXT NOT NULL,
   context_json TEXT NOT NULL DEFAULT '{}',
@@ -1613,9 +1628,10 @@ CREATE TABLE IF NOT EXISTS system_error_center (
   status TEXT NOT NULL DEFAULT 'open',
   first_seen_at TEXT NOT NULL,
   last_seen_at TEXT NOT NULL,
-  resolved_at TEXT,
-  UNIQUE(scope,bot_id,error_code,status)
+  resolved_at TEXT
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_error_center_open_key
+  ON system_error_center(scope,bot_id,error_code) WHERE status='open';
 CREATE INDEX IF NOT EXISTS idx_error_center_open ON system_error_center(status,last_seen_at DESC);
 
 CREATE TABLE IF NOT EXISTS repair_runs (
@@ -1785,6 +1801,77 @@ async function parseBody(request) {
   }
 }
 
+async function migrateSystemErrorCenterSchema(env) {
+  if (errorCenterSchemaReady) return { migrated: false, current: true, cached: true };
+  if (!errorCenterSchemaPromise) {
+    errorCenterSchemaPromise = migrateSystemErrorCenterSchemaInternal(env)
+      .then(result => { errorCenterSchemaReady = true; return result; })
+      .catch(error => { errorCenterSchemaReady = false; throw error; })
+      .finally(() => { errorCenterSchemaPromise = null; });
+  }
+  return errorCenterSchemaPromise;
+}
+
+async function migrateSystemErrorCenterSchemaInternal(env) {
+  if (!env?.PASARGUARD_DB) return { migrated: false, skipped: true };
+  const table = await env.PASARGUARD_DB.prepare(
+    "SELECT sql FROM sqlite_master WHERE type='table' AND name='system_error_center'"
+  ).first();
+  if (!table) return { migrated: false, missing: true };
+  const tableSql = String(table.sql || "").replace(/\s+/g, " ").toLowerCase();
+  const columns = await env.PASARGUARD_DB.prepare("PRAGMA table_info(system_error_center)").all();
+  const botColumn = (columns.results || []).find(row => String(row.name) === "bot_id");
+  const legacyConstraint = /unique\s*\(\s*scope\s*,\s*bot_id\s*,\s*error_code\s*,\s*status\s*\)/i.test(tableSql);
+  const botAllowsNull = !botColumn || Number(botColumn.notnull || 0) !== 1;
+
+  if (!legacyConstraint && !botAllowsNull) {
+    await env.PASARGUARD_DB.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_error_center_open_key
+      ON system_error_center(scope,bot_id,error_code) WHERE status='open'`).run();
+    await env.PASARGUARD_DB.prepare("CREATE INDEX IF NOT EXISTS idx_error_center_open ON system_error_center(status,last_seen_at DESC)").run();
+    return { migrated: false, current: true };
+  }
+
+  // The historical table-level UNIQUE(scope,bot_id,error_code,status) makes an
+  // open -> resolved transition collide with an older resolved row. Rebuild the
+  // table and keep uniqueness only among currently-open errors. This remains
+  // compatible with old Processor builds that still use INSERT OR IGNORE.
+  const result = await env.PASARGUARD_DB.batch([
+    env.PASARGUARD_DB.prepare("DROP TABLE IF EXISTS system_error_center_v2"),
+    env.PASARGUARD_DB.prepare(`CREATE TABLE system_error_center_v2 (
+      id TEXT PRIMARY KEY,
+      scope TEXT NOT NULL,
+      bot_id TEXT NOT NULL DEFAULT '',
+      error_code TEXT NOT NULL,
+      message TEXT NOT NULL,
+      context_json TEXT NOT NULL DEFAULT '{}',
+      occurrence_count INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'open',
+      first_seen_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      resolved_at TEXT
+    )`),
+    env.PASARGUARD_DB.prepare(`INSERT INTO system_error_center_v2(
+      id,scope,bot_id,error_code,message,context_json,occurrence_count,status,
+      first_seen_at,last_seen_at,resolved_at
+    )
+    SELECT
+      MIN(id), scope, COALESCE(bot_id,''), error_code,
+      MAX(message), MAX(COALESCE(context_json,'{}')),
+      SUM(CASE WHEN COALESCE(occurrence_count,0)<1 THEN 1 ELSE occurrence_count END),
+      CASE WHEN MAX(CASE WHEN status='open' THEN 1 ELSE 0 END)=1 THEN 'open' ELSE 'resolved' END,
+      MIN(first_seen_at), MAX(last_seen_at),
+      CASE WHEN MAX(CASE WHEN status='open' THEN 1 ELSE 0 END)=1 THEN NULL ELSE MAX(resolved_at) END
+    FROM system_error_center
+    GROUP BY scope,COALESCE(bot_id,''),error_code`),
+    env.PASARGUARD_DB.prepare("DROP TABLE system_error_center"),
+    env.PASARGUARD_DB.prepare("ALTER TABLE system_error_center_v2 RENAME TO system_error_center"),
+    env.PASARGUARD_DB.prepare(`CREATE UNIQUE INDEX idx_error_center_open_key
+      ON system_error_center(scope,bot_id,error_code) WHERE status='open'`),
+    env.PASARGUARD_DB.prepare("CREATE INDEX idx_error_center_open ON system_error_center(status,last_seen_at DESC)")
+  ]);
+  return { migrated: true, result };
+}
+
 async function ensureDb(env) {
   if (!env.PASARGUARD_DB) throw new Error("D1 binding PASARGUARD_DB is missing (database: pasarguard-reseller-db)");
   if (schemaReady) return;
@@ -1851,6 +1938,8 @@ async function ensureDbInternal(env) {
   for (const sql of tableSchemaStatements) {
     await env.PASARGUARD_DB.prepare(sql).run();
   }
+
+  await migrateSystemErrorCenterSchema(env);
 
   // Incremental D1 migrations for installations upgraded from older versions.
   const requiredColumns = {
@@ -6632,6 +6721,32 @@ async function githubApiRequest(env, suppliedSettings, method, path, body = unde
   return data;
 }
 
+function githubBase64Text(value) {
+  const compact = String(value || "").replace(/\s+/g, "");
+  const binary = atob(compact);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+}
+
+async function githubReadProjectText(env, settings, file, preferredRef = "") {
+  const ref = String(preferredRef || "").trim();
+  if (ref && String(settings.github_token || "").trim()) {
+    const path = githubRepoApiPath(settings.github_repo) + "/contents/" +
+      String(file || "").split("/").map(encodeURIComponent).join("/") +
+      "?ref=" + encodeURIComponent(ref);
+    const data = await githubApiRequest(env, settings, "GET", path);
+    if (String(data?.encoding || "").toLowerCase() === "base64" && data?.content) {
+      return githubBase64Text(data.content);
+    }
+    if (data?.download_url) {
+      return await (await githubFetch(env, data.download_url, settings)).text();
+    }
+    throw new Error("محتوای فایل " + file + " از Commit دقیق GitHub دریافت نشد");
+  }
+  return await (await githubFetch(env, githubRawUrl(settings.github_repo, settings.github_branch || "main", file, true), settings)).text();
+}
+
 async function githubConnectionInfo(env, suppliedSettings = null) {
   const settings = suppliedSettings || await getSettings(env);
   const repoPath = githubRepoApiPath(settings.github_repo);
@@ -7027,9 +7142,16 @@ async function githubReleaseManifest(env, settings) {
   const repo = settings.github_repo;
   const branch = settings.github_branch || "main";
   const bucket = Math.floor(Date.now() / 5000);
-  try {
-    const response = await githubFetch(env, githubRawUrl(repo, branch, "release.json", bucket), settings);
-    const data = await response.json();
+  const explicitRef = String(settings.auto_update_target_commit_sha || "").trim();
+  const uploadedRef = String(settings.github_zip_last_commit_sha || "").trim();
+  const uploadedVersion = String(settings.github_zip_last_version || "").trim();
+  const pendingUploadedBuild = uploadedRef && (
+    uploadedVersion !== APP_VERSION || String(settings.auto_update_last_status || "") !== "deployed"
+  );
+  const preferredRef = explicitRef || (pendingUploadedBuild ? uploadedRef : "");
+
+  const parseRelease = (raw, source, ref = "") => {
+    const data = JSON.parse(raw);
     const latest = String(data?.version || "").trim();
     if (!/^v?\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?$/.test(latest)) throw new Error("نسخه release.json معتبر نیست");
     return {
@@ -7037,8 +7159,23 @@ async function githubReleaseManifest(env, settings) {
       release_id: cleanText(data?.release_id || data?.build_id || latest, 160) || latest,
       files: data?.files && typeof data.files === "object" ? data.files : {},
       hashes: data?.sha256 && typeof data.sha256 === "object" ? data.sha256 : {},
-      source: "release.json"
+      source,
+      ref
     };
+  };
+
+  if (preferredRef) {
+    try {
+      const raw = await githubReadProjectText(env, settings, "release.json", preferredRef);
+      return parseRelease(raw, "github_contents_commit", preferredRef);
+    } catch (error) {
+      console.error("exact GitHub commit manifest fallback", error);
+    }
+  }
+
+  try {
+    const response = await githubFetch(env, githubRawUrl(repo, branch, "release.json", bucket), settings);
+    return parseRelease(await response.text(), "release.json", "");
   } catch (error) {
     if (error?.code === "GITHUB_RATE_LIMIT") throw error;
     const versionFile = settings.github_version_file || "version";
@@ -7046,7 +7183,7 @@ async function githubReleaseManifest(env, settings) {
     if (!/^v?\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?$/.test(latest)) {
       throw new Error("محتوای فایل version معتبر نیست: " + latest.slice(0, 50));
     }
-    return { latest, release_id: latest, files: {}, hashes: {}, source: "version" };
+    return { latest, release_id: latest, files: {}, hashes: {}, source: "version", ref: "" };
   }
 }
 
@@ -7660,13 +7797,13 @@ async function ensureClusterSubrequestLimits(env, force = false) {
   return { attempted: targets.length, results };
 }
 
-async function deployEdgeWorkerFromGithub(env, force = false, targetVersion = "") {
+async function deployEdgeWorkerFromGithub(env, force = false, targetVersion = "", sourceRef = "") {
   const settings = await getSettings(env);
   if (!settings.cf_account_id || !settings.cf_api_token) return { skipped: true, reason: "cloudflare_credentials_required" };
   const scriptName = await resolveEdgeScriptNameFromCoreBinding(settings);
   if (!scriptName) return { skipped: true, reason: "edge_script_name_not_detected", hint: "Binding مرکزی باید دقیقاً EDGE_WORKER نام داشته باشد" };
   const file = "edge/worker.js";
-  const code = await (await githubFetch(env, githubRawUrl(settings.github_repo, settings.github_branch || "main", file, true), settings)).text();
+  const code = await githubReadProjectText(env, settings, file, sourceRef);
   if (!code.includes("export default") || !code.includes("BLUEPANEL_EDGE_WORKER")) throw new Error("فایل edge/worker.js معتبر نیست");
   const codeSha = await sha256Hex(code);
   const detectedVersion = (code.match(/const\s+(?:APP_VERSION|EDGE_VERSION|BLUEPANEL_EDGE_VERSION)\s*=\s*["']([^"']+)["']/) || [])[1] || "";
@@ -7708,13 +7845,13 @@ async function probeProcessorRuntimeVersion(env, attempt = 0) {
   }
 }
 
-async function deployProcessorWorkerFromGithub(env, force = false, targetVersion = "") {
+async function deployProcessorWorkerFromGithub(env, force = false, targetVersion = "", sourceRef = "") {
   const settings = await getSettings(env);
   if (!settings.cf_account_id || !settings.cf_api_token) return { skipped: true, reason: "cloudflare_credentials_required" };
   const scriptName = await resolveProcessorScriptNameFromCoreBinding(settings);
   if (!scriptName) return { skipped: true, reason: "processor_script_name_not_detected", hint: "Binding مرکزی باید دقیقاً PROCESSOR_WORKER نام داشته باشد" };
   const file = "processor/worker.js";
-  const workerCode = await (await githubFetch(env, githubRawUrl(settings.github_repo, settings.github_branch || "main", file, true), settings)).text();
+  const workerCode = await githubReadProjectText(env, settings, file, sourceRef);
   if (!workerCode.includes("export default") || !workerCode.includes("BLUEPANEL_PROCESSOR_WORKER")) throw new Error("فایل processor/worker.js معتبر نیست");
   const codeSha = await sha256Hex(workerCode);
   const detectedVersion = (workerCode.match(/const\s+(?:APP_VERSION|PROCESSOR_VERSION|BLUEPANEL_PROCESSOR_VERSION)\s*=\s*["']([^"']+)["']/) || [])[1] || "";
@@ -7863,6 +8000,7 @@ async function checkUpdate(env) {
     release_id: manifest.release_id,
     known_release_id: knownReleaseId,
     manifest_source: manifest.source,
+    source_ref: manifest.ref || "",
     worker_sha: coreSha,
     edge_sha: edgeSha,
     processor_sha: processorSha,
@@ -7885,7 +8023,7 @@ async function deploySelfFromGithub(env, force = false, prechecked = null) {
   const repo = settings.github_repo;
   const branch = settings.github_branch || "main";
   const workerFile = "core/worker.js";
-  const code = await (await githubFetch(env, githubRawUrl(repo, branch, workerFile, true), settings)).text();
+  const code = await githubReadProjectText(env, settings, workerFile, check.source_ref || "");
   if (!code.includes("export default") || !code.includes("BLUEPANEL_CORE_WORKER")) throw new Error("فایل core/worker.js معتبر نیست");
   const codeSha = await sha256Hex(code);
 
@@ -7960,7 +8098,7 @@ async function ensureDeploymentTrackingTables(env) {
     `CREATE TABLE IF NOT EXISTS system_error_center (
       id TEXT PRIMARY KEY,
       scope TEXT NOT NULL,
-      bot_id TEXT,
+      bot_id TEXT NOT NULL DEFAULT '',
       error_code TEXT NOT NULL,
       message TEXT NOT NULL,
       context_json TEXT NOT NULL DEFAULT '{}',
@@ -7968,12 +8106,13 @@ async function ensureDeploymentTrackingTables(env) {
       status TEXT NOT NULL DEFAULT 'open',
       first_seen_at TEXT NOT NULL,
       last_seen_at TEXT NOT NULL,
-      resolved_at TEXT,
-      UNIQUE(scope,bot_id,error_code,status)
+      resolved_at TEXT
     )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_error_center_open_key ON system_error_center(scope,bot_id,error_code) WHERE status='open'`,
     `CREATE INDEX IF NOT EXISTS idx_error_center_open ON system_error_center(status,last_seen_at DESC)`
   ];
   for (const sql of statements) await env.PASARGUARD_DB.prepare(sql).run();
+  await migrateSystemErrorCenterSchema(env);
 }
 
 async function reconcileReleaseRollouts(env) {
@@ -8037,24 +8176,18 @@ async function incrementSystemErrorCenter(env, scope, botId, errorCode, message,
   const normalizedMessage = cleanText(message || "خطای نامشخص", 1500);
   const contextJson = JSON.stringify(context || {});
   try {
-    // D1 batch is one remote call and one transaction. INSERT OR IGNORE works
-    // with every historical UNIQUE layout, then the UPDATE increments only
-    // when this batch did not create the row itself.
-    await env.PASARGUARD_DB.batch([
-      env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO system_error_center(
-        id,scope,bot_id,error_code,message,context_json,occurrence_count,status,first_seen_at,last_seen_at
-      ) VALUES(?,?,?,?,?,?,1,'open',?,?)`).bind(
-        rowId,normalizedScope,normalizedBot,normalizedCode,normalizedMessage,contextJson,ts,ts
-      ),
-      env.PASARGUARD_DB.prepare(`UPDATE system_error_center SET
-        message=?,context_json=?,
-        occurrence_count=occurrence_count+CASE WHEN id=? THEN 0 ELSE 1 END,
-        last_seen_at=?
-      WHERE scope=? AND bot_id=? AND error_code=? AND status='open'`).bind(
-        normalizedMessage,contextJson,rowId,ts,normalizedScope,normalizedBot,normalizedCode
-      )
-    ]);
-    return { ok: true };
+    await migrateSystemErrorCenterSchema(env);
+    const result = await env.PASARGUARD_DB.prepare(`INSERT INTO system_error_center(
+      id,scope,bot_id,error_code,message,context_json,occurrence_count,status,first_seen_at,last_seen_at,resolved_at
+    ) VALUES(?,?,?,?,?,?,1,'open',?,?,NULL)
+    ON CONFLICT(scope,bot_id,error_code) WHERE status='open' DO UPDATE SET
+      message=excluded.message,
+      context_json=excluded.context_json,
+      occurrence_count=system_error_center.occurrence_count+1,
+      last_seen_at=excluded.last_seen_at`).bind(
+      rowId,normalizedScope,normalizedBot,normalizedCode,normalizedMessage,contextJson,ts,ts
+    ).run();
+    return { ok: true, result };
   } catch (error) {
     console.error("error center increment skipped", error);
     return { ok: false, error: cleanText(error?.message || error, 800) };
@@ -8064,20 +8197,16 @@ async function incrementSystemErrorCenter(env, scope, botId, errorCode, message,
 async function resolveSystemErrorCenter(env, filters = {}) {
   if (!env?.PASARGUARD_DB) return { ok: false, skipped: true };
   const ts = nowIso();
-  const where = ["status=?"];
-  const baseParams = ["resolved"];
-  if (filters.scope) { where.push("scope=?"); baseParams.push(cleanText(filters.scope,80)); }
-  if (filters.errorCode) { where.push("error_code=?"); baseParams.push(cleanText(filters.errorCode,120)); }
-  if (filters.botId !== undefined) { where.push("bot_id=?"); baseParams.push(cleanText(filters.botId || "",120)); }
-  const match = where.slice(1).length ? " AND " + where.slice(1).join(" AND ") : "";
+  const where = ["status='open'"];
+  const params = [];
+  if (filters.scope) { where.push("scope=?"); params.push(cleanText(filters.scope,80)); }
+  if (filters.errorCode) { where.push("error_code=?"); params.push(cleanText(filters.errorCode,120)); }
+  if (filters.botId !== undefined) { where.push("bot_id=?"); params.push(cleanText(filters.botId || "",120)); }
   try {
-    // The old schema allows one open and one resolved row for the same key.
-    // Delete the stale resolved copy first, otherwise changing open -> resolved
-    // collides with UNIQUE(scope,bot_id,error_code,status).
-    const result = await env.PASARGUARD_DB.batch([
-      env.PASARGUARD_DB.prepare(`DELETE FROM system_error_center WHERE status='resolved'${match}`).bind(...baseParams.slice(1)),
-      env.PASARGUARD_DB.prepare(`UPDATE system_error_center SET status='resolved',resolved_at=?,last_seen_at=? WHERE status='open'${match}`).bind(ts,ts,...baseParams.slice(1))
-    ]);
+    await migrateSystemErrorCenterSchema(env);
+    const result = await env.PASARGUARD_DB.prepare(`UPDATE system_error_center SET
+      status='resolved',resolved_at=?,last_seen_at=? WHERE ${where.join(" AND ")}`)
+      .bind(ts,ts,...params).run();
     return { ok: true, result };
   } catch (error) {
     console.error("error center resolve skipped", error);
@@ -8117,7 +8246,7 @@ async function deployClusterFromGithub(env, force = false, prechecked = null) {
   // Cloudflare's execution window. The next Cron/panel request resumes from SHA.
   if (force || check.edge_sync_required) {
     try {
-      edge_update = await deployEdgeWorkerFromGithub(env, force, check.latest || APP_VERSION);
+      edge_update = await deployEdgeWorkerFromGithub(env, force, check.latest || APP_VERSION, check.source_ref || "");
       const ready = edge_update?.verified === true || edge_update?.deployed === true || edge_update?.reason === "up_to_date";
       if (ready) {
         if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET status='running',edge_status='verified',processor_status='pending',core_status='pending',details_json=?,updated_at=? WHERE id=?",[JSON.stringify({edge_update}),nowIso(),rolloutId]);
@@ -8131,7 +8260,7 @@ async function deployClusterFromGithub(env, force = false, prechecked = null) {
 
   if (force || check.processor_sync_required) {
     try {
-      processor_update = await deployProcessorWorkerFromGithub(env, force, check.latest || APP_VERSION);
+      processor_update = await deployProcessorWorkerFromGithub(env, force, check.latest || APP_VERSION, check.source_ref || "");
       const ready = processor_update?.verified === true || processor_update?.deployed === true || processor_update?.reason === "up_to_date";
       if (ready) {
         if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET status='running',edge_status=?,processor_status='verified',core_status='pending',details_json=?,updated_at=? WHERE id=?",[
@@ -8155,6 +8284,7 @@ async function deployClusterFromGithub(env, force = false, prechecked = null) {
         JSON.stringify({edge_update,processor_update,core:{deployed:core.deployed,version:check.latest}}),nowIso(),nowIso(),rolloutId
       ]);
       await resolveSystemErrorCenter(env,{scope:"release_rollout",errorCode:"STAGED_DEPLOY_FAILED"});
+      await setSettings(env,{auto_update_target_commit_sha:"",auto_update_target_version:""});
       return { ...check, ...core, deployed:Boolean(core.deployed), complete:true, partial:false, rollout_id:rolloutId, rollout_stage:"core", rollout_status:"completed", tracking_ready:trackingReady, core_deployed:Boolean(core.deployed), edge_update, processor_update };
     } catch (error) {
       if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET status='failed',core_status='failed',details_json=?,finished_at=?,updated_at=? WHERE id=?",[
@@ -8222,7 +8352,9 @@ async function automaticUpdateTick(env, options = {}) {
       auto_update_last_release_id: result.core_deployed ? (result.release_id || result.latest || APP_VERSION) : (settings.auto_update_last_release_id || ""),
       auto_update_last_worker_sha: result.core_deployed ? (result.worker_sha || settings.auto_update_last_worker_sha || "") : (settings.auto_update_last_worker_sha || ""),
       auto_update_last_error: result.partial ? cleanText(result.edge_update?.error || result.processor_update?.error || "",800) : "",
-      auto_update_last_source: source
+      auto_update_last_source: source,
+      auto_update_target_commit_sha: result.complete ? "" : String(settings.auto_update_target_commit_sha || ""),
+      auto_update_target_version: result.complete ? "" : String(settings.auto_update_target_version || "")
     });
     try { await audit(env, null, "automatic_update_" + (result.deployed ? "deployed" : "checked"), { source, ...result }); } catch (_) {}
     return result;
@@ -12886,6 +13018,9 @@ async function botHandleSessionMessage(env, account, message, session, origin, c
         github_zip_last_version: project.version,
         github_zip_last_uploaded_at: nowIso(),
         github_zip_last_error: "",
+        auto_update_target_commit_sha: result.commit_sha,
+        auto_update_target_version: project.version,
+        auto_update_last_status: "deploying",
         auto_update_last_check_epoch: "0"
       });
       await audit(env, account.user.id, "github_zip_uploaded", {
@@ -14532,7 +14667,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.3.15';
+const BLUEPANEL_CORE_VERSION = '3.3.16';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
