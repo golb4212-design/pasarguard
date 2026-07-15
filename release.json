@@ -1,7 +1,7 @@
 {
-  "version": "3.2.8",
-  "release_id": "3.2.8-20260715-single-location-and-product-duplicate-fix",
-  "architecture": "fully-split-three-worker-single-location-product-display-fixed",
+  "version": "3.2.9",
+  "release_id": "3.2.9-20260715-duration-bidi-order-fix",
+  "architecture": "fully-split-three-worker-duration-bidi-order-fixed",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -32,14 +32,9 @@
     ]
   },
   "features": [
-    "automatically selects the only active sales location and skips the location-selection screen",
-    "hides change-location and back-to-locations buttons when only one active location exists",
-    "adjusts purchase step numbering from three steps to two steps for a single-location storefront",
-    "removes duplicated product title and normalized volume from plan buttons and selected-plan details",
-    "removes the duplicate sale:plans route so returning to products no longer restarts or repeats the purchase flow",
-    "deduplicates identical plan result rows by plan id before rendering",
-    "keeps volume at the beginning and amount at the end of each plan button",
-    "manual Telegram profile fields and all previous usage/payment fixes remain preserved",
+    "fixes Telegram RTL rendering so one-month duration is displayed as ۱ ماهه instead of ماهه ۱",
+    "uses an isolated left-to-right duration segment while keeping the overall Persian purchase row right-to-left",
+    "single-location skipping and product deduplication from 3.2.8 remain preserved",
     "README files are excluded"
   ],
   "deployment": {
@@ -55,26 +50,20 @@
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "single_location_auto_skip": "passed by static route and session propagation checks",
-    "single_location_buttons_hidden": "passed",
-    "plan_title_volume_deduplication": "passed",
-    "duplicate_plan_id_filter": "passed",
-    "setMyDescription_calls": "zero",
-    "setMyShortDescription_calls": "zero",
+    "duration_bidi_segment": "passed; duration uses LRI/PDI isolate",
     "release_manifest_hashes": "recalculated",
-    "zip_integrity": "passed",
-    "single_sale_plans_route": "passed; exactly one session-aware handler remains"
+    "zip_integrity": "passed"
   },
   "sha256": {
-    "core": "7771e8948c113e952889b021456b913a5231785499132e4eb8e9a647d6fa32bd",
-    "edge": "5751a462d51ea97264773f8d3ac82f903384f8036407b034d5c59f050bbec520",
-    "processor": "4e1b2c38c1fd21847ef894ae76fd0ff50b8468ad6eeb79f2b7cfdb84e3f760e0",
+    "core": "990732a88be323d4205278f697c01c7cc963b97e4257daeefeca7e9cff8eb4ba",
+    "edge": "4dbb64dcc5aced23a35c3093a9ddb9a709bc29fa773c7e474537913d5b4ae8bc",
+    "processor": "d5b00e102523752e7b9f003639baa513ad4b44a792c040ef37eff82a8d2339af",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "hashes": {
-    "core/worker.js": "7771e8948c113e952889b021456b913a5231785499132e4eb8e9a647d6fa32bd",
-    "edge/worker.js": "5751a462d51ea97264773f8d3ac82f903384f8036407b034d5c59f050bbec520",
-    "processor/worker.js": "4e1b2c38c1fd21847ef894ae76fd0ff50b8468ad6eeb79f2b7cfdb84e3f760e0",
+    "core/worker.js": "990732a88be323d4205278f697c01c7cc963b97e4257daeefeca7e9cff8eb4ba",
+    "edge/worker.js": "4dbb64dcc5aced23a35c3093a9ddb9a709bc29fa773c7e474537913d5b4ae8bc",
+    "processor/worker.js": "d5b00e102523752e7b9f003639baa513ad4b44a792c040ef37eff82a8d2339af",
     "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   }
 }

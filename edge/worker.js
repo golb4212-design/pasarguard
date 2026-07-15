@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.2.8
+ * Version: 3.2.9
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = "3.2.8";
+const APP_VERSION = "3.2.9";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -3155,7 +3155,7 @@ function salesPlanSummaryButton(plan, finalPrice, requestedPlanType) {
   const duration = salesPlanDurationLabel(plan.duration_days, requestedPlanType);
   const amount = botMoney(finalPrice) + " تومان";
   // No plan title here: titles such as «۳۰ گیگ» must not repeat the normalized volume.
-  return "‏🚀 " + ltrSegment(size) + " • " + rtlSegment(duration) + " • " + rtlSegment(amount);
+  return "‏🚀 " + ltrSegment(size) + " • " + ltrSegment(duration) + " • " + rtlSegment(amount);
 }
 
 function salesPlanDetailsText(plan, price, requestedPlanType, activePromo, wholesaleDiscount) {
@@ -10564,7 +10564,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_EDGE_VERSION='3.2.8';
+const BLUEPANEL_EDGE_VERSION='3.2.9';
 function bluePanelEdgeJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function bluePanelEdgeInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
 function bluePanelEdgeRuntimeBinding(env,name){const value=env?.[name];return{name,exact_key_present:Object.prototype.hasOwnProperty.call(env||{},name),value_present:value!==undefined&&value!==null,fetch_callable:Boolean(value&&typeof value.fetch==='function'),constructor_name:value?.constructor?.name||''}}

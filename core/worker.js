@@ -1,15 +1,23 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.2.8
+ * Version: 3.2.9
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.2.8";
+const APP_VERSION = "3.2.9";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.2.9": Object.freeze({
+    central: Object.freeze([
+      { emoji: "↔️", text: "اصلاح ترتیب نمایش مدت در دکمه‌های تلگرام و جلوگیری از نمایش «ماهه ۱»" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "🗓", text: "نمایش درست مدت به‌صورت «۱ ماهه» با قالب ایمن راست‌به‌چپ" }
+    ])
+  }),
   "3.2.8": Object.freeze({
     central: Object.freeze([
       { emoji: "🌍", text: "حذف مرحله انتخاب لوکیشن وقتی فقط یک لوکیشن دارای پلن فعال وجود دارد" },
@@ -13417,7 +13425,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.2.8';
+const BLUEPANEL_CORE_VERSION = '3.2.9';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
