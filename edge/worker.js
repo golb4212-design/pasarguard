@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.2.2
+ * Version: 3.2.3
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = "3.2.2";
+const APP_VERSION = "3.2.3";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -3146,6 +3146,41 @@ function salesCustomerPlanPrice(plan, customer) {
   return Math.max(0, Math.round(base * (100 - discount) / 100));
 }
 
+function salesPlanDurationLabel(days, planType) {
+  const numericDays = Math.max(0, Number(days || 0));
+  if (planType === "volume") return "افزایش حجم";
+  if (!numericDays) return "بدون زمان";
+  if (numericDays % 30 === 0) {
+    const months = numericDays / 30;
+    return botMoney(months) + " ماهه";
+  }
+  return botMoney(numericDays) + " روزه";
+}
+
+function salesPlanSummaryButton(plan, finalPrice, requestedPlanType) {
+  const size = botGb(plan.data_limit_bytes);
+  const duration = salesPlanDurationLabel(plan.duration_days, requestedPlanType);
+  return "🚀 " + size + " | " + duration + " | " + botMoney(finalPrice) + " تومان";
+}
+
+function salesPlanDetailsText(plan, price, requestedPlanType, activePromo, wholesaleDiscount) {
+  return "<b>" + botEscape(plan.title) + "</b>\n" +
+    (plan.location_title ? (plan.location_emoji || "🌍") + " " + botEscape(plan.location_title) + (plan.category_title ? " · " : "") : "") +
+    (plan.category_title ? (plan.category_emoji || "📁") + " " + botEscape(plan.category_title) : "") +
+    ((plan.location_title || plan.category_title) ? "\n" : "") +
+    "حجم: <b>" + botGb(plan.data_limit_bytes) + "</b>" + (requestedPlanType === "volume" ? " · روی سرویس فعلی" : " · مدت: <b>" + salesPlanDurationLabel(plan.duration_days, requestedPlanType) + "</b>") + "\n" +
+    "قیمت: <b>" + botMoney(price.finalPrice) + " تومان</b>" +
+    ((wholesaleDiscount > 0 || price.promoDiscount > 0) ? " <s>" + botMoney(plan.price_toman) + "</s>" : "") +
+    (price.promoDiscount > 0 ? " · کد " + botEscape(activePromo.code) : wholesaleDiscount > 0 ? " · عمده " + wholesaleDiscount + "٪" : "");
+}
+
+function salesPlanPickPrefix(planType) {
+  if (planType === "volume") return "sale:vpick:";
+  if (planType === "renew") return "sale:rpick:";
+  return "sale:planpick:";
+}
+
+
 async function salesCustomerPlansView(env, bot, customer = null, filter = {}) {
   const rows = await env.PASARGUARD_DB.prepare(`
     SELECT p.*,c.title AS category_title,c.emoji AS category_emoji,l.title AS location_title,l.emoji AS location_emoji
@@ -3153,7 +3188,7 @@ async function salesCustomerPlansView(env, bot, customer = null, filter = {}) {
     LEFT JOIN sales_categories c ON c.id=p.category_id
     LEFT JOIN sales_locations l ON l.id=p.location_id
     WHERE p.bot_id=? AND p.status='active'
-    ORDER BY p.sort_order ASC,p.price_toman ASC,p.created_at ASC LIMIT 60
+    ORDER BY p.sort_order ASC,p.duration_days ASC,p.data_limit_bytes ASC,p.price_toman ASC,p.created_at ASC LIMIT 60
   `).bind(bot.id).all();
   let plans = rows.results || [];
   if (filter.uncategorized) plans = plans.filter(p => !p.category_id);
@@ -3161,6 +3196,7 @@ async function salesCustomerPlansView(env, bot, customer = null, filter = {}) {
   if (filter.locationId) plans = plans.filter(p => String(p.location_id || "") === String(filter.locationId));
   const requestedPlanType = String(filter.planType || "sale");
   plans = plans.filter(p => String(p.plan_type || "sale") === requestedPlanType);
+  plans.sort((a, b) => (Number(a.sort_order || 0) - Number(b.sort_order || 0)) || (Number(a.duration_days || 0) - Number(b.duration_days || 0)) || (Number(a.data_limit_bytes || 0) - Number(b.data_limit_bytes || 0)) || (Number(a.price_toman || 0) - Number(b.price_toman || 0)) || String(a.created_at || "").localeCompare(String(b.created_at || "")));
   const wholesaleDiscount = salesCustomerDiscount(customer);
   const activePromo = customer ? await salesActivePromoForCustomer(env, bot.id, customer) : null;
   const priceInfo = (plan) => {
@@ -3169,26 +3205,24 @@ async function salesCustomerPlansView(env, bot, customer = null, filter = {}) {
       ? salesPromoDiscountForAmount(activePromo, wholesalePrice) : 0;
     return { wholesalePrice, promoDiscount, finalPrice: Math.max(1000, wholesalePrice - promoDiscount) };
   };
-  const text = plans.length ? plans.map((plan, index) => {
-    const price = priceInfo(plan);
-    return (index + 1) + ". <b>" + botEscape(plan.title) + "</b>\n" +
-      "   " + (plan.category_title ? (plan.category_emoji || "📁") + " " + botEscape(plan.category_title) + " · " : "") +
-      (plan.location_title ? (plan.location_emoji || "🌍") + " " + botEscape(plan.location_title) + "\n   " : "") +
-      "حجم: <b>" + botGb(plan.data_limit_bytes) + "</b>" + (requestedPlanType === "volume" ? " · افزایش روی سرویس فعلی" : " · اعتبار: <b>" + botMoney(plan.duration_days) + " روز</b>") + "\n" +
-      "   قیمت: <b>" + botMoney(price.finalPrice) + " تومان</b>" +
-      (wholesaleDiscount > 0 || price.promoDiscount > 0 ? " <s>" + botMoney(plan.price_toman) + "</s>" : "") +
-      (price.promoDiscount > 0 ? " · کد " + botEscape(activePromo.code) : wholesaleDiscount > 0 ? " · عمده " + wholesaleDiscount + "٪" : "");
-  }).join("\n\n") : "در این بخش پلن فعالی ثبت نشده است.";
+  const intro = requestedPlanType === "sale"
+    ? "✨ لطفاً پلن موردنظر را از دکمه‌های زیر انتخاب کنید."
+    : requestedPlanType === "volume"
+      ? "➕ یکی از پلن‌های افزایش حجم را انتخاب کنید."
+      : "♻️ یکی از پلن‌های تمدید را انتخاب کنید.";
+  const text = [
+    requestedPlanType === "sale" ? "📦 <b>مرحله ۳ از ۳ — انتخاب پلن</b>" : requestedPlanType === "volume" ? "➕ <b>پلن‌های افزایش حجم</b>" : "♻️ <b>پلن‌های تمدید</b>",
+    "━━━━━━━━━━━━━━",
+    activePromo ? "🎟 کد فعال: <code>" + botEscape(activePromo.code) + "</code>" : "",
+    intro,
+    plans.length ? "" : "در این بخش پلن فعالی ثبت نشده است."
+  ].filter(Boolean).join("\n");
   const buttons = [];
-  for (const [index, plan] of plans.slice(0, 20).entries()) {
+  const prefix = salesPlanPickPrefix(requestedPlanType);
+  for (const plan of plans.slice(0, 20)) {
     const price = priceInfo(plan);
-    for (const method of resellerPaymentMethodOrder(bot)) {
-      if (method === "card" && resellerPaymentMethodEnabled(bot, "card")) buttons.push([{ text: "💳 کارت‌به‌کارت " + (index + 1) + " — " + botMoney(price.finalPrice), callback_data: "sale:buy:" + plan.id }]);
-      if (method === "blupal" && resellerPaymentMethodEnabled(bot, "blupal")) buttons.push([{ text: "💠 پرداخت آنلاین پلن " + (index + 1), callback_data: "sale:obuy:" + plan.id }]);
-      if (method === "wallet" && resellerPaymentMethodEnabled(bot, "wallet") && customer && Number(customer.wallet_balance || 0) >= price.finalPrice) buttons.push([{ text: "⚡ خرید از موجودی پلن " + (index + 1), callback_data: "sale:wbuy:" + plan.id }]);
-    }
+    buttons.push([{ text: salesPlanSummaryButton(plan, price.finalPrice, requestedPlanType), callback_data: prefix + plan.id }]);
   }
-  if (plans.length && !buttons.length) buttons.push([{ text: "⚠️ روش پرداخت فعالی وجود ندارد", callback_data: "sale:home" }]);
   if (requestedPlanType === "sale") {
     buttons.push([{ text: "↩️ بازگشت به دسته‌بندی‌ها", callback_data: "sale:categories" }]);
     buttons.push([{ text: "🌍 تغییر لوکیشن", callback_data: "sale:locations" }]);
@@ -3197,8 +3231,41 @@ async function salesCustomerPlansView(env, bot, customer = null, filter = {}) {
   }
   buttons.push([{ text: "🏠 منوی اصلی", callback_data: "sale:home" }]);
   return {
-    text: (requestedPlanType === "sale" ? "📦 <b>مرحله ۳ از ۳ — انتخاب پلن</b>" : requestedPlanType === "volume" ? "➕ <b>پلن‌های افزایش حجم</b>" : "♻️ <b>پلن‌های تمدید</b>") +
-      "\n━━━━━━━━━━━━━━\n" + (activePromo ? "🎟 کد فعال: <code>" + botEscape(activePromo.code) + "</code>\n\n" : "") + text,
+    text,
+    reply_markup: { inline_keyboard: buttons }
+  };
+}
+
+async function salesPlanPurchaseMethodsView(env, bot, customer, planId, options = {}) {
+  const plan = await env.PASARGUARD_DB.prepare(`
+    SELECT p.*,c.title AS category_title,c.emoji AS category_emoji,l.title AS location_title,l.emoji AS location_emoji
+    FROM sales_plans p
+    LEFT JOIN sales_categories c ON c.id=p.category_id
+    LEFT JOIN sales_locations l ON l.id=p.location_id
+    WHERE p.id=? AND p.bot_id=? AND p.status='active'
+  `).bind(planId, bot.id).first();
+  if (!plan) throw new Error("این پلن دیگر فعال نیست");
+  const requestedPlanType = String(options.planType || "sale");
+  if (String(plan.plan_type || "sale") !== requestedPlanType) throw new Error("پلن انتخاب‌شده برای این بخش معتبر نیست");
+  const wholesaleDiscount = salesCustomerDiscount(customer);
+  const activePromo = customer ? await salesActivePromoForCustomer(env, bot.id, customer) : null;
+  const wholesalePrice = salesCustomerPlanPrice(plan, customer);
+  const promoDiscount = activePromo && wholesalePrice >= Number(activePromo.min_purchase_toman || 0)
+    ? salesPromoDiscountForAmount(activePromo, wholesalePrice) : 0;
+  const price = { wholesalePrice, promoDiscount, finalPrice: Math.max(1000, wholesalePrice - promoDiscount) };
+  const cardCallback = requestedPlanType === "volume" ? "sale:vplan:" + plan.id : requestedPlanType === "renew" ? "sale:rplan:" + plan.id : "sale:buy:" + plan.id;
+  const onlineCallback = requestedPlanType === "volume" ? "sale:ovplan:" + plan.id : requestedPlanType === "renew" ? "sale:orplan:" + plan.id : "sale:obuy:" + plan.id;
+  const walletCallback = requestedPlanType === "volume" ? "sale:vwbuy:" + plan.id : requestedPlanType === "renew" ? "sale:rwbuy:" + plan.id : "sale:wbuy:" + plan.id;
+  const backCallback = requestedPlanType === "volume" ? "sale:volume:" + (options.targetOrderId || "") : requestedPlanType === "renew" ? "sale:renew:" + (options.targetOrderId || "") : "sale:plans";
+  const buttons = [];
+  if (resellerPaymentMethodEnabled(bot, "card")) buttons.push([{ text: "💳 کارت‌به‌کارت", callback_data: cardCallback }]);
+  if (resellerPaymentMethodEnabled(bot, "blupal")) buttons.push([{ text: "💠 پرداخت آنلاین", callback_data: onlineCallback }]);
+  if (resellerPaymentMethodEnabled(bot, "wallet") && customer && Number(customer.wallet_balance || 0) >= price.finalPrice) buttons.push([{ text: "⚡ پرداخت از موجودی", callback_data: walletCallback }]);
+  if (!buttons.length) buttons.push([{ text: "⚠️ روش پرداخت فعالی وجود ندارد", callback_data: "sale:home" }]);
+  buttons.push([{ text: "↩️ بازگشت به پلن‌ها", callback_data: backCallback }]);
+  buttons.push([{ text: "🏠 منوی اصلی", callback_data: "sale:home" }]);
+  return {
+    text: "🧾 <b>جزئیات پلن انتخاب‌شده</b>\n━━━━━━━━━━━━━━\n" + salesPlanDetailsText(plan, price, requestedPlanType, activePromo, wholesaleDiscount) + "\n\n💳 روش پرداخت را انتخاب کنید:",
     reply_markup: { inline_keyboard: buttons }
   };
 }
@@ -4692,8 +4759,43 @@ async function salesHandleCustomerCallback(env, bot, callback) {
     return salesCustomerSendOrEdit(env, bot, target, "plans", {
       locationId,
       categoryId: categoryId === "none" ? null : categoryId,
-      uncategorized: categoryId === "none"
+      uncategorized: categoryId === "none",
+      planType: "sale"
     });
+  }
+  if (data === "sale:plans") {
+    const session = await salesSessionGet(env, bot.id, customer.telegram_id);
+    const locationId = session?.data?.locationId;
+    if (!locationId) return salesCustomerSendOrEdit(env, bot, target, "locations");
+    const categoryId = session?.data?.categoryId || null;
+    return salesCustomerSendOrEdit(env, bot, target, "plans", {
+      locationId,
+      categoryId,
+      uncategorized: session?.data?.uncategorized === true,
+      planType: "sale"
+    });
+  }
+  if (data.startsWith("sale:planpick:")) {
+    const planId = data.slice("sale:planpick:".length);
+    const view = await salesPlanPurchaseMethodsView(env, bot, customer, planId, { planType: "sale" });
+    await resellerTelegramApi(env, bot, "editMessageText", { chat_id: chatId, message_id: callback.message.message_id, text: view.text, parse_mode: "HTML", reply_markup: view.reply_markup });
+    return;
+  }
+  if (data.startsWith("sale:vpick:")) {
+    const planId = data.slice("sale:vpick:".length);
+    const session = await salesSessionGet(env, bot.id, customer.telegram_id);
+    if (session?.state !== "volume_target" || !session.data.targetOrderId) throw new Error("انتخاب سرویس افزایش حجم منقضی شده است");
+    const view = await salesPlanPurchaseMethodsView(env, bot, customer, planId, { planType: "volume", targetOrderId: session.data.targetOrderId });
+    await resellerTelegramApi(env, bot, "editMessageText", { chat_id: chatId, message_id: callback.message.message_id, text: view.text, parse_mode: "HTML", reply_markup: view.reply_markup });
+    return;
+  }
+  if (data.startsWith("sale:rpick:")) {
+    const planId = data.slice("sale:rpick:".length);
+    const session = await salesSessionGet(env, bot.id, customer.telegram_id);
+    if (session?.state !== "renew_target" || !session.data.targetOrderId) throw new Error("انتخاب سرویس تمدید منقضی شده است");
+    const view = await salesPlanPurchaseMethodsView(env, bot, customer, planId, { planType: "renew", targetOrderId: session.data.targetOrderId });
+    await resellerTelegramApi(env, bot, "editMessageText", { chat_id: chatId, message_id: callback.message.message_id, text: view.text, parse_mode: "HTML", reply_markup: view.reply_markup });
+    return;
   }
   if (data.startsWith("sale:buy:")) {
     const order = await createSalesOrder(env, bot, customer, data.slice(9));
@@ -4765,12 +4867,6 @@ async function salesHandleCustomerCallback(env, bot, callback) {
     await getSalesServiceOrder(env, bot, customer, targetOrderId);
     await salesSessionSet(env, bot.id, customer.telegram_id, "volume_target", { targetOrderId });
     const view = await salesCustomerPlansView(env, bot, customer, { planType: "volume" });
-    view.reply_markup.inline_keyboard = view.reply_markup.inline_keyboard.map(row => row.map(btn => {
-      if (btn.callback_data?.startsWith("sale:buy:")) return { ...btn, callback_data: "sale:vplan:" + btn.callback_data.slice(9) };
-      if (btn.callback_data?.startsWith("sale:obuy:")) return { ...btn, callback_data: "sale:ovplan:" + btn.callback_data.slice(10) };
-      if (btn.callback_data?.startsWith("sale:wbuy:")) return { ...btn, callback_data: "sale:vwbuy:" + btn.callback_data.slice(10) };
-      return btn;
-    }));
     await resellerTelegramApi(env, bot, "editMessageText", { chat_id: chatId, message_id: callback.message.message_id, text: view.text, parse_mode: "HTML", reply_markup: view.reply_markup });
     return;
   }
@@ -10344,7 +10440,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_EDGE_VERSION='3.2.2';
+const BLUEPANEL_EDGE_VERSION='3.2.3';
 function bluePanelEdgeJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function bluePanelEdgeInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
 function bluePanelEdgeRuntimeBinding(env,name){const value=env?.[name];return{name,exact_key_present:Object.prototype.hasOwnProperty.call(env||{},name),value_present:value!==undefined&&value!==null,fetch_callable:Boolean(value&&typeof value.fetch==='function'),constructor_name:value?.constructor?.name||''}}

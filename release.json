@@ -1,7 +1,7 @@
 {
-  "version": "3.2.2",
-  "release_id": "3.2.2-20260715-live-usage-pasarguard-request-scope-fix",
-  "architecture": "fully-split-three-worker-durable-live-usage-request-scope-fixed",
+  "version": "3.2.3",
+  "release_id": "3.2.3-20260715-update-channel-products-ui-fix",
+  "architecture": "fully-split-three-worker-live-usage-channel-notes-products-ui-fixed",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -32,12 +32,11 @@
     ]
   },
   "features": [
-    "fixes live usage failure caused by the undefined pasargadRequest symbol",
-    "all PasarGuard API calls now use the defined pasarguardRequest transport consistently",
-    "the complete live usage call chain was runtime-tested with a mocked PasarGuard admins response",
-    "autonomous representative usage calculation through Durable Object alarms remains independent of cron and user activity",
-    "PasarGuard retries, API-key permission fallback, exact diagnostics and billing idempotency are preserved",
-    "subscription import, CubePay, Plisio, automatic USD rates and report topics are preserved",
+    "release channel announcements now publish only the notes tagged for the current version",
+    "old update notes are no longer repeated inside new release announcements",
+    "reseller product browsing is reorganized into a cleaner two-step flow: choose plan then choose payment method",
+    "plan ordering is normalized by sort order, duration, volume and price for a tidier storefront",
+    "renewal and volume-purchase flows keep working with the new cleaner product picker",
     "README files are excluded"
   ],
   "deployment": {
@@ -53,23 +52,21 @@
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "undefined_pasargad_request_symbol": "removed from all executable call sites",
-    "pasarguard_symbol_scan": "passed; no undefined pasargad/pasarguard function calls",
-    "live_usage_runtime_chain": "pasargadGetManager -> pasarguardRequest -> mocked /api/admins response passed",
-    "release_manifest_hashes": "recalculated from packaged bytes and uploader-compatible",
-    "zip_integrity": "passed",
-    "live_pasarguard_call": "not run without production credentials"
+    "release_notes_version_filter": "passed",
+    "sales_plan_picker_flow": "passed",
+    "uploader_manifest_hashes": "recalculated",
+    "zip_integrity": "passed"
   },
   "sha256": {
-    "core": "7c2b98e2bee4238bfa910baf9715294445cbf728fd2f320939609dc591f1efa1",
-    "edge": "b5f81f6771c98fe6d793d454bc938f4729d05b936db9bdbd18f0555555e12478",
-    "processor": "e30ef10bf8b26f5d817c8fb59c1c2d276b248ef581c9a09830456939338fdd37",
+    "core": "9c48975aeb23d4f1776706d64a6b78761c421951e029c944865643cfc64c5643",
+    "edge": "e89dcaab12e5260cab0e2e950b9c12790443cad70b020d4c2f9d30f811c49741",
+    "processor": "d288da9005410b6eb0279c3a898c4abdb42cfe8dac27da5226601cf81985752a",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "hashes": {
-    "core/worker.js": "7c2b98e2bee4238bfa910baf9715294445cbf728fd2f320939609dc591f1efa1",
-    "edge/worker.js": "b5f81f6771c98fe6d793d454bc938f4729d05b936db9bdbd18f0555555e12478",
-    "processor/worker.js": "e30ef10bf8b26f5d817c8fb59c1c2d276b248ef581c9a09830456939338fdd37",
+    "core/worker.js": "9c48975aeb23d4f1776706d64a6b78761c421951e029c944865643cfc64c5643",
+    "edge/worker.js": "e89dcaab12e5260cab0e2e950b9c12790443cad70b020d4c2f9d30f811c49741",
+    "processor/worker.js": "d288da9005410b6eb0279c3a898c4abdb42cfe8dac27da5226601cf81985752a",
     "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   }
 }

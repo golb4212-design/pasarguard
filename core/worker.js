@@ -1,38 +1,32 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.2.2
+ * Version: 3.2.3
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.2.2";
+const APP_VERSION = "3.2.3";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
-  central: Object.freeze([
-    { emoji: "🩺", text: "رفع خطای پنهان همگام‌سازی مصرف، fallback خودکار احراز هویت و نمایش علت دقیق هر خطا" },
-    { emoji: "⚡", text: "کاهش رفت‌وبرگشت بین Workerها در مسیرهای پرتکرار" },
-    { emoji: "🚀", text: "ارسال سریع‌تر منوی شروع با انتقال ثبت گزارش و پاک‌سازی نشست به پس‌زمینه" },
-    { emoji: "🧠", text: "کش کوتاه‌مدت تنظیمات و وضعیت عضویت برای پاسخ سریع‌تر" },
-    { emoji: "🪙", text: "افزودن درگاه رمزارزی Plisio با Callback امضاشده و شارژ یک‌باره" },
-    { emoji: "🔑", text: "افزودن مدیریت مستقیم API Key پاسارگارد در پنل مرکزی و ربات مرکزی" },
-    { emoji: "💵", text: "دریافت خودکار نرخ دلار به تومان برای فاکتورهای Plisio با کش و نرخ پشتیبان" },
-    { emoji: "⚡", text: "ساخت سریع‌تر فاکتور Plisio با نرخ کش‌شده و انتقال ثبت وضعیت و گزارش به پس‌زمینه" },
-    { emoji: "💳", text: "افزودن CubePay کارت‌به‌کارت با Callback و تایید نهایی API برای مرکز و نمایندگان" },
-    { emoji: "🔗", text: "اتصال سرویس‌های قدیمی با لینک اشتراک و انتقال مدیریت آن‌ها به ربات نماینده" },
-    { emoji: "🧵", text: "پردازش و ترمیم Topicهای گزارش فقط با Cron ورکر مرکزی و بدون نیاز به Cron جداگانه" },
-    { emoji: "📡", text: "بازگشت محاسبه Live مصرف نمایندگان با Durable Object Alarm و بدون وابستگی به Cron یا فعالیت کاربر" }
-  ]),
-  reseller: Object.freeze([
-    { emoji: "📦", text: "تجمیع درخواست‌های اولیه پنل فروش و مدیریت در یک Batch دیتابیس" },
-    { emoji: "🤖", text: "حذف همگام‌سازی سنگین BotFather از مسیر پاسخ کاربران" },
-    { emoji: "⚡", text: "افزایش سرعت پاسخ ربات‌های نماینده و بازشدن پنل‌ها" },
-    { emoji: "🔗", text: "ثبت سرویس قبلی با لینک اشتراک و فعال‌شدن استعلام، تمدید، افزایش حجم و دریافت لینک" },
-    { emoji: "🧵", text: "ارسال رویدادها به Topic تخصصی و بازیابی خودکار Topic حذف‌شده یا خراب" },
-    { emoji: "⚡", text: "محاسبه و کسر خودکار مصرف در پس‌زمینه حتی بدون بازشدن ربات یا مینی‌اپ" }
-  ])
+  "3.2.3": Object.freeze({
+    central: Object.freeze([
+      { emoji: "📣", text: "انتشار کانال آپدیت فقط بر اساس آیتم‌های همان نسخه و جلوگیری از تکرار تغییرات قدیمی" },
+      { emoji: "🛍", text: "بازطراحی نمایش پلن‌های فروش با مرتب‌سازی تمیزتر و انتخاب مرحله‌ای پلن و روش پرداخت" },
+      { emoji: "🎯", text: "چیدمان طبیعی‌تر محصولات بر اساس ترتیب، مدت، حجم و قیمت برای بخش خرید" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "✨", text: "نمایش حرفه‌ای‌تر محصولات فروش به سبک لیست کارت‌مانند و قابل فهم‌تر" },
+      { emoji: "💳", text: "انتخاب روش پرداخت پس از انتخاب پلن برای جلوگیری از شلوغی و دکمه‌های تکراری" },
+      { emoji: "📚", text: "حفظ تمام امکانات قبلی خرید، تمدید و افزایش حجم با مسیر مرتب‌تر" }
+    ])
+  })
 });
+
+function currentReleaseNotes() {
+  return RELEASE_NOTES[APP_VERSION] || { central: [], reseller: [] };
+}
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
@@ -2705,9 +2699,10 @@ function releaseNotesSection(title, items) {
 
 function releaseAnnouncementText(settings, test = false) {
   const brand = cleanText(settings.brand_name, 120) || "سامانه پاسارگارد";
+  const notes = currentReleaseNotes();
   const sections = [
-    releaseNotesSection("🤖 ربات مرکزی", RELEASE_NOTES.central),
-    releaseNotesSection("🧑‍💼 ربات نماینده", RELEASE_NOTES.reseller)
+    releaseNotesSection("🤖 ربات مرکزی", notes.central),
+    releaseNotesSection("🧑‍💼 ربات نماینده", notes.reseller)
   ].filter(Boolean);
   const changes = sections.length ? sections.join("\n\n") : "▫️ تغییری برای این نسخه ثبت نشده است.";
   return (test ? "🧪 <b>پیام آزمایشی کانال آپدیت‌ها</b>" : "🚀 <b>بروزرسانی رسمی " + botEscape(brand) + "</b>") + "\n" +
@@ -13342,7 +13337,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.2.2';
+const BLUEPANEL_CORE_VERSION = '3.2.3';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
