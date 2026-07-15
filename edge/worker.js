@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.2.5
+ * Version: 3.2.6
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = "3.2.5";
+const APP_VERSION = "3.2.6";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -3112,31 +3112,100 @@ function salesPlanDurationLabel(days, planType) {
   return botMoney(numericDays) + " روزه";
 }
 
-function salesPlanDisplayTitle(plan, requestedPlanType) {
-  const size = botGb(plan.data_limit_bytes);
-  const duration = salesPlanDurationLabel(plan.duration_days, requestedPlanType);
-  if (requestedPlanType === "volume") return "افزایش حجم | حجم: " + size;
-  if (requestedPlanType === "renew") return "تمدید سرویس | حجم: " + size + " | مدت: " + duration;
-  return "پلن سرویس | حجم: " + size + " | مدت: " + duration;
+function salesPlanDisplayName(plan) {
+  const title = String(plan?.title || "").trim();
+  if (title) return title;
+  const size = botGb(plan?.data_limit_bytes || 0);
+  return size ? "پلن " + size : "پلن سرویس";
+}
+
+function rtlSegment(value) {
+  return "\u2067" + String(value ?? "") + "\u2069";
+}
+
+function ltrSegment(value) {
+  return "\u2066" + String(value ?? "") + "\u2069";
 }
 
 function salesPlanSummaryButton(plan, finalPrice, requestedPlanType) {
+  const name = salesPlanDisplayName(plan);
   const size = botGb(plan.data_limit_bytes);
   const duration = salesPlanDurationLabel(plan.duration_days, requestedPlanType);
-  return "🚀 حجم: " + size + " • مدت: " + duration + " • قیمت: " + botMoney(finalPrice) + " تومان";
+  const amount = botMoney(finalPrice) + " تومان";
+  // Explicit bidi isolation keeps the visual order stable in Telegram RTL buttons:
+  // plan name → volume → duration → amount.
+  return "\u200F🚀 " + rtlSegment(name) + " • " + ltrSegment(size) + " • " + rtlSegment(duration) + " • " + rtlSegment(amount);
 }
 
 function salesPlanDetailsText(plan, price, requestedPlanType, activePromo, wholesaleDiscount) {
-  const registeredTitle = cleanText(plan.title, 120);
-  return "<b>" + botEscape(salesPlanDisplayTitle(plan, requestedPlanType)) + "</b>\n" +
-    (plan.location_title ? (plan.location_emoji || "🌍") + " " + botEscape(plan.location_title) + (plan.category_title ? " · " : "") : "") +
-    (plan.category_title ? (plan.category_emoji || "📁") + " " + botEscape(plan.category_title) : "") +
-    ((plan.location_title || plan.category_title) ? "\n" : "") +
-    (registeredTitle ? "نام ثبت‌شده: <b>" + botEscape(registeredTitle) + "</b>\n" : "") +
-    "حجم: <b>" + botGb(plan.data_limit_bytes) + "</b>" + (requestedPlanType === "volume" ? " · روی سرویس فعلی" : "\nمدت: <b>" + salesPlanDurationLabel(plan.duration_days, requestedPlanType) + "</b>") + "\n" +
-    "قیمت: <b>" + botMoney(price.finalPrice) + " تومان</b>" +
-    ((wholesaleDiscount > 0 || price.promoDiscount > 0) ? " <s>" + botMoney(plan.price_toman) + "</s>" : "") +
-    (price.promoDiscount > 0 ? " · کد " + botEscape(activePromo.code) : wholesaleDiscount > 0 ? " · عمده " + wholesaleDiscount + "٪" : "");
+  const location = plan.location_title
+    ? (plan.location_emoji || "🌍") + " " + botEscape(plan.location_title)
+    : "ثبت نشده";
+  const category = plan.category_title
+    ? (plan.category_emoji || "📁") + " " + botEscape(plan.category_title)
+    : "";
+  const oldPrice = (wholesaleDiscount > 0 || price.promoDiscount > 0)
+    ? " <s>" + botMoney(plan.price_toman) + " تومان</s>"
+    : "";
+  const discount = price.promoDiscount > 0
+    ? "\n🎟 کد تخفیف: <code>" + botEscape(activePromo.code) + "</code>"
+    : wholesaleDiscount > 0
+      ? "\n🏷 تخفیف عمده: <b>" + wholesaleDiscount + "٪</b>"
+      : "";
+  return "🏷 نام پلن: <b>" + botEscape(salesPlanDisplayName(plan)) + "</b>\n" +
+    "📦 حجم: <b>" + botGb(plan.data_limit_bytes) + "</b>\n" +
+    (requestedPlanType === "volume"
+      ? "➕ نوع عملیات: <b>افزایش حجم روی سرویس فعلی</b>\n"
+      : "🗓 مدت: <b>" + salesPlanDurationLabel(plan.duration_days, requestedPlanType) + "</b>\n") +
+    "🌍 لوکیشن: <b>" + location + "</b>" +
+    (category ? "\n📂 دسته‌بندی: <b>" + category + "</b>" : "") +
+    discount + "\n" +
+    "💰 مبلغ: <b>" + botMoney(price.finalPrice) + " تومان</b>" + oldPrice;
+}
+
+function normalizeChosenSubscriptionUsername(value) {
+  const username = cleanText(value, 80).replace(/^@+/, "").toLowerCase();
+  if (username.length < 3 || username.length > 32) throw new Error("نام اشتراک باید بین ۳ تا ۳۲ کاراکتر باشد");
+  if (!/^[a-z][a-z0-9_]*$/.test(username)) {
+    throw new Error("نام اشتراک باید با حرف انگلیسی شروع شود و فقط شامل حروف انگلیسی، عدد و _ باشد");
+  }
+  if (["admin", "root", "api", "system", "support"].includes(username)) throw new Error("این نام اشتراک قابل استفاده نیست");
+  return username;
+}
+
+async function assertSalesSubscriptionUsernameAvailable(env, bot, customer, username) {
+  const local = await env.PASARGUARD_DB.prepare(`
+    SELECT id,customer_id,status FROM sales_orders
+    WHERE bot_id=? AND LOWER(remote_username)=? AND status NOT IN ('cancelled','rejected','provision_failed')
+    LIMIT 1
+  `).bind(bot.id, username).first();
+  if (local) {
+    if (String(local.customer_id) === String(customer.id)) throw new Error("این نام قبلاً در یکی از سفارش‌های خودتان استفاده شده است");
+    throw new Error("این نام اشتراک قبلاً رزرو شده است؛ نام دیگری انتخاب کنید");
+  }
+  const serviceBot = await resolveResellerServiceAgency(env, bot);
+  if (serviceBot.agency_status && serviceBot.agency_status !== "active") throw new Error("پنل ساخت سرویس این ربات فعال نیست");
+  const agency = {
+    id: serviceBot.agency_id,
+    panel_username: serviceBot.panel_username,
+    panel_password_enc: serviceBot.panel_password_enc
+  };
+  try {
+    await agencyPasarguardRequest(env, agency, "GET", "/api/user/" + encodeURIComponent(username));
+    throw new Error("این نام اشتراک در پنل قبلاً استفاده شده است؛ نام دیگری انتخاب کنید");
+  } catch (error) {
+    if (Number(error?.status) === 404) return username;
+    throw error;
+  }
+}
+
+async function getReadySubscriptionUsername(env, bot, customer, planId) {
+  const session = await salesSessionGet(env, bot.id, customer.telegram_id);
+  const requestedUsername = normalizeChosenSubscriptionUsername(session?.data?.requestedUsername || "");
+  if (session?.state !== "subscription_username_ready" || String(session?.data?.planId || "") !== String(planId)) {
+    throw new Error("ابتدا نام اشتراک را انتخاب کنید");
+  }
+  return requestedUsername;
 }
 
 function salesPlanPickPrefix(planType) {
@@ -3229,8 +3298,11 @@ async function salesPlanPurchaseMethodsView(env, bot, customer, planId, options 
   if (!buttons.length) buttons.push([{ text: "⚠️ روش پرداخت فعالی وجود ندارد", callback_data: "sale:home" }]);
   buttons.push([{ text: "↩️ بازگشت به پلن‌ها", callback_data: backCallback }]);
   buttons.push([{ text: "🏠 منوی اصلی", callback_data: "sale:home" }]);
+  const chosenUsername = requestedPlanType === "sale" && options.requestedUsername
+    ? "\nنام اشتراک: <code>" + botEscape(options.requestedUsername) + "</code>"
+    : "";
   return {
-    text: "🧾 <b>جزئیات پلن انتخاب‌شده</b>\n━━━━━━━━━━━━━━\n" + salesPlanDetailsText(plan, price, requestedPlanType, activePromo, wholesaleDiscount) + "\n\n💳 روش پرداخت را انتخاب کنید:",
+    text: "🧾 <b>جزئیات پلن انتخاب‌شده</b>\n━━━━━━━━━━━━━━\n" + salesPlanDetailsText(plan, price, requestedPlanType, activePromo, wholesaleDiscount) + chosenUsername + "\n\n💳 روش پرداخت را انتخاب کنید:",
     reply_markup: { inline_keyboard: buttons }
   };
 }
@@ -3636,6 +3708,10 @@ async function createSalesOrder(env, bot, customer, planId, options = {}) {
   resellerRequirePaymentMethod(bot, paymentMethod, "order");
   const status = options.status || (paymentMethod === "wallet" ? "pending_review" : paymentMethod === "blupal" ? "payment_pending" : "awaiting_receipt");
   const origin = options.origin === "miniapp" ? "miniapp" : "bot";
+  const requestedUsername = expectedPlanType === "sale" && cleanText(options.requestedUsername, 80)
+    ? normalizeChosenSubscriptionUsername(options.requestedUsername)
+    : null;
+  if (expectedPlanType === "sale" && origin === "bot" && !requestedUsername) throw new Error("نام اشتراک انتخاب نشده است");
   const originalPrice = salesCustomerPlanPrice(plan, customer);
 
   if (["awaiting_receipt", "payment_pending"].includes(status)) {
@@ -3664,12 +3740,12 @@ async function createSalesOrder(env, bot, customer, planId, options = {}) {
     await env.PASARGUARD_DB.prepare(`
       INSERT INTO sales_orders(
         id,bot_id,plan_id,customer_id,amount_toman,original_amount_toman,discount_toman,promo_code_id,promo_code,
-        status,order_type,target_order_id,payment_method,origin,created_at,updated_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        status,order_type,target_order_id,payment_method,origin,remote_username,created_at,updated_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).bind(
       orderId, bot.id, plan.id, customer.id, finalPrice, originalPrice, discountToman,
       promoResult?.promo?.id || null, promoResult?.promo?.code || null,
-      status, options.orderType || "new", options.targetOrderId || null, paymentMethod, origin, ts, ts
+      status, options.orderType || "new", options.targetOrderId || null, paymentMethod, origin, requestedUsername, ts, ts
     ).run();
   } catch (error) {
     if (promoResult) try { await salesReleasePromoForOrder(env, orderId); } catch (_) {}
@@ -3679,7 +3755,7 @@ async function createSalesOrder(env, bot, customer, planId, options = {}) {
   if (status === "awaiting_receipt" && origin !== "miniapp") await salesSessionSet(env, bot.id, customer.telegram_id, "awaiting_receipt", { orderId });
   await salesEvent(env, bot.id, customer.id, "order_created", {
     orderId, planId, paymentMethod, orderType: options.orderType || "new", originalPrice,
-    discountToman, finalPrice, promoCode: promoResult?.promo?.code || "", origin
+    discountToman, finalPrice, promoCode: promoResult?.promo?.code || "", origin, requestedUsername
   });
   await queueReportEvent(env, bot.id, "orders", "سفارش جدید ثبت شد",
     "مشتری: <b>" + botEscape(customer.first_name || customer.username || customer.telegram_id) + "</b>\n" +
@@ -3687,12 +3763,13 @@ async function createSalesOrder(env, bot, customer, planId, options = {}) {
     "نوع: <b>" + botEscape(options.orderType || "new") + "</b>\n" +
     "مبلغ: <b>" + botMoney(finalPrice) + " تومان</b>\n" +
     "پرداخت: <b>" + botEscape(paymentMethod) + "</b>\n" +
+    (requestedUsername ? "نام اشتراک: <code>" + botEscape(requestedUsername) + "</code>\n" : "") +
     "سفارش: <code>" + botEscape(orderId) + "</code>",
     "order-created:" + orderId);
   return {
     orderId, plan, amountToman: finalPrice, originalAmountToman: originalPrice, discountToman,
     promoCode: promoResult?.promo?.code || "", orderType: options.orderType || "new",
-    targetOrderId: options.targetOrderId || null, origin
+    targetOrderId: options.targetOrderId || null, origin, requestedUsername
   };
 }
 
@@ -3730,7 +3807,8 @@ async function sendSalesPaymentInstructions(env, bot, customer, order) {
       "مقدار تخفیف: <b>" + botMoney(order.discountToman) + " تومان</b>\n"
     : "";
   const text = "🧾 <b>ثبت سفارش انجام شد</b>\n━━━━━━━━━━━━━━\n" +
-    "پلن: <b>" + botEscape(order.plan.title) + "</b>\n" + discountLines +
+    "پلن: <b>" + botEscape(order.plan.title) + "</b>\n" +
+    (order.requestedUsername ? "نام اشتراک: <code>" + botEscape(order.requestedUsername) + "</code>\n" : "") + discountLines +
     "مبلغ پرداخت: <b>" + botMoney(order.amountToman) + " تومان</b>\n\n" +
     "💳 شماره کارت:\n<code>" + botEscape(formatCardNumber(bot.card_number)) + "</code>\n" +
     "👤 به نام: <b>" + botEscape(bot.card_holder) + "</b>\n" +
@@ -4421,7 +4499,9 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
       created = await agencyPasarguardRequest(env, agency, "PUT", "/api/user/" + encodeURIComponent(username), payload);
       subscriptionUrl = cleanText(created.subscription_url || current.subscription_url || created?.data?.subscription_url, 2000);
     } else {
-      username = normalizeUsername("ord_" + String(order.id).replace(/[^a-zA-Z0-9]/g, "").slice(-24));
+      username = order.remote_username
+        ? normalizeChosenSubscriptionUsername(order.remote_username)
+        : normalizeUsername("ord_" + String(order.id).replace(/[^a-zA-Z0-9]/g, "").slice(-24));
       const expiresAt = Number(order.duration_days) > 0 ? new Date(Date.now() + Number(order.duration_days) * 86400000).toISOString() : 0;
       const payload = {
         username,
@@ -4437,8 +4517,7 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
         try { created = await agencyPasarguardRequest(env, agency, "POST", "/api/user", payload); }
         catch (error) {
           if (error.status === 409 || /username|already|وجود|تکرار/i.test(String(error.message || ""))) {
-            created = await agencyPasarguardRequest(env, agency, "GET", "/api/user/" + encodeURIComponent(username));
-            break;
+            throw new Error("نام اشتراک «" + username + "» قبلاً استفاده شده است؛ سفارش را با نام دیگری ثبت کنید");
           }
           if (attempt < 2 && (!error.status || error.status >= 500)) continue;
           throw error;
@@ -4721,12 +4800,13 @@ async function salesHandleCustomerCallback(env, bot, callback) {
     const locationId = session?.data?.locationId;
     if (!locationId) return salesCustomerSendOrEdit(env, bot, target, "locations");
     const categoryId = data.slice(9);
-    return salesCustomerSendOrEdit(env, bot, target, "plans", {
+    const filterData = {
       locationId,
       categoryId: categoryId === "none" ? null : categoryId,
-      uncategorized: categoryId === "none",
-      planType: "sale"
-    });
+      uncategorized: categoryId === "none"
+    };
+    await salesSessionSet(env, bot.id, customer.telegram_id, "purchase_filter", filterData);
+    return salesCustomerSendOrEdit(env, bot, target, "plans", { ...filterData, planType: "sale" });
   }
   if (data === "sale:plans") {
     const session = await salesSessionGet(env, bot.id, customer.telegram_id);
@@ -4742,8 +4822,20 @@ async function salesHandleCustomerCallback(env, bot, callback) {
   }
   if (data.startsWith("sale:planpick:")) {
     const planId = data.slice("sale:planpick:".length);
-    const view = await salesPlanPurchaseMethodsView(env, bot, customer, planId, { planType: "sale" });
-    await resellerTelegramApi(env, bot, "editMessageText", { chat_id: chatId, message_id: callback.message.message_id, text: view.text, parse_mode: "HTML", reply_markup: view.reply_markup });
+    const plan = await env.PASARGUARD_DB.prepare("SELECT id,title FROM sales_plans WHERE id=? AND bot_id=? AND status='active'")
+      .bind(planId, bot.id).first();
+    if (!plan) throw new Error("این پلن دیگر فعال نیست");
+    const previous = await salesSessionGet(env, bot.id, customer.telegram_id);
+    await salesSessionSet(env, bot.id, customer.telegram_id, "subscription_username", {
+      ...(previous?.data || {}), planId
+    });
+    await resellerTelegramApi(env, bot, "editMessageText", {
+      chat_id: chatId,
+      message_id: callback.message.message_id,
+      parse_mode: "HTML",
+      text: "✍️ <b>انتخاب نام اشتراک</b>\n━━━━━━━━━━━━━━\nپلن: <b>" + botEscape(plan.title) + "</b>\n\nنام دلخواه سرویس را ارسال کنید.\n\nشرایط نام:\n• بین ۳ تا ۳۲ کاراکتر\n• شروع با حرف انگلیسی\n• فقط حروف انگلیسی، عدد و _\n\nمثال: <code>niko_vpn</code>",
+      reply_markup: { inline_keyboard: [[{ text: "↩️ بازگشت به پلن‌ها", callback_data: "sale:plans" }], [{ text: "🏠 منوی اصلی", callback_data: "sale:home" }]] }
+    });
     return;
   }
   if (data.startsWith("sale:vpick:")) {
@@ -4763,15 +4855,20 @@ async function salesHandleCustomerCallback(env, bot, callback) {
     return;
   }
   if (data.startsWith("sale:buy:")) {
-    const order = await createSalesOrder(env, bot, customer, data.slice(9));
+    const planId = data.slice(9);
+    const requestedUsername = await getReadySubscriptionUsername(env, bot, customer, planId);
+    const order = await createSalesOrder(env, bot, customer, planId, { requestedUsername });
     await sendSalesPaymentInstructions(env, bot, customer, order);
     return;
   }
   if (data.startsWith("sale:obuy:")) {
-    const order = await createSalesOrder(env, bot, customer, data.slice(10), { paymentMethod: "blupal" });
+    const planId = data.slice(10);
+    const requestedUsername = await getReadySubscriptionUsername(env, bot, customer, planId);
+    const order = await createSalesOrder(env, bot, customer, planId, { paymentMethod: "blupal", requestedUsername });
     try {
       const invoice = await createSalesBlupalInvoice(env, bot, customer, "order", order.orderId, order.amountToman);
-      await sendSalesBlupalInvoiceMessage(env, bot, customer, invoice, "پرداخت آنلاین سفارش", "پلن: " + order.plan.title);
+      await salesSessionClear(env, bot.id, customer.telegram_id);
+      await sendSalesBlupalInvoiceMessage(env, bot, customer, invoice, "پرداخت آنلاین سفارش", "پلن: " + order.plan.title + "\nنام اشتراک: " + requestedUsername);
     } catch (error) {
       await env.PASARGUARD_DB.prepare("UPDATE sales_orders SET status='cancelled',updated_at=? WHERE id=?").bind(nowIso(),order.orderId).run();
       try { await salesReleasePromoForOrder(env, order.orderId); } catch (_) {}
@@ -4780,7 +4877,10 @@ async function salesHandleCustomerCallback(env, bot, callback) {
     return;
   }
   if (data.startsWith("sale:wbuy:")) {
-    await purchaseSalesPlanFromWallet(env, bot, customer, data.slice(10));
+    const planId = data.slice(10);
+    const requestedUsername = await getReadySubscriptionUsername(env, bot, customer, planId);
+    await purchaseSalesPlanFromWallet(env, bot, customer, planId, { requestedUsername });
+    await salesSessionClear(env, bot.id, customer.telegram_id);
     return;
   }
   if (data.startsWith("sale:paystatus:")) {
@@ -6931,6 +7031,23 @@ async function resellerSalesWebhook(request, env, botId, ctx = null) {
         text: (imported.alreadyLinked ? "✅ <b>این سرویس از قبل به حساب شما متصل بود و اطلاعات آن بروزرسانی شد.</b>" : "✅ <b>سرویس قبلی با موفقیت به حساب شما متصل شد.</b>") +
           "\n\nنام کاربری: <code>" + botEscape(imported.remote_username) + "</code>\nاز این پس استعلام، تمدید، افزایش حجم و دریافت لینک از بخش سرویس‌های من انجام می‌شود.",
         reply_markup: { inline_keyboard: [[{ text: "🧭 مشاهده سرویس", callback_data: "sale:service:" + imported.id }], [{ text: "🏠 منوی اصلی", callback_data: "sale:home" }]] }
+      });
+      return json({ ok: true });
+    }
+    if (session?.state === "subscription_username") {
+      const requestedUsername = normalizeChosenSubscriptionUsername(text);
+      await assertSalesSubscriptionUsernameAvailable(env, bot, customer, requestedUsername);
+      const planId = cleanText(session.data?.planId, 100);
+      if (!planId) throw new Error("انتخاب پلن منقضی شده است؛ دوباره پلن را انتخاب کنید");
+      const view = await salesPlanPurchaseMethodsView(env, bot, customer, planId, { planType: "sale", requestedUsername });
+      await salesSessionSet(env, bot.id, customer.telegram_id, "subscription_username_ready", {
+        ...(session.data || {}), planId, requestedUsername
+      });
+      await resellerTelegramApi(env, bot, "sendMessage", {
+        chat_id: message.chat.id,
+        text: view.text,
+        parse_mode: "HTML",
+        reply_markup: view.reply_markup
       });
       return json({ ok: true });
     }
@@ -10405,7 +10522,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_EDGE_VERSION='3.2.5';
+const BLUEPANEL_EDGE_VERSION='3.2.6';
 function bluePanelEdgeJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function bluePanelEdgeInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
 function bluePanelEdgeRuntimeBinding(env,name){const value=env?.[name];return{name,exact_key_present:Object.prototype.hasOwnProperty.call(env||{},name),value_present:value!==undefined&&value!==null,fetch_callable:Boolean(value&&typeof value.fetch==='function'),constructor_name:value?.constructor?.name||''}}

@@ -1,7 +1,7 @@
 {
-  "version": "3.2.5",
-  "release_id": "3.2.5-20260715-plan-title-and-order-fix",
-  "architecture": "fully-split-three-worker-live-usage-wallet-collection-report-fixed",
+  "version": "3.2.6",
+  "release_id": "3.2.6-20260715-user-chosen-subscription-name",
+  "architecture": "fully-split-three-worker-live-usage-plan-display-bidi-fixed",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -32,10 +32,11 @@
     ]
   },
   "features": [
-    "fixes reseller plan-name rendering so the selected plan is shown with a normalized readable title",
-    "moves volume/size to the beginning and price to the end in purchase buttons and plan details",
-    "selected-plan details now show the normalized service title plus the registered internal title",
-    "3.2.4 live-usage wallet collection fixes remain included",
+    "reseller bot customers now choose their own subscription username before selecting payment",
+    "subscription usernames are validated and checked for availability in the connected PasarGuard panel",
+    "new bot orders persist the requested username and provision exactly that username",
+    "username collisions fail safely instead of attaching an existing remote service",
+    "renewal, volume, miniapp, live usage and wallet collection behavior remain preserved",
     "README files are excluded"
   ],
   "deployment": {
@@ -51,21 +52,25 @@
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "plan_summary_order": "passed",
-    "selected_plan_detail_layout": "passed",
-    "release_manifest_hashes": "recalculated",
-    "zip_integrity": "passed"
+    "username_validation": "passed",
+    "remote_availability_check": "implemented against connected PasarGuard panel",
+    "username_collision_safety": "existing remote service is never adopted on conflict",
+    "payment_flows": "card, online and wallet preserve requested username",
+    "sales_order_insert_placeholders": "17 columns / 17 values verified",
+    "manifest_hashes": "recalculated",
+    "zip_integrity": "passed after packaging",
+    "live_pasarguard_call": "not run without production credentials"
   },
   "sha256": {
-    "core": "0be1f428084b032f5937824e06cdf39678ee8e58062495b356c792b0e27ff449",
-    "edge": "943a3e89ee29302dbf6c10f1215d011ccb0890c05467374e019db40661ad997a",
-    "processor": "aa9e8cd1d6623c9f99292db2a5e40c4992fd0870abcb666f0d952de1f1856911",
+    "core": "fddde2609f46d1bf3ab96ad8a0b2539aa74ed025e9d1d36cc03e4d063601b6d7",
+    "edge": "7dbeedb487bc413f9df763a5e02a1446aeb0a745418f16c9a242eb86c0fbf982",
+    "processor": "b3b12ce24ac07829c36d8711dd55a7e14be796960e85b640d41390e7b9717a12",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "hashes": {
-    "core/worker.js": "0be1f428084b032f5937824e06cdf39678ee8e58062495b356c792b0e27ff449",
-    "edge/worker.js": "943a3e89ee29302dbf6c10f1215d011ccb0890c05467374e019db40661ad997a",
-    "processor/worker.js": "aa9e8cd1d6623c9f99292db2a5e40c4992fd0870abcb666f0d952de1f1856911",
+    "core/worker.js": "fddde2609f46d1bf3ab96ad8a0b2539aa74ed025e9d1d36cc03e4d063601b6d7",
+    "edge/worker.js": "7dbeedb487bc413f9df763a5e02a1446aeb0a745418f16c9a242eb86c0fbf982",
+    "processor/worker.js": "b3b12ce24ac07829c36d8711dd55a7e14be796960e85b640d41390e7b9717a12",
     "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   }
 }

@@ -1,15 +1,36 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.2.5
+ * Version: 3.2.6
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.2.5";
+const APP_VERSION = "3.2.6";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.2.6": Object.freeze({
+    central: Object.freeze([
+      { emoji: "✍️", text: "افزودن انتخاب نام اشتراک توسط کاربر پیش از پرداخت در ربات‌های نماینده" },
+      { emoji: "🛡", text: "بررسی آزادبودن نام در پنل پاسارگارد و جلوگیری از اتصال اشتباه به سرویس موجود" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "👤", text: "حذف نام رندوم سرویس و دریافت نام دلخواه از مشتری" },
+      { emoji: "✅", text: "اعتبارسنجی نام، کنترل تکراری‌نبودن و نمایش نام انتخاب‌شده پیش از پرداخت" }
+    ])
+  }),
+  "3.2.5": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🧾", text: "اصلاح نام و ترتیب نمایش پلن‌ها در بخش خرید نمایندگان" },
+      { emoji: "↔️", text: "رفع به‌هم‌ریختگی متن‌های عددی و لاتین در دکمه‌های RTL تلگرام" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "🏷", text: "نمایش نام واقعی پلن در دکمه خرید و صفحه جزئیات" },
+      { emoji: "📦", text: "چیدمان جدید: نام پلن، حجم، مدت و مبلغ در انتهای ردیف" },
+      { emoji: "💰", text: "قرارگرفتن مبلغ در آخر جزئیات پلن و حذف نمایش مبهم یا شکسته" }
+    ])
+  }),
   "3.2.4": Object.freeze({
     central: Object.freeze([
       { emoji: "💸", text: "یکسان‌سازی صورتحساب مصرف با کسر واقعی کیف پول در هر دور همگام‌سازی" },
@@ -13395,7 +13416,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.2.5';
+const BLUEPANEL_CORE_VERSION = '3.2.6';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
