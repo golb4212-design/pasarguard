@@ -1,11 +1,11 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.1.3
+ * Version: 3.1.5
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.1.4";
+const APP_VERSION = "3.1.5";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -16,7 +16,8 @@ const RELEASE_NOTES = Object.freeze({
     { emoji: "🧠", text: "کش کوتاه‌مدت تنظیمات و وضعیت عضویت برای پاسخ سریع‌تر" },
     { emoji: "🪙", text: "افزودن درگاه رمزارزی Plisio با Callback امضاشده و شارژ یک‌باره" },
     { emoji: "🔑", text: "افزودن مدیریت مستقیم API Key پاسارگارد در پنل مرکزی و ربات مرکزی" },
-    { emoji: "💵", text: "دریافت خودکار نرخ دلار به تومان برای فاکتورهای Plisio با کش و نرخ پشتیبان" }
+    { emoji: "💵", text: "دریافت خودکار نرخ دلار به تومان برای فاکتورهای Plisio با کش و نرخ پشتیبان" },
+    { emoji: "⚡", text: "ساخت سریع‌تر فاکتور Plisio با نرخ کش‌شده و انتقال ثبت وضعیت و گزارش به پس‌زمینه" }
   ]),
   reseller: Object.freeze([
     { emoji: "📦", text: "تجمیع درخواست‌های اولیه پنل فروش و مدیریت در یک Batch دیتابیس" },
@@ -115,11 +116,15 @@ let encryptionKeyCache = null;
 
 let encryptionKeyCacheSource = "";
 
+let centralPlisioSecretCache = { source: "", value: "", at: 0 };
+
 const resellerTokenCache = new Map();
 
 const joinStatusCache = new Map();
 
 const SETTINGS_CACHE_TTL_MS = 60000;
+
+const PLISIO_SECRET_CACHE_TTL_MS = 10 * 60 * 1000;
 
 const PY_HELPER_INSIGHT_TIMEOUT_MS = 350;
 
@@ -4138,27 +4143,72 @@ async function refreshCentralPlisioFxRate(env, { force = false } = {}) {
   return plisioFxRefreshPromise;
 }
 
+function scheduleInvoiceBackground(ctx, task, label = "invoice background task") {
+  const guarded = Promise.resolve(task).catch(error => console.error(label, error));
+  if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(guarded);
+  return guarded;
+}
+
+async function resolveCentralPlisioFxRateForInvoice(env, settings, ctx = null) {
+  if (plisioRateMode(settings) !== "auto") {
+    const manual = Number(settings.plisio_toman_per_source_unit || 0);
+    if (manual <= 0) throw new Error("نرخ دستی Plisio ثبت نشده است");
+    return { rate_toman: manual, source: "manual", stale: false, fetched_at: settings.plisio_fx_last_fetched_at || "" };
+  }
+  const refreshMinutes = Math.max(5, Math.min(1440, Number(settings.plisio_fx_refresh_minutes || 15)));
+  const maxStale = Math.max(15, Math.min(10080, Number(settings.plisio_fx_max_stale_minutes || 1440)));
+  const age = fxCacheAgeMinutes(settings);
+  const cached = Number(settings.plisio_fx_last_rate_toman || 0);
+  const refreshTask = () => refreshCentralPlisioFxRate(env, { force: true });
+  if (cached > 0 && age <= maxStale) {
+    if (age >= refreshMinutes) scheduleInvoiceBackground(ctx, refreshTask(), "Plisio FX refresh failed");
+    return {
+      rate_toman: cached,
+      source: age < refreshMinutes ? "cache" : "stale_cache_refreshing",
+      stale: age >= refreshMinutes,
+      fetched_at: settings.plisio_fx_last_fetched_at || ""
+    };
+  }
+  const fallback = Number(settings.plisio_toman_per_source_unit || 0);
+  if (fallback > 0) {
+    scheduleInvoiceBackground(ctx, refreshTask(), "Plisio FX fallback refresh failed");
+    return { rate_toman: fallback, source: "manual_fallback_refreshing", stale: true, fetched_at: "" };
+  }
+  return refreshCentralPlisioFxRate(env, { force: true });
+}
+
 async function centralPlisioApiKey(settings, env) {
   const raw = String(settings?.plisio_api_key || "").trim();
   if (!raw) throw new Error("Secret Key درگاه Plisio ثبت نشده است");
   if (!raw.startsWith("enc:")) return raw;
+  if (centralPlisioSecretCache.source === raw && centralPlisioSecretCache.value && Date.now() - centralPlisioSecretCache.at < PLISIO_SECRET_CACHE_TTL_MS) {
+    return centralPlisioSecretCache.value;
+  }
   try {
     const value = await decryptSecret(raw.slice(4), env);
     if (!value) throw new Error("empty");
+    centralPlisioSecretCache = { source: raw, value, at: Date.now() };
     return value;
   } catch (_) {
     throw new Error("Secret Key درگاه Plisio قابل بازیابی نیست؛ آن را دوباره ثبت کنید");
   }
 }
 
-async function plisioRequest(settings, env, path, params = {}) {
-  const apiKey = await centralPlisioApiKey(settings, env);
+async function plisioRequest(settings, env, path, params = {}, apiKeyOverride = "") {
+  const apiKey = apiKeyOverride || await centralPlisioApiKey(settings, env);
   const url = new URL(normalizePlisioBaseUrl() + path);
   for (const [key, value] of Object.entries(params || {})) {
     if (value !== undefined && value !== null && String(value) !== "") url.searchParams.set(key, String(value));
   }
   url.searchParams.set("api_key", apiKey);
-  const response = await fetch(url.toString(), { method: "GET", headers: { accept: "application/json" } });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  let response;
+  try {
+    response = await fetch(url.toString(), { method: "GET", headers: { accept: "application/json" }, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data?.status !== "success") {
     const message = cleanText(data?.data?.message || data?.message || data?.error || ("Plisio HTTP " + response.status), 700);
@@ -4219,7 +4269,17 @@ async function verifyPlisioCallback(payload, secret) {
 }
 
 async function recordCentralPlisioState(env, ok, message = "") {
-  await setSettings(env, ok ? { plisio_last_verified_at: nowIso(), plisio_last_error: "" } : { plisio_last_error: cleanText(message, 800) });
+  const values = ok
+    ? { plisio_last_verified_at: nowIso(), plisio_last_error: "" }
+    : { plisio_last_error: cleanText(message, 800) };
+  const ts = nowIso();
+  const statements = Object.entries(values).map(([key, value]) =>
+    env.PASARGUARD_DB.prepare(
+      "INSERT INTO app_settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at"
+    ).bind(key, String(value), ts)
+  );
+  if (statements.length) await env.PASARGUARD_DB.batch(statements);
+  if (settingsCache) settingsCache = Object.freeze({ ...settingsCache, ...values });
 }
 
 async function testCentralPlisioConnection(env) {
@@ -4303,7 +4363,7 @@ async function createPaymentInvoice(request, env) {
 }
 
 
-async function createPlisioPaymentInvoice(request, env) {
+async function createPlisioPaymentInvoice(request, env, ctx = null) {
   const auth = await requireAuth(request, env);
   if (auth.response) return auth.response;
   const body = await parseBody(request);
@@ -4314,7 +4374,7 @@ async function createPlisioPaymentInvoice(request, env) {
   if (amountToman < minRecharge) return fail("حداقل مبلغ شارژ " + minRecharge.toLocaleString("fa-IR") + " تومان است", 400, "AMOUNT_TOO_LOW");
   const localId = id("ppay");
   let fx;
-  try { fx = await refreshCentralPlisioFxRate(env); }
+  try { fx = await resolveCentralPlisioFxRateForInvoice(env, settings, ctx); }
   catch (error) { return fail("دریافت نرخ دلار ناموفق بود: " + error.message, 503, "FX_RATE_UNAVAILABLE"); }
   const sourceAmount = plisioSourceAmount(amountToman, fx.rate_toman);
   const urls = centralPlisioUrls(new URL(request.url).origin);
@@ -4336,9 +4396,9 @@ async function createPlisioPaymentInvoice(request, env) {
   let provider;
   try {
     provider = await plisioRequest(settings, env, "/invoices/new", params);
-    await recordCentralPlisioState(env, true);
+    scheduleInvoiceBackground(ctx, recordCentralPlisioState(env, true), "record Plisio success state failed");
   } catch (error) {
-    await recordCentralPlisioState(env, false, error.message);
+    scheduleInvoiceBackground(ctx, recordCentralPlisioState(env, false, error.message), "record Plisio error state failed");
     return fail("ساخت فاکتور Plisio ناموفق بود: " + error.message, error.status || 502, "PLISIO_CREATE_FAILED");
   }
   const providerInvoiceId = cleanText(provider?.txn_id, 160);
@@ -4355,8 +4415,8 @@ async function createPlisioPaymentInvoice(request, env) {
   } catch (error) {
     return fail("ثبت فاکتور در دیتابیس ناموفق بود", 500, "PAYMENT_STORAGE_FAILED");
   }
-  await audit(env, auth.user.id, "plisio_invoice_created", { paymentId: localId, providerInvoiceId, amountToman, sourceAmount, sourceCurrency: params.source_currency, fxRateToman: fx.rate_toman, fxSource: fx.source });
-  return json({ success: true, payment: { id: localId, invoice_id: providerInvoiceId, amount: amountToman, status: "PENDING", payment_link: paymentLink, provider: "plisio", source_amount: sourceAmount, source_currency: params.source_currency } }, 201);
+  scheduleInvoiceBackground(ctx, audit(env, auth.user.id, "plisio_invoice_created", { paymentId: localId, providerInvoiceId, amountToman, sourceAmount, sourceCurrency: params.source_currency, fxRateToman: fx.rate_toman, fxSource: fx.source }), "Plisio invoice audit failed");
+  return json({ success: true, payment: { id: localId, invoice_id: providerInvoiceId, amount: amountToman, status: "PENDING", payment_link: paymentLink, provider: "plisio", source_amount: sourceAmount, source_currency: params.source_currency, fx_source: fx.source } }, 201);
 }
 
 async function applyVerifiedPlisioPayment(env, payment, providerPayload) {
@@ -12268,9 +12328,9 @@ async function centralAdminAction(request, env) {
   }
 }
 
-async function routeApi(request, env, path) {
+async function routeApi(request, env, path, ctx = null) {
   try {
-    return await routeApiUnsafe(request, env, path);
+    return await routeApiUnsafe(request, env, path, ctx);
   } catch (error) {
     console.error("routeApi error", path, error);
     const status = Number(error?.status || 0);
@@ -12280,7 +12340,7 @@ async function routeApi(request, env, path) {
   }
 }
 
-async function routeApiUnsafe(request, env, path) {
+async function routeApiUnsafe(request, env, path, ctx = null) {
   if (path === "/api/auth/control/status" && request.method === "GET") return centralControlAuthStatus(env);
   if (path === "/api/auth/web/login" && request.method === "POST") return centralWebLogin(request, env, false);
   if (path === "/api/auth/control/login" && request.method === "POST") return centralWebLogin(request, env, true);
@@ -12293,7 +12353,7 @@ async function routeApiUnsafe(request, env, path) {
   if (path === "/api/admin/control/action" && request.method === "POST") return centralAdminAction(request, env);
   if (path === "/api/usage/live" && request.method === "GET") return liveUsageSnapshot(request, env);
   if (path === "/api/payments/blupal/create" && request.method === "POST") return createPaymentInvoice(request, env);
-  if (path === "/api/payments/plisio/create" && request.method === "POST") return createPlisioPaymentInvoice(request, env);
+  if (path === "/api/payments/plisio/create" && request.method === "POST") return createPlisioPaymentInvoice(request, env, ctx);
   if (path === "/api/agencies" && request.method === "POST") return createAgency(request, env);
   if (path === "/api/trial" && request.method === "POST") return createCentralTrial(request, env);
   if (path === "/api/admin/settings" && request.method === "POST") return saveAdminSettings(request, env);
@@ -12318,7 +12378,7 @@ async function routeApiUnsafe(request, env, path) {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.1.4';
+const BLUEPANEL_CORE_VERSION = '3.1.5';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
@@ -12424,7 +12484,7 @@ export default {
       if(path==='/telegram/webhook'&&request.method==='POST') return telegramWebhook(request,env,ctx);
       if(path==='/payments/blupal/webhook'&&request.method==='POST') return blupalWebhook(request,env,ctx);
       if(path==='/payments/plisio/callback'&&request.method==='POST') return plisioCallback(request,env);
-      if(path.startsWith('/api/')) return routeApi(request,env,path);
+      if(path.startsWith('/api/')) return routeApi(request,env,path,ctx);
       if(request.method==='GET') return bluePanelForwardToEdge(request,env);
       return new Response('Not found',{status:404});
     } catch(error){console.error('core fetch error',error);return bluePanelCoreJson({success:false,ok:false,role:'bluepanel-core',version:APP_VERSION,error:String(error?.message||error),code:'CORE_RUNTIME_ERROR'},500);}

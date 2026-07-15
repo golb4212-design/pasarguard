@@ -1,6 +1,6 @@
 {
-  "version": "3.1.4",
-  "release_id": "3.1.4-20260715-cold-isolate-fast-path",
+  "version": "3.1.5",
+  "release_id": "3.1.5-20260715-plisio-invoice-fast-path",
   "architecture": "fully-split-three-worker",
   "files": {
     "core": "core/worker.js",
@@ -8,13 +8,13 @@
     "processor": "processor/worker.js"
   },
   "sha256": {
-    "core": "9c5bb5ec001268718dae662dab0ad28f23d8cc156d4fa071ad98b58d4f5d0187",
-    "edge": "793e22fa9687e02e860a576f5454179f620da35c05a62f13d4f6d35c0b8fe5ee",
-    "processor": "58f50e8ddf41f2b664cab2f58e29968a2620c247488d173dbcf6d03f52e5f9a5"
+    "core": "f71b50ad31c520d3ecbb6297ba851c07985280dacf538f68008abb67075bcfcf",
+    "edge": "7032f7eb195f669ee80203fe2450c7db9453db14c3d878404a805ff5cddbf412",
+    "processor": "47c8f37bb62a4563b1ac4a22c7c4c3a308d49a6d4d0c9273d93fee8ae89dccfc"
   },
   "roles": {
-    "core": "central bot, finance, licenses, PasarGuard integration, Plisio, D1 authority and persistent schema-revision fast path",
-    "edge": "web panels, reseller bots, customer miniapps and latency-sensitive Telegram handling",
+    "core": "central bot, finance, licenses, PasarGuard integration, Plisio invoice fast path and D1 authority",
+    "edge": "web panels, reseller bots, customer miniapps and fast reseller Plisio invoice creation",
     "processor": "report retries, topic repair, daily reports, backups and background jobs"
   },
   "bindings": {
@@ -35,18 +35,20 @@
     ]
   },
   "features": [
-    "prevent the first request of every fresh Cloudflare isolate from replaying the complete D1 schema and migration sweep",
-    "persist a db_schema_revision marker in D1 after a successful migration",
-    "reduce the cold-idle database bootstrap path to one lightweight revision query when the database is current",
-    "keep full migrations available for fresh installs and future schema revisions",
-    "preserve Plisio, automatic USD-to-toman rates, report topics and PasarGuard 5.1 API support",
+    "use a valid cached USD-to-toman rate immediately while refreshing an old rate in the background",
+    "fall back to the configured manual rate without blocking invoice creation on the FX provider",
+    "cache decrypted central and reseller Plisio secrets for a short period inside each Worker isolate",
+    "move non-critical Plisio status writes, audits and reseller sales events behind waitUntil",
+    "avoid invalidating the complete central settings cache after every Plisio invoice status heartbeat",
+    "remove an extra settings lookup from Telegram reseller invoice creation",
+    "add a bounded timeout for Plisio API calls and retain idempotent return_existing behavior",
+    "preserve callback verification, one-time wallet crediting, report topics and PasarGuard 5.1 support",
     "README files are excluded"
   ],
   "validation": {
     "javascript_syntax": "passed for core, edge and processor",
-    "cold_schema_fast_path": "static assertion passed; current schema returns after one marker lookup",
-    "fresh_install_fallback": "static assertion passed; missing app_settings falls through to full bootstrap",
-    "migration_marker_write": "static assertion passed; marker is stored only after migration completes",
-    "live_cloudflare_latency": "not run; no deployed Worker environment was supplied"
+    "critical_invoice_storage": "static assertion: local invoice is still stored before returning the payment link",
+    "fx_safety": "cached rate is used only inside max-stale window; otherwise manual fallback or synchronous refresh is required",
+    "live_plisio_latency": "not run; no live Plisio secret was supplied"
   }
 }

@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.1.3
+ * Version: 3.1.5
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = "3.1.4";
+const APP_VERSION = "3.1.5";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -123,6 +123,8 @@ let encryptionKeyCache = null;
 
 let encryptionKeyCacheSource = "";
 
+const resellerPlisioSecretCache = new Map();
+
 const resellerTokenCache = new Map();
 
 // Hot-path cache: avoids repeating several remote D1 reads for every Telegram update.
@@ -138,6 +140,8 @@ const resellerManagerMembershipCache = new Map();
 const joinStatusCache = new Map();
 
 const SETTINGS_CACHE_TTL_MS = 60000;
+
+const PLISIO_SECRET_CACHE_TTL_MS = 10 * 60 * 1000;
 
 const RESELLER_TOKEN_CACHE_TTL_MS = 300000;
 
@@ -6503,7 +6507,8 @@ async function resellerSalesWebhook(request, env, botId, ctx = null) {
       const method = requestedMethod === "plisio" ? "plisio" : requestedMethod === "blupal" ? "blupal" : "card";
       if (method === "plisio") {
         if (!resellerPlisioConfigured(bot)) throw new Error("درگاه Plisio این ربات فعال یا کامل تنظیم نشده است");
-        const created = await createSalesPlisioWalletCharge(env, bot, customer, amount, resellerBotOrigin(await getSettings(env)));
+        const invoiceOrigin = request.headers.get("x-bluepanel-public-origin") || new URL(request.url).origin;
+        const created = await createSalesPlisioWalletCharge(env, bot, customer, amount, invoiceOrigin, ctx);
         await salesSessionClear(env, bot.id, customer.telegram_id);
         await sendSalesBlupalInvoiceMessage(env, bot, customer, created.invoice, "شارژ رمزارزی کیف پول", created.bonusAmount > 0 ? ("بونس پس از پرداخت: " + botMoney(created.bonusAmount) + " تومان") : "");
       } else {
@@ -7147,6 +7152,39 @@ async function refreshSharedPlisioFxRate(env, { force = false } = {}) {
   return sharedPlisioFxRefreshPromise;
 }
 
+function scheduleSalesInvoiceBackground(ctx, task, label = "sales invoice background task") {
+  const guarded = Promise.resolve(task).catch(error => console.error(label, error));
+  if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(guarded);
+  return guarded;
+}
+
+async function resolveResellerPlisioFxRateForInvoice(env, bot, ctx = null) {
+  const settings = await getSettings(env);
+  if (sharedPlisioRateMode(settings) === "auto") {
+    const refreshMinutes = Math.max(5, Math.min(1440, Number(settings.plisio_fx_refresh_minutes || 15)));
+    const maxStale = Math.max(15, Math.min(10080, Number(settings.plisio_fx_max_stale_minutes || 1440)));
+    const age = sharedFxCacheAgeMinutes(settings);
+    const cached = Number(settings.plisio_fx_last_rate_toman || 0);
+    if (cached > 0 && age <= maxStale) {
+      if (age >= refreshMinutes) scheduleSalesInvoiceBackground(ctx, refreshSharedPlisioFxRate(env, { force: true }), "shared Plisio FX refresh failed");
+      return { rate_toman: cached, source: age < refreshMinutes ? "cache" : "stale_cache_refreshing", stale: age >= refreshMinutes, fetched_at: settings.plisio_fx_last_fetched_at || "" };
+    }
+    const localFallback = Number(bot?.plisio_toman_per_source_unit || 0);
+    const centralFallback = Number(settings?.plisio_toman_per_source_unit || 0);
+    const fallback = localFallback > 0 ? localFallback : centralFallback;
+    if (fallback > 0) {
+      scheduleSalesInvoiceBackground(ctx, refreshSharedPlisioFxRate(env, { force: true }), "shared Plisio fallback refresh failed");
+      return { rate_toman: fallback, source: localFallback > 0 ? "reseller_manual_fallback_refreshing" : "central_manual_fallback_refreshing", stale: true, fetched_at: "" };
+    }
+    return refreshSharedPlisioFxRate(env, { force: true });
+  }
+  const local = Number(bot?.plisio_toman_per_source_unit || 0);
+  const central = Number(settings?.plisio_toman_per_source_unit || 0);
+  const rate = local > 0 ? local : central;
+  if (rate <= 0) throw new Error("نرخ دستی دلار ثبت نشده است");
+  return { rate_toman: rate, source: local > 0 ? "reseller_manual" : "central_manual", stale: false };
+}
+
 async function resolveResellerPlisioFxRate(env, bot, { force = false } = {}) {
   const settings = await getSettings(env);
   if (sharedPlisioRateMode(settings) === "auto") {
@@ -7173,9 +7211,14 @@ function resellerPlisioConfigured(bot) {
 async function resellerPlisioApiKey(env, bot) {
   const encrypted = String(bot?.plisio_api_key_enc || "").trim();
   if (!encrypted) throw new Error("Secret Key درگاه Plisio برای این ربات ثبت نشده است");
+  const cacheKey = String(bot?.id || "") + ":" + encrypted;
+  const cached = resellerPlisioSecretCache.get(cacheKey);
+  if (cached?.value && Date.now() - cached.at < PLISIO_SECRET_CACHE_TTL_MS) return cached.value;
   try {
     const value = await decryptSecret(encrypted, env);
     if (!value) throw new Error("empty");
+    if (resellerPlisioSecretCache.size > 500) resellerPlisioSecretCache.clear();
+    resellerPlisioSecretCache.set(cacheKey, { value, at: Date.now() });
     return value;
   } catch (_) {
     throw new Error("Secret Key درگاه Plisio قابل بازیابی نیست؛ آن را دوباره ثبت کنید");
@@ -7200,15 +7243,22 @@ function resellerPlisioUrls(origin, bot) {
   };
 }
 
-async function resellerPlisioRequest(env, bot, path, params = {}) {
+async function resellerPlisioRequest(env, bot, path, params = {}, secretOverride = "") {
   if (path !== "/invoices/new") throw new Error("مسیر Plisio مجاز نیست");
-  const secret = await resellerPlisioApiKey(env, bot);
+  const secret = secretOverride || await resellerPlisioApiKey(env, bot);
   const url = new URL("https://api.plisio.net/api/v1" + path);
   for (const [key, value] of Object.entries(params || {})) {
     if (value !== undefined && value !== null && String(value) !== "") url.searchParams.set(key, String(value));
   }
   url.searchParams.set("api_key", secret);
-  const response = await fetch(url.toString(), { method: "GET", headers: { accept: "application/json" } });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  let response;
+  try {
+    response = await fetch(url.toString(), { method: "GET", headers: { accept: "application/json" }, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data?.status !== "success") {
     const message = cleanText(data?.data?.message || data?.message || data?.error || ("Plisio HTTP " + response.status), 700);
@@ -7580,14 +7630,14 @@ async function salesBlupalPaymentStatus(env, bot, customer, paymentId) {
   return await env.PASARGUARD_DB.prepare("SELECT * FROM sales_payment_invoices WHERE id=?").bind(payment.id).first();
 }
 
-async function createSalesPlisioInvoice(env, bot, customer, targetType, targetId, amountToman, origin) {
+async function createSalesPlisioInvoice(env, bot, customer, targetType, targetId, amountToman, origin, ctx = null) {
   if (!resellerPlisioConfigured(bot)) throw new Error("درگاه Plisio این ربات هنوز کامل تنظیم نشده است");
   const safeTargetType = targetType === "wallet" ? "wallet" : "order";
   if (safeTargetType !== "wallet") throw new Error("Plisio در این نسخه برای شارژ کیف پول فعال است");
   const safeAmountToman = clampInt(amountToman, 0, 1000000000000);
   if (safeAmountToman < 10000) throw new Error("حداقل مبلغ شارژ ۱۰٬۰۰۰ تومان است");
   const invoiceId = id("spli");
-  const fx = await resolveResellerPlisioFxRate(env, bot);
+  const fx = await resolveResellerPlisioFxRateForInvoice(env, bot, ctx);
   const sourceAmount = resellerPlisioSourceAmount(safeAmountToman, fx.rate_toman);
   const sourceCurrency = "USD";
   const urls = resellerPlisioUrls(origin, bot);
@@ -7600,7 +7650,8 @@ async function createSalesPlisioInvoice(env, bot, customer, targetType, targetId
     callback_url: urls.callback_url,
     success_invoice_url: urls.return_url + "?status=success",
     fail_invoice_url: urls.return_url + "?status=failed",
-    expire_min: Math.max(5, Math.min(1440, Number(bot.plisio_expire_minutes || 60)))
+    expire_min: Math.max(5, Math.min(1440, Number(bot.plisio_expire_minutes || 60))),
+    return_existing: "true"
   };
   const allowed = cleanText(bot.plisio_allowed_currencies || "", 500).replace(/\s+/g, "").toUpperCase();
   if (allowed) params.allowed_psys_cids = allowed;
@@ -7608,7 +7659,7 @@ async function createSalesPlisioInvoice(env, bot, customer, targetType, targetId
   try {
     provider = await resellerPlisioRequest(env, bot, "/invoices/new", params);
   } catch (error) {
-    await recordResellerPlisioState(env, bot.id, false, error.message).catch(() => null);
+    scheduleSalesInvoiceBackground(ctx, recordResellerPlisioState(env, bot.id, false, error.message), "record reseller Plisio error failed");
     throw new Error("ساخت فاکتور Plisio ناموفق بود: " + error.message);
   }
   const providerInvoiceId = cleanText(provider.txn_id || provider.id, 160);
@@ -7626,11 +7677,11 @@ async function createSalesPlisioInvoice(env, bot, customer, targetType, targetId
     amountRial, safeAmountToman, amountRial, normalizePlisioStatus(provider.status), paymentLink,
     JSON.stringify({ request: params, response: provider, fx: { rate_toman: fx.rate_toman, source: fx.source, stale: !!fx.stale, fetched_at: fx.fetched_at || "" } }), ts, ts
   ).run();
-  await recordResellerPlisioState(env, bot.id, true).catch(() => null);
-  await salesEvent(env, bot.id, customer.id, "plisio_invoice_created", {
+  scheduleSalesInvoiceBackground(ctx, recordResellerPlisioState(env, bot.id, true), "record reseller Plisio success failed");
+  scheduleSalesInvoiceBackground(ctx, salesEvent(env, bot.id, customer.id, "plisio_invoice_created", {
     invoiceId, providerInvoiceId, targetType: safeTargetType, targetId,
     amountToman: safeAmountToman, sourceAmount, sourceCurrency, fxRateToman: fx.rate_toman, fxSource: fx.source
-  });
+  }), "reseller Plisio invoice event failed");
   return {
     id: invoiceId,
     provider: "plisio",
@@ -7650,7 +7701,7 @@ async function createSalesPlisioInvoice(env, bot, customer, targetType, targetId
   };
 }
 
-async function createSalesPlisioWalletCharge(env, bot, customer, amount, origin) {
+async function createSalesPlisioWalletCharge(env, bot, customer, amount, origin, ctx = null) {
   salesRequireVerifiedPhone(bot, customer);
   const safeAmount = clampInt(amount, 0, 1000000000000);
   if (safeAmount < 10000) throw new Error("حداقل مبلغ شارژ ۱۰٬۰۰۰ تومان است");
@@ -7662,7 +7713,7 @@ async function createSalesPlisioWalletCharge(env, bot, customer, amount, origin)
     VALUES(?,?,?,?,'payment_pending',?,?,?)
   `).bind(requestId, bot.id, customer.id, safeAmount, origin === "miniapp" ? "miniapp" : "bot", ts, ts).run();
   try {
-    const invoice = await createSalesPlisioInvoice(env, bot, customer, "wallet", requestId, safeAmount, origin);
+    const invoice = await createSalesPlisioInvoice(env, bot, customer, "wallet", requestId, safeAmount, origin, ctx);
     const bonusPercent = Math.max(0, Math.min(100, Number(bot.recharge_bonus_percent || 0)));
     const bonusAmount = Math.floor(safeAmount * bonusPercent / 100);
     return { requestId, amountToman: safeAmount, bonusPercent, bonusAmount, invoice };
@@ -8098,7 +8149,7 @@ async function salesMiniAppAction(request, env, botId, ctx = null) {
       const walletPaymentMethod = String(body.payment_method || resellerPaymentDefaultMethod(bot, "recharge") || "card").toLowerCase();
       if (walletPaymentMethod === "plisio") {
         if (!resellerPlisioConfigured(bot)) throw new Error("درگاه Plisio این ربات فعال یا کامل تنظیم نشده است");
-        const requestRow = await createSalesPlisioWalletCharge(env, bot, customer, amount, new URL(request.url).origin);
+        const requestRow = await createSalesPlisioWalletCharge(env, bot, customer, amount, request.headers.get("x-bluepanel-public-origin") || new URL(request.url).origin, ctx);
         return json({ success: true, message: "فاکتور رمزارزی Plisio ساخته شد.", online_payment: requestRow.invoice, bonus_percent: requestRow.bonusPercent, bonus_toman: requestRow.bonusAmount });
       }
       resellerRequirePaymentMethod(bot, walletPaymentMethod, "recharge");
@@ -9652,7 +9703,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_EDGE_VERSION='3.1.4';
+const BLUEPANEL_EDGE_VERSION='3.1.5';
 function bluePanelEdgeJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function bluePanelEdgeInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
 function bluePanelEdgeRuntimeBinding(env,name){const value=env?.[name];return{name,exact_key_present:Object.prototype.hasOwnProperty.call(env||{},name),value_present:value!==undefined&&value!==null,fetch_callable:Boolean(value&&typeof value.fetch==='function'),constructor_name:value?.constructor?.name||''}}
