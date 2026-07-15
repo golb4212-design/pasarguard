@@ -1,15 +1,25 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.1
+ * Version: 3.3.2
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.3.1";
+const APP_VERSION = "3.3.2";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.2": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🚑", text: "ساخت اضطراری جدول release_rollouts پیش از شروع استقرار خودکار" },
+      { emoji: "🧱", text: "جلوگیری از شکست آپدیت در نصب‌هایی که Core قدیمی Marker ناقص دیتابیس دارد" },
+      { emoji: "🛡", text: "ایمن‌سازی ثبت وضعیت Rollout و مرکز خطا مستقل از مهاجرت کامل D1" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "✅", text: "پایداری بیشتر بروزرسانی خودکار و جلوگیری از توقف استقرار Workerها" }
+    ])
+  }),
   "3.3.1": Object.freeze({
     central: Object.freeze([
       { emoji: "🗄", text: "رفع خطای نبود جدول system_error_center در دیتابیس‌های ارتقایافته" },
@@ -202,7 +212,7 @@ let schemaReadyPromise = null;
 
 // Persistent schema marker: avoids replaying the full D1 migration sweep whenever
 // Cloudflare starts a fresh isolate after an idle period.
-const DB_SCHEMA_REVISION = "3.3.1";
+const DB_SCHEMA_REVISION = "3.3.2";
 
 let settingsCache = null;
 
@@ -7463,7 +7473,53 @@ async function deploySelfFromGithub(env, force = false, prechecked = null) {
   return { ...check, worker_sha: codeSha, deployed: true };
 }
 
+async function ensureDeploymentTrackingTables(env) {
+  if (!env.PASARGUARD_DB) throw new Error("D1 binding PASARGUARD_DB is missing (database: pasarguard-reseller-db)");
+  // This bootstrap intentionally does not trust the global schemaReady flag.
+  // A previously deployed runtime may have cached an old schema marker while
+  // the 3.3 rollout tables are still absent. The statements are idempotent.
+  const statements = [
+    `CREATE TABLE IF NOT EXISTS release_rollouts (
+      id TEXT PRIMARY KEY,
+      version TEXT NOT NULL,
+      release_id TEXT,
+      mode TEXT NOT NULL DEFAULT 'edge_first',
+      status TEXT NOT NULL DEFAULT 'pending',
+      edge_status TEXT,
+      processor_status TEXT,
+      core_status TEXT,
+      previous_core_version TEXT,
+      previous_edge_version TEXT,
+      previous_processor_version TEXT,
+      details_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      finished_at TEXT
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_release_rollouts_version ON release_rollouts(version,created_at DESC)`,
+    `CREATE TABLE IF NOT EXISTS system_error_center (
+      id TEXT PRIMARY KEY,
+      scope TEXT NOT NULL,
+      bot_id TEXT,
+      error_code TEXT NOT NULL,
+      message TEXT NOT NULL,
+      context_json TEXT NOT NULL DEFAULT '{}',
+      occurrence_count INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'open',
+      first_seen_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      resolved_at TEXT,
+      UNIQUE(scope,bot_id,error_code,status)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_error_center_open ON system_error_center(status,last_seen_at DESC)`
+  ];
+  for (const sql of statements) await env.PASARGUARD_DB.prepare(sql).run();
+}
+
 async function deployClusterFromGithub(env, force = false, prechecked = null) {
+  // Must run before the first rollout INSERT. This also repairs installations
+  // where the old Core set schemaReady=true before 3.3 tables existed.
+  await ensureDeploymentTrackingTables(env);
   const check = prechecked || await checkUpdate(env);
   const shouldSync = force || check.available || check.cluster_sync_required;
   const settings = await getSettings(env);
@@ -13786,7 +13842,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.3.1';
+const BLUEPANEL_CORE_VERSION = '3.3.2';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {

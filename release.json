@@ -1,7 +1,7 @@
 {
-  "version": "3.3.1",
-  "release_id": "3.3.1-20260715-d1-growth-suite-schema-migration-fix",
-  "architecture": "fully-split-three-worker-growth-suite-schema-self-healing",
+  "version": "3.3.2",
+  "release_id": "3.3.2-20260715-release-rollouts-emergency-bootstrap-fix",
+  "architecture": "fully-split-three-worker-growth-suite-rollout-bootstrap-self-healing",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -32,50 +32,49 @@
     ]
   },
   "features": [
-    "fixes D1_ERROR no such table system_error_center on upgraded installations",
-    "bumps the persistent D1 schema revision from 3.1.7 to 3.3.1 so all 3.3 growth-suite tables are created",
-    "the cold-isolate fast path now verifies ten critical growth-suite tables before accepting the schema marker",
-    "an incomplete or stale schema marker automatically falls through to the idempotent schema bootstrap",
-    "all 3.3.0 growth, loyalty, health, automation, payments and live-usage features remain included",
+    "creates release_rollouts and system_error_center immediately before the first staged-deployment write",
+    "the emergency bootstrap does not trust the cached schemaReady flag or an older db_schema_revision marker",
+    "prevents D1_ERROR no such table release_rollouts from aborting GitHub-to-Cloudflare deployment",
+    "retains the full 3.3.1 schema revision guard and all 3.3 growth, loyalty, health and automation features",
     "README files are excluded"
   ],
   "deployment": {
     "required_binding_name": "LIVE_USAGE_COORDINATOR",
     "required_class_name": "LiveUsageCoordinator",
     "migration_tag": "v3.1.9-live-usage (unchanged; no new Durable Object migration)",
-    "automatic_provisioning": "supported when cf_account_id, cf_api_token and cf_worker_name are already saved and the token can update Workers scripts",
+    "automatic_provisioning": "supported after the one-time legacy D1 bootstrap or a manual Core deployment",
     "manual_config_file": "core/wrangler.live-usage.example.toml",
-    "activation": "deploy core, edge and processor; the existing LIVE_USAGE_COORDINATOR binding and alarm state are reused",
+    "activation": "for an already-failing 3.3.0 runtime, create release_rollouts once in D1 or manually deploy the new Core, then deploy all three workers",
     "cron": "the existing 10-minute central cron can remain; it is not used for live usage while the Durable Object binding is active"
   },
   "validation": {
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "db_schema_revision": "3.3.1",
-    "critical_table_guard_count": 10,
-    "fresh_schema_system_error_center": "passed",
-    "legacy_marker_self_heal": "passed",
+    "db_schema_revision": "3.3.2",
+    "deployment_tracking_bootstrap_precedes_rollout_insert": "passed",
+    "fresh_sqlite_release_rollouts_insert": "passed",
+    "idempotent_tracking_bootstrap": "passed",
     "release_manifest_hashes": "recalculated",
     "zip_integrity": "passed",
     "live_d1_migration": "not run without production binding"
   },
   "sha256": {
-    "core": "e6a1ade712144d02bbcb1dfe3315faf4096aa427aa472fa856f40318cdff1352",
-    "edge": "93c0973afd2921ad75352a0b92a804be35343041dc4f3b8b5ed5ea993bf9ec8f",
-    "processor": "99e17ef896e73d44c4eed59eea39a48ab14223fe2fded20462e16f3d3d6007a3",
+    "core": "607af15fe3f84825b83ff6a6eb92851e24211644ae0b3943a887d32f90744b2a",
+    "edge": "bf062f2dff75a23574ecd4c1ee484e011a4b8acee8b4aa49ed35bbe0aa07c50a",
+    "processor": "193250896fce1bfd03eaed2460844c907b744e380b43f4676cdac051b1460683",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "hashes": {
-    "core/worker.js": "e6a1ade712144d02bbcb1dfe3315faf4096aa427aa472fa856f40318cdff1352",
-    "edge/worker.js": "93c0973afd2921ad75352a0b92a804be35343041dc4f3b8b5ed5ea993bf9ec8f",
-    "processor/worker.js": "99e17ef896e73d44c4eed59eea39a48ab14223fe2fded20462e16f3d3d6007a3",
+    "core/worker.js": "607af15fe3f84825b83ff6a6eb92851e24211644ae0b3943a887d32f90744b2a",
+    "edge/worker.js": "bf062f2dff75a23574ecd4c1ee484e011a4b8acee8b4aa49ed35bbe0aa07c50a",
+    "processor/worker.js": "193250896fce1bfd03eaed2460844c907b744e380b43f4676cdac051b1460683",
     "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "limitations": [
-    "representative low-balance automation sends a deduplicated alert and prepared recharge recommendation; it does not charge a bank card without a payment mandate",
+    "a currently deployed 3.3.0 Core fails before it can deploy a patched Core if release_rollouts is absent; run the included one-time SQL in D1 or manually deploy core/worker.js once",
+    "representative low-balance automation does not charge a bank card without a payment mandate",
     "QR subscription import is optional and sends the selected QR image to the external qrserver decoder endpoint",
-    "staged deployment verifies Edge before Core and records failures, but cannot restore previous Worker bytes unless a previous artifact is supplied",
-    "automatic failover changes PasarGuard user group_ids after three consecutive API health failures and must be explicitly enabled by the reseller"
+    "automatic failover must be explicitly enabled by the reseller"
   ]
 }
