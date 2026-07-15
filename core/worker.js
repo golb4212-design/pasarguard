@@ -1,15 +1,26 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.2.3
+ * Version: 3.2.4
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.2.3";
+const APP_VERSION = "3.2.4";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.2.4": Object.freeze({
+    central: Object.freeze([
+      { emoji: "💸", text: "یکسان‌سازی صورتحساب مصرف با کسر واقعی کیف پول در هر دور همگام‌سازی" },
+      { emoji: "📊", text: "اصلاح گزارش Live؛ نمایش جداگانه صورتحساب، کسر مستقیم، وصول زیرمجموعه و جمع وصول واقعی" },
+      { emoji: "🏦", text: "نمایش موجودی مالک هر پنل و مجموع کسر واقعی در بخش ترافیک مصرفی نمایندگان" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "🧾", text: "ثبت تراکنش کیف پول برای هر اختلاف مصرف بدون کسر تکراری" },
+      { emoji: "⚠️", text: "نمایش بدهی واقعی ربات‌های زیرمجموعه در گزارش محاسبه مصرف" }
+    ])
+  }),
   "3.2.3": Object.freeze({
     central: Object.freeze([
       { emoji: "📣", text: "انتشار کانال آپدیت فقط بر اساس آیتم‌های همان نسخه و جلوگیری از تکرار تغییرات قدیمی" },
@@ -2781,6 +2792,15 @@ async function notifyVersionActivation(env) {
   let agencySync = { migrated: 0, manualSync: { checked: 0, imported: 0, updated: 0, failed: 0 } };
 
   if (activated) {
+    try {
+      await env.PASARGUARD_DB.prepare(`
+        UPDATE report_outbox
+        SET central_status=CASE WHEN central_status='pending' THEN 'skipped' ELSE central_status END,
+            reseller_status=CASE WHEN reseller_status='pending' THEN 'skipped' ELSE reseller_status END,
+            last_error='superseded_by_' || ?,updated_at=?
+        WHERE dedupe_key LIKE 'live_usage:%' AND (central_status='pending' OR reseller_status='pending')
+      `).bind(APP_VERSION, ts).run();
+    } catch (_) {}
     try { agencySync = await applyCurrentReleaseToAllAgencies(env); } catch (error) { agencySync = { migrated: 0, error: cleanText(error.message, 500) }; }
     const pythonState = settings.python_helper_last_status || "never";
     await notifyAdmins(env,
@@ -3721,14 +3741,14 @@ async function billAgency(env, agency, currentUsageBytes, pricePerGb) {
       "UPDATE agencies SET last_usage_bytes=?, last_billed_bytes=?, usage_epoch=?, billing_remainder=0, updated_at=? WHERE id=?"
     ).bind(currentUsageBytes, currentUsageBytes, epoch, nowIso(), agency.id).run();
     await audit(env, null, "usage_counter_reset", { agencyId: agency.id, previous: oldUsage, current: currentUsageBytes });
-    return { charged: 0, reset: true };
+    return { charged: 0, collected: 0, reset: true };
   }
 
   const delta = currentUsageBytes - oldUsage;
   if (delta <= 0) {
     await env.PASARGUARD_DB.prepare("UPDATE agencies SET last_usage_bytes=?, updated_at=? WHERE id=?")
       .bind(currentUsageBytes, nowIso(), agency.id).run();
-    return { charged: 0 };
+    return { charged: 0, collected: 0 };
   }
 
   const numerator = delta * pricePerGb + Number(agency.billing_remainder || 0);
@@ -3740,7 +3760,7 @@ async function billAgency(env, agency, currentUsageBytes, pricePerGb) {
     await env.PASARGUARD_DB.prepare(
       "UPDATE agencies SET last_usage_bytes=?, last_billed_bytes=?, billing_remainder=?, updated_at=? WHERE id=?"
     ).bind(currentUsageBytes, currentUsageBytes, remainder, ts, agency.id).run();
-    return { charged: 0 };
+    return { charged: 0, collected: 0 };
   }
 
   const eventKey = [agency.id, epoch, currentUsageBytes, pricePerGb].join(":");
@@ -3763,14 +3783,23 @@ async function billAgency(env, agency, currentUsageBytes, pricePerGb) {
   ];
   const results = await env.PASARGUARD_DB.batch(statements);
   const inserted = Number(results?.[0]?.meta?.changes || 0) > 0;
+  const agencyUpdated = Number(results?.[1]?.meta?.changes || 0) > 0;
+  const walletDebited = Number(results?.[2]?.meta?.changes || 0) > 0;
+  const ledgerWritten = Number(results?.[3]?.meta?.changes || 0) > 0;
+  const collected = inserted && walletDebited && ledgerWritten ? charge : 0;
+  if (inserted && (!agencyUpdated || !walletDebited || !ledgerWritten)) {
+    await audit(env, agency.user_id, "usage_wallet_deduction_mismatch", {
+      agencyId: agency.id, eventKey, charge, agencyUpdated, walletDebited, ledgerWritten
+    });
+  }
   if (inserted) await reconcileUserAgencies(env, agency.user_id);
-  return { charged: inserted ? charge : 0 };
+  return { charged: inserted ? charge : 0, collected, delta: inserted ? delta : 0, duplicate: !inserted };
 }
 
 async function syncUsage(env, limit = 50) {
   await ensureDb(env);
   const settings = await getSettings(env);
-  if (settings.usage_sync_enabled !== "true") return { processed: 0, charged: 0 };
+  if (settings.usage_sync_enabled !== "true") return { processed: 0, charged: 0, collected: 0, errors: [] };
   const pricePerGb = clampInt(settings.price_per_gb, 0, 1000000000);
   const result = await env.PASARGUARD_DB.prepare(
     "SELECT * FROM agencies WHERE (COALESCE(is_trial,0)=0 AND provisioning_source='pasarguard_manual') OR status IN ('active','suspended_balance') ORDER BY updated_at ASC LIMIT ?"
@@ -3778,6 +3807,7 @@ async function syncUsage(env, limit = 50) {
 
   let processed = 0;
   let charged = 0;
+  let collected = 0;
   const errors = [];
   for (const agency of result.results || []) {
     try {
@@ -3791,18 +3821,19 @@ async function syncUsage(env, limit = 50) {
       const bill = await billAgency(env, agency, usage, pricePerGb);
       processed += 1;
       charged += Number(bill.charged || 0);
+      collected += Number(bill.collected || 0);
     } catch (error) {
       errors.push({ agencyId: agency.id, agencyTitle: cleanText(agency.title || agency.panel_username || agency.id, 100), error: cleanText(error?.message || error, 500), code: cleanText(error?.code || "USAGE_SYNC_FAILED", 80), status: Number(error?.status || 0), retryable: error?.retryable === true });
       await audit(env, null, "usage_sync_failed", { agencyId: agency.id, agencyTitle: agency.title || agency.panel_username || "", code: error?.code || "", status: Number(error?.status || 0), message: cleanText(error?.message || error, 500) });
     }
   }
-  return { processed, charged, errors };
+  return { processed, charged, collected, errors };
 }
 
 async function syncUsageForUser(env, userId, limit = 30, minIntervalSeconds = LIVE_USAGE_MIN_INTERVAL_SECONDS) {
   await ensureDb(env);
   const settings = await getSettings(env);
-  if (settings.usage_sync_enabled !== "true") return { processed: 0, charged: 0, errors: [] };
+  if (settings.usage_sync_enabled !== "true") return { processed: 0, charged: 0, collected: 0, errors: [] };
 
   const pricePerGb = clampInt(settings.price_per_gb, 0, 1000000000);
   const rows = await env.PASARGUARD_DB.prepare(`
@@ -3814,6 +3845,7 @@ async function syncUsageForUser(env, userId, limit = 30, minIntervalSeconds = LI
   const cutoff = Date.now() - Math.max(0, Number(minIntervalSeconds || 0)) * 1000;
   let processed = 0;
   let charged = 0;
+  let collected = 0;
   const errors = [];
 
   for (const agency of rows.results || []) {
@@ -3830,6 +3862,7 @@ async function syncUsageForUser(env, userId, limit = 30, minIntervalSeconds = LI
       const bill = await billAgency(env, agency, usage, pricePerGb);
       processed += 1;
       charged += Number(bill.charged || 0);
+      collected += Number(bill.collected || 0);
     } catch (error) {
       errors.push({ agencyId: agency.id, agencyTitle: cleanText(agency.title || agency.panel_username || agency.id, 100), error: cleanText(error?.message || error, 500), code: cleanText(error?.code || "USAGE_SYNC_FAILED", 80), status: Number(error?.status || 0), retryable: error?.retryable === true });
       await audit(env, userId, "user_usage_sync_failed", { agencyId: agency.id, agencyTitle: agency.title || agency.panel_username || "", code: error?.code || "", status: Number(error?.status || 0), message: cleanText(error?.message || error, 500) });
@@ -3837,7 +3870,7 @@ async function syncUsageForUser(env, userId, limit = 30, minIntervalSeconds = LI
   }
 
   await reconcileUserAgencies(env, userId);
-  return { processed, charged, errors };
+  return { processed, charged, collected, errors };
 }
 
 async function liveUsageSnapshot(request, env) {
@@ -3853,6 +3886,7 @@ async function liveUsageSnapshot(request, env) {
 
   let processed = 0;
   let charged = 0;
+  let collected = 0;
   const errors = [];
   const cutoff = Date.now() - LIVE_USAGE_MIN_INTERVAL_SECONDS * 1000;
 
@@ -3871,6 +3905,7 @@ async function liveUsageSnapshot(request, env) {
         const bill = await billAgency(env, agency, usage, pricePerGb);
         processed += 1;
         charged += Number(bill.charged || 0);
+        collected += Number(bill.collected || 0);
       } catch (error) {
         const message = cleanText(error?.message || error, 500);
         errors.push({
@@ -3916,6 +3951,7 @@ async function liveUsageSnapshot(request, env) {
     server_time: nowIso(),
     processed,
     charged,
+    collected,
     errors,
     wallet_balance: Number(user?.wallet_balance || 0),
     agencies: list,
@@ -8282,19 +8318,19 @@ async function syncDownlineUsage(env, parentBotId = null, limit = 100, options =
   const query = env.PASARGUARD_DB.prepare(sql);
   const rows = parentBotId ? await query.bind(parentBotId,limit).all() : await query.bind(limit).all();
   const serviceLimit = clampInt(options.serviceLimit || 120, 5, 120);
-  let processed=0,charged=0,collected=0,failed=0;
+  let processed=0,charged=0,collected=0,unpaid=0,failed=0;
   for (const row of rows.results || []) {
     try {
       const bot = await getResellerBotById(env,row.id);
       if (!bot) continue;
       const result = await billDownlineResellerBot(env,bot,{sync:options.sync !== false,limit:serviceLimit});
-      processed++;charged+=Number(result.charged||0);collected+=Number(result.collected||0);
+      processed++;charged+=Number(result.charged||0);collected+=Number(result.collected||0);unpaid+=Number(result.unpaid||0);
     } catch (error) {
       failed++;
       try { await audit(env,null,"downline_usage_sync_failed",{botId:row.id,message:String(error?.message||error)}); } catch (_) {}
     }
   }
-  return {processed,charged,collected,failed};
+  return {processed,charged,collected,unpaid,failed};
 }
 
 async function resellerBotToken(env, bot) {
@@ -10036,13 +10072,17 @@ async function botAdminAgencyUsageView(env, account, requestedPage = 0) {
            SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) AS active_count
     FROM agencies
   `).first();
+  const collectedSummary = await env.PASARGUARD_DB.prepare(`
+    SELECT COALESCE(SUM(CASE WHEN type='usage_charge' AND amount<0 THEN -amount ELSE 0 END),0) AS actual_collected
+    FROM wallet_ledger
+  `).first();
   const total = Math.max(0, Number(summary?.total || 0));
   const pages = Math.max(1, Math.ceil(total / pageSize));
   const parsedPage = Number.parseInt(String(requestedPage ?? 0), 10);
   const page = Math.max(0, Math.min(pages - 1, Number.isFinite(parsedPage) ? parsedPage : 0));
   const rows = await env.PASARGUARD_DB.prepare(`
     SELECT a.id,a.title,a.panel_username,a.status,a.last_usage_bytes,a.total_charged,a.updated_at,
-           u.telegram_id,u.username AS owner_username,u.first_name,u.last_name
+           u.telegram_id,u.username AS owner_username,u.first_name,u.last_name,u.wallet_balance
     FROM agencies a
     JOIN users u ON u.id=a.user_id
     ORDER BY a.last_usage_bytes DESC,a.updated_at DESC
@@ -10062,7 +10102,8 @@ async function botAdminAgencyUsageView(env, account, requestedPage = 0) {
     return (page * pageSize + index + 1) + ". 🏢 <b>" + botEscape(panel) + "</b>\n" +
       "   👤 " + botEscape(owner) + " · <code>" + botEscape(item.telegram_id) + "</code>\n" +
       "   🔑 <code>" + botEscape(item.panel_username) + "</code>\n" +
-      "   📊 مصرف: <b>" + botGb(item.last_usage_bytes) + "</b> · هزینه: <b>" + botMoney(item.total_charged) + " تومان</b>\n" +
+      "   📊 مصرف: <b>" + botGb(item.last_usage_bytes) + "</b> · هزینه کسرشده: <b>" + botMoney(item.total_charged) + " تومان</b>\n" +
+      "   💳 موجودی مالک: <b>" + botMoney(item.wallet_balance) + " تومان</b>\n" +
       "   وضعیت: <b>" + botEscape(status) + "</b> · بروزرسانی: " + botEscape(botDate(item.updated_at));
   }).join("\n\n") : "هنوز پنل نمایندگی ثبت نشده است.";
   const buttons = [];
@@ -10070,13 +10111,14 @@ async function botAdminAgencyUsageView(env, account, requestedPage = 0) {
   if (page > 0) pager.push({ text: "◀️ قبلی", callback_data: "bot:admin:agency_usage:page:" + (page - 1) });
   if (page + 1 < pages) pager.push({ text: "بعدی ▶️", callback_data: "bot:admin:agency_usage:page:" + (page + 1) });
   if (pager.length) buttons.push(pager);
-  buttons.push([{ text: "🔄 همگام‌سازی و بروزرسانی", callback_data: "bot:admin:agency_usage:refresh:" + page }]);
+  buttons.push([{ text: "🔄 محاسبه و کسر فوری", callback_data: "bot:admin:agency_usage:refresh:" + page }]);
   buttons.push([{ text: "↩️ مدیریت سامانه", callback_data: "bot:admin" }]);
   return {
     text: "📊 <b>ترافیک مصرفی پنل نمایندگان</b>\n━━━━━━━━━━━━━━\n" +
       "🏢 کل پنل‌ها: <b>" + botMoney(total) + "</b> · فعال: <b>" + botMoney(summary?.active_count) + "</b>\n" +
       "📦 مصرف کل: <b>" + botGb(summary?.total_usage_bytes) + "</b>\n" +
-      "💰 هزینه ثبت‌شده: <b>" + botMoney(summary?.total_charged) + " تومان</b>\n" +
+      "🧾 صورتحساب ثبت‌شده: <b>" + botMoney(summary?.total_charged) + " تومان</b>\n" +
+      "💸 کسر واقعی از کیف پول: <b>" + botMoney(collectedSummary?.actual_collected) + " تومان</b>\n" +
       "📄 صفحه <b>" + botMoney(page + 1) + "</b> از <b>" + botMoney(pages) + "</b>\n\n" + lines,
     reply_markup: { inline_keyboard: buttons }
   };
@@ -10799,6 +10841,13 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
     const page = Math.max(0, botParseInteger(data.split(":").pop()) || 0);
     const result = await syncUsage(env, 200);
     await audit(env, account.user.id, "bot_admin_agency_usage_refresh", result);
+    try {
+      await telegramApi(env, "answerCallbackQuery", {
+        callback_query_id: callback.id,
+        text: "بررسی " + botMoney(result.processed || 0) + " پنل · صورتحساب " + botMoney(result.charged || 0) + " · کسر واقعی " + botMoney(result.collected || 0) + " تومان",
+        show_alert: false
+      });
+    } catch (_) {}
     await botSendOrEdit(env, { account, chatId, messageId }, "admin_agency_usage:" + page);
     return;
   }
@@ -13301,15 +13350,24 @@ export class LiveUsageCoordinator {
           "INSERT INTO app_settings(key,value,updated_at) VALUES('last_live_usage_result',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at"
         ).bind(JSON.stringify({ central, downline, duration_ms: result.duration_ms }), result.finished_at).run();
       } catch (_) {}
-      if (Number(central?.charged || 0) > 0 || Number(downline?.charged || 0) > 0 || Number(downline?.collected || 0) > 0) {
+      const centralBilled = Number(central?.charged || 0);
+      const centralCollected = Number(central?.collected || 0);
+      const downlineBilled = Number(downline?.charged || 0);
+      const downlineCollected = Number(downline?.collected || 0);
+      const downlineUnpaid = Number(downline?.unpaid || 0);
+      const totalCollected = centralCollected + downlineCollected;
+      if (centralBilled > 0 || centralCollected > 0 || downlineBilled > 0 || downlineCollected > 0 || downlineUnpaid > 0) {
         try {
           await queueReportEvent(this.env, null, "payments", "محاسبه خودکار مصرف نمایندگان",
             "📡 <b>محاسبه Live مصرف انجام شد</b>\n" +
-            "پنل‌های مرکزی: " + Number(central?.processed || 0).toLocaleString("fa-IR") + "\n" +
-            "کسر مرکزی: " + Number(central?.charged || 0).toLocaleString("fa-IR") + " تومان\n" +
+            "پنل‌های مستقیم: " + Number(central?.processed || 0).toLocaleString("fa-IR") + "\n" +
+            "صورتحساب مستقیم: " + centralBilled.toLocaleString("fa-IR") + " تومان\n" +
+            "کسر مستقیم از کیف پول: " + centralCollected.toLocaleString("fa-IR") + " تومان\n" +
             "ربات‌های زیرمجموعه: " + Number(downline?.processed || 0).toLocaleString("fa-IR") + "\n" +
-            "صورتحساب زیرمجموعه: " + Number(downline?.charged || 0).toLocaleString("fa-IR") + " تومان\n" +
-            "وصول‌شده: " + Number(downline?.collected || 0).toLocaleString("fa-IR") + " تومان",
+            "صورتحساب زیرمجموعه: " + downlineBilled.toLocaleString("fa-IR") + " تومان\n" +
+            "وصول زیرمجموعه: " + downlineCollected.toLocaleString("fa-IR") + " تومان\n" +
+            "بدهی زیرمجموعه: " + downlineUnpaid.toLocaleString("fa-IR") + " تومان\n" +
+            "💰 <b>جمع وصول واقعی: " + totalCollected.toLocaleString("fa-IR") + " تومان</b>",
             "live_usage:" + result.finished_at.slice(0, 16));
         } catch (_) {}
       }
@@ -13337,7 +13395,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.2.3';
+const BLUEPANEL_CORE_VERSION = '3.2.4';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {

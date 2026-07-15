@@ -1,7 +1,7 @@
 {
-  "version": "3.2.3",
-  "release_id": "3.2.3-20260715-update-channel-products-ui-fix",
-  "architecture": "fully-split-three-worker-live-usage-channel-notes-products-ui-fixed",
+  "version": "3.2.4",
+  "release_id": "3.2.4-20260715-usage-wallet-collection-report-fix",
+  "architecture": "fully-split-three-worker-live-usage-wallet-collection-report-fixed",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -32,12 +32,14 @@
     ]
   },
   "features": [
-    "release channel announcements now publish only the notes tagged for the current version",
-    "old update notes are no longer repeated inside new release announcements",
-    "reseller product browsing is reorganized into a cleaner two-step flow: choose plan then choose payment method",
-    "plan ordering is normalized by sort order, duration, volume and price for a tidier storefront",
-    "renewal and volume-purchase flows keep working with the new cleaner product picker",
-    "README files are excluded"
+    "every new direct representative-panel usage delta is transactionally deducted from the owner wallet and recorded in wallet_ledger",
+    "central usage sync now reports both billed amount and actual wallet deduction",
+    "live usage reports separate direct billing, direct wallet collection, downline billing, downline collection, outstanding debt and total real collection",
+    "the central representative-traffic view displays owner wallet balances and total actual usage deductions",
+    "manual and background downline billing use the same idempotent event guard to prevent duplicate deductions",
+    "current-version-only update channel notes and the cleaned product picker from 3.2.3 are preserved",
+    "README files are excluded",
+    "pending live-usage report rows from older versions are marked superseded during activation so stale zero-collection messages are not delivered later"
   ],
   "deployment": {
     "required_binding_name": "LIVE_USAGE_COORDINATOR",
@@ -52,21 +54,24 @@
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "release_notes_version_filter": "passed",
-    "sales_plan_picker_flow": "passed",
-    "uploader_manifest_hashes": "recalculated",
+    "direct_usage_wallet_deduction": "passed with SQLite first-charge and duplicate-event simulation",
+    "downline_usage_idempotency": "passed with SQLite collection and duplicate-event simulation",
+    "live_report_collection_totals": "passed; direct and downline collections are summed separately and as total real collection",
+    "current_release_notes_filter": "passed; announcement reads RELEASE_NOTES[APP_VERSION] only",
+    "stale_live_report_cleanup": "passed by static activation-path check",
+    "release_manifest_hashes": "recalculated from packaged bytes",
     "zip_integrity": "passed"
   },
   "sha256": {
-    "core": "9c48975aeb23d4f1776706d64a6b78761c421951e029c944865643cfc64c5643",
-    "edge": "e89dcaab12e5260cab0e2e950b9c12790443cad70b020d4c2f9d30f811c49741",
-    "processor": "d288da9005410b6eb0279c3a898c4abdb42cfe8dac27da5226601cf81985752a",
+    "core": "f56791e286a2290ab817f010385427744a5fae58edd83cb12ef1e383ff3dbf16",
+    "edge": "0a669f9a9102aa7cf1425570f361ad68287c52edcd58088156d0946713b5b195",
+    "processor": "9a2be2da33e442c2f6905ffbcfee7215223dbfa3d041edbbbd4fca034bced877",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "hashes": {
-    "core/worker.js": "9c48975aeb23d4f1776706d64a6b78761c421951e029c944865643cfc64c5643",
-    "edge/worker.js": "e89dcaab12e5260cab0e2e950b9c12790443cad70b020d4c2f9d30f811c49741",
-    "processor/worker.js": "d288da9005410b6eb0279c3a898c4abdb42cfe8dac27da5226601cf81985752a",
+    "core/worker.js": "f56791e286a2290ab817f010385427744a5fae58edd83cb12ef1e383ff3dbf16",
+    "edge/worker.js": "0a669f9a9102aa7cf1425570f361ad68287c52edcd58088156d0946713b5b195",
+    "processor/worker.js": "9a2be2da33e442c2f6905ffbcfee7215223dbfa3d041edbbbd4fca034bced877",
     "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   }
 }

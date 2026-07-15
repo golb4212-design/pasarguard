@@ -1,11 +1,11 @@
 /* BLUEPANEL_PROCESSOR_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.2.3
+ * Version: 3.2.4
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = "3.2.3";
+const APP_VERSION = "3.2.4";
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
@@ -721,69 +721,101 @@ async function billDownlineResellerBot(env, childBot, options = {}) {
   const parent = await getResellerBotById(env, childBot.parent_bot_id);
   if (!parent) throw new Error("ربات مستر بالادست پیدا نشد");
   if (options.sync !== false) await syncDownlineRemoteServices(env, childBot, options.limit || 120);
+
   const currentUsage = await downlineUsageTotal(env, childBot.id);
   const previousUsage = Math.max(0, Number(childBot.upstream_last_usage_bytes || 0));
   let delta = currentUsage - previousUsage;
   if (delta < 0) delta = currentUsage;
+
   const price = Math.max(centralMinimumDownlinePrice(settings), Number(childBot.upstream_price_per_gb || 0));
-  const calc = resellerUsageAmount(delta, price, childBot.upstream_billing_remainder || 0);
+  const previousRemainder = Math.max(0, Number(childBot.upstream_billing_remainder || 0));
+  const calc = resellerUsageAmount(delta, price, previousRemainder);
   const centralCalc = resellerUsageAmount(delta, Math.max(0, Number(settings.price_per_gb || 0)), 0);
   const newlyDue = calc.amount;
-  const dueBeforeCollection = Math.max(0, Number(childBot.upstream_unpaid_toman || 0)) + newlyDue;
+  const previousUnpaid = Math.max(0, Number(childBot.upstream_unpaid_toman || 0));
+  const dueBeforeCollection = previousUnpaid + newlyDue;
   const childUser = await env.PASARGUARD_DB.prepare("SELECT * FROM users WHERE id=?").bind(childBot.user_id).first();
-  const available = Math.max(0, Number(childUser?.wallet_balance || 0));
+  if (!childUser) throw new Error("حساب مالک ربات نماینده پیدا نشد");
+  const available = Math.max(0, Number(childUser.wallet_balance || 0));
   const collected = Math.min(available, dueBeforeCollection);
   const unpaid = Math.max(0, dueBeforeCollection - collected);
   const ts = nowIso();
   const status = unpaid > 0 ? "suspended_balance" : (childBot.status === "suspended_balance" ? "active" : childBot.status);
+  const statusChanged = status !== childBot.status;
+  const financialChange = delta > 0 || newlyDue > 0 || collected > 0 || unpaid !== previousUnpaid || statusChanged;
+
+  if (!financialChange) {
+    await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET updated_at=? WHERE id=?").bind(ts, childBot.id).run();
+    return { processed: true, usage: currentUsage, delta: 0, charged: 0, collected: 0, unpaid, price_per_gb: price, status, duplicate: false };
+  }
+
+  // The event row is the transaction guard. Every financial mutation below is
+  // conditional on that INSERT changing one row, preventing concurrent live,
+  // manual, or fallback syncs from charging the same usage delta twice.
+  const eventKey = [
+    "downline", childBot.id, previousUsage, currentUsage, previousRemainder,
+    previousUnpaid, available, price, newlyDue, collected
+  ].join(":");
   const statements = [
+    env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO reseller_usage_events(
+      event_key,bot_id,parent_bot_id,owner_user_id,usage_from,usage_to,charged_amount,collected_amount,unpaid_after,
+      central_cost_amount,master_profit_amount,price_per_gb,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .bind(eventKey,childBot.id,parent.id,childBot.user_id,previousUsage,currentUsage,newlyDue,collected,unpaid,
+        centralCalc.amount,Math.max(0,newlyDue-centralCalc.amount),price,ts),
     env.PASARGUARD_DB.prepare(`UPDATE reseller_bots SET upstream_price_per_gb=?,upstream_last_usage_bytes=?,upstream_billing_remainder=?,
-      upstream_unpaid_toman=?,upstream_total_charged=upstream_total_charged+?,upstream_total_profit=upstream_total_profit+?,status=?,updated_at=? WHERE id=?`)
+      upstream_unpaid_toman=?,upstream_total_charged=upstream_total_charged+?,upstream_total_profit=upstream_total_profit+?,status=?,updated_at=?
+      WHERE id=? AND changes()=1`)
       .bind(price,currentUsage,calc.remainder,unpaid,newlyDue,Math.max(0,newlyDue-centralCalc.amount),status,ts,childBot.id)
   ];
   if (collected > 0) {
     statements.push(
-      env.PASARGUARD_DB.prepare("UPDATE users SET wallet_balance=wallet_balance-?,updated_at=? WHERE id=?").bind(collected,ts,childBot.user_id),
-      env.PASARGUARD_DB.prepare("UPDATE users SET wallet_balance=wallet_balance+?,updated_at=? WHERE id=?").bind(collected,ts,parent.user_id),
+      env.PASARGUARD_DB.prepare("UPDATE users SET wallet_balance=wallet_balance-?,updated_at=? WHERE id=? AND changes()=1")
+        .bind(collected,ts,childBot.user_id),
+      env.PASARGUARD_DB.prepare("UPDATE users SET wallet_balance=wallet_balance+?,updated_at=? WHERE id=? AND changes()=1")
+        .bind(collected,ts,parent.user_id),
       env.PASARGUARD_DB.prepare(`INSERT INTO wallet_ledger(id,user_id,type,amount,balance_after,ref_type,ref_id,description,created_at)
-        SELECT ?,id,'downline_usage',-?,wallet_balance,'reseller_bot',?,'هزینه مصرف ربات زیرمجموعه',? FROM users WHERE id=?`)
+        SELECT ?,id,'downline_usage',-?,wallet_balance,'reseller_bot',?,'هزینه مصرف ربات زیرمجموعه',? FROM users WHERE id=? AND changes()=1`)
         .bind(id("led"),collected,childBot.id,ts,childBot.user_id),
       env.PASARGUARD_DB.prepare(`INSERT INTO wallet_ledger(id,user_id,type,amount,balance_after,ref_type,ref_id,description,created_at)
-        SELECT ?,id,'downline_usage_income',?,wallet_balance,'reseller_bot',?,'درآمد مصرف نماینده زیرمجموعه',? FROM users WHERE id=?`)
+        SELECT ?,id,'downline_usage_income',?,wallet_balance,'reseller_bot',?,'درآمد مصرف نماینده زیرمجموعه',? FROM users WHERE id=? AND changes()=1`)
         .bind(id("led"),collected,childBot.id,ts,parent.user_id)
     );
   }
-  if (delta > 0 || newlyDue > 0) {
-    const eventKey = "downline:" + childBot.id + ":" + String(currentUsage);
-    statements.push(env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO reseller_usage_events(
-      event_key,bot_id,parent_bot_id,owner_user_id,usage_from,usage_to,charged_amount,collected_amount,unpaid_after,
-      central_cost_amount,master_profit_amount,price_per_gb,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-      .bind(eventKey,childBot.id,parent.id,childBot.user_id,previousUsage,currentUsage,newlyDue,collected,unpaid,
-        centralCalc.amount,Math.max(0,newlyDue-centralCalc.amount),price,ts));
-  }
-  await env.PASARGUARD_DB.batch(statements);
-  return { processed: true, usage: currentUsage, delta, charged: newlyDue, collected, unpaid, price_per_gb: price, status };
+  const results = await env.PASARGUARD_DB.batch(statements);
+  const inserted = Number(results?.[0]?.meta?.changes || 0) > 0;
+  return {
+    processed: true,
+    usage: currentUsage,
+    delta: inserted ? delta : 0,
+    charged: inserted ? newlyDue : 0,
+    collected: inserted ? collected : 0,
+    unpaid: inserted ? unpaid : previousUnpaid,
+    price_per_gb: price,
+    status: inserted ? status : childBot.status,
+    duplicate: !inserted
+  };
 }
 
-async function syncDownlineUsage(env, parentBotId = null, limit = 100) {
+async function syncDownlineUsage(env, parentBotId = null, limit = 100, options = {}) {
   const sql = parentBotId
     ? "SELECT id FROM reseller_bots WHERE parent_bot_id=? ORDER BY updated_at LIMIT ?"
     : "SELECT id FROM reseller_bots WHERE parent_bot_id IS NOT NULL ORDER BY updated_at LIMIT ?";
   const query = env.PASARGUARD_DB.prepare(sql);
   const rows = parentBotId ? await query.bind(parentBotId,limit).all() : await query.bind(limit).all();
-  let processed=0,charged=0,collected=0,failed=0;
+  const serviceLimit = clampInt(options.serviceLimit || 120, 5, 120);
+  let processed=0,charged=0,collected=0,unpaid=0,failed=0;
   for (const row of rows.results || []) {
     try {
       const bot = await getResellerBotById(env,row.id);
       if (!bot) continue;
-      const result = await billDownlineResellerBot(env,bot,{sync:true,limit:120});
-      processed++;charged+=Number(result.charged||0);collected+=Number(result.collected||0);
+      const result = await billDownlineResellerBot(env,bot,{sync:options.sync !== false,limit:serviceLimit});
+      processed++;charged+=Number(result.charged||0);collected+=Number(result.collected||0);unpaid+=Number(result.unpaid||0);
     } catch (error) {
       failed++;
       try { await audit(env,null,"downline_usage_sync_failed",{botId:row.id,message:String(error?.message||error)}); } catch (_) {}
     }
   }
-  return {processed,charged,collected,failed};
+  return {processed,charged,collected,unpaid,failed};
 }
 
 async function resellerBotToken(env, bot) {
@@ -1937,7 +1969,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_PROCESSOR_VERSION='3.2.3';
+const BLUEPANEL_PROCESSOR_VERSION='3.2.4';
 let processorSchemaPromise=null;
 function processorJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function processorInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
