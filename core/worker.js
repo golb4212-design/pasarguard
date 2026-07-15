@@ -1,15 +1,26 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.6
+ * Version: 3.3.7
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.3.6";
+const APP_VERSION = "3.3.7";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.7": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🧾", text: "مرتب‌سازی سفارش‌ها و سرویس‌ها به‌صورت کارت‌های خلاصه و جزئیات جداگانه" },
+      { emoji: "🗑", text: "افزودن حذف امن سرویس از پنل PasarGuard در ربات و داشبورد نماینده" },
+      { emoji: "🛡", text: "تأیید دو مرحله‌ای حذف، حفظ سوابق مالی و پاک‌سازی اتوماسیون‌های سرویس" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "🧭", text: "مرکز مدیریت سرویس‌های فعال با بروزرسانی، مشاهده و حذف دو مرحله‌ای" },
+      { emoji: "🖥", text: "افزودن صفحه سرویس‌ها به داشبورد وب نماینده" }
+    ])
+  }),
   "3.3.6": Object.freeze({
     central: Object.freeze([
       { emoji: "🧰", text: "ترمیم واقعی Processor با اجرای مجدد، Deploy خودکار و بررسی چندمرحله‌ای Runtime" },
@@ -14158,7 +14169,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.3.6';
+const BLUEPANEL_CORE_VERSION = '3.3.7';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {

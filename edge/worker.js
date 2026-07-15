@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.6
+ * Version: 3.3.7
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = "3.3.6";
+const APP_VERSION = "3.3.7";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -812,7 +812,7 @@ function resellerViewPermission(view) {
   return ({
     home: "dashboard", group_overview: "dashboard", group_sales: "dashboard",
     group_content: "dashboard", group_finance: "dashboard", group_communications: "dashboard", group_system: "dashboard",
-    plans: "plans", orders: "orders", catalog: "catalog",
+    plans: "plans", orders: "orders", services: "orders", service: "orders", catalog: "catalog",
     wallets: "wallets", stats: "stats", users: "users", user: "users",
     texts: "texts", promos: "promos", tickets: "tickets", ticket: "tickets",
     settings: "settings", settings_identity: "settings", settings_loyalty: "settings",
@@ -833,7 +833,7 @@ function resellerCallbackPermission(data) {
   if (value.startsWith("owner:health")) return "health";
   if (value.startsWith("owner:backup")) return "backups";
   if (value.startsWith("owner:ticket")) return "tickets";
-  if (value.startsWith("owner:approve") || value.startsWith("owner:reject") || value.startsWith("owner:receipt") || value.startsWith("owner:orders")) return "orders";
+  if (value.startsWith("owner:approve") || value.startsWith("owner:reject") || value.startsWith("owner:receipt") || value.startsWith("owner:orders") || value.startsWith("owner:services") || value.startsWith("osv:")) return "orders";
   if (value.startsWith("owner:wallet")) return "wallets";
   if (value.startsWith("owner:user")) return "users";
   if (value.startsWith("owner:promo")) return "promos";
@@ -2370,6 +2370,7 @@ function buildSalesServices(orderRows = []) {
   const groups = new Map();
   for (const row of orderRows || []) {
     if (String(row.status || "") !== "delivered" || !row.remote_username) continue;
+    if (["deleted", "removed", "remote_missing"].includes(String(row.remote_status || "").toLowerCase())) continue;
     const key = String(row.remote_username).toLowerCase();
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(row);
@@ -2419,6 +2420,7 @@ async function getSalesServiceOrder(env, bot, customer, serviceId) {
     LEFT JOIN sales_categories c ON c.id=p.category_id
     LEFT JOIN sales_locations l ON l.id=p.location_id
     WHERE o.id=? AND o.bot_id=? AND o.customer_id=? AND o.status='delivered' AND o.remote_username IS NOT NULL
+      AND COALESCE(o.remote_status,'') NOT IN ('deleted','removed','remote_missing')
   `).bind(serviceId, bot.id, customer.id).first();
   if (!row) throw new Error("سرویس انتخاب‌شده پیدا نشد");
   return row;
@@ -3597,29 +3599,98 @@ async function salesPlanPurchaseMethodsView(env, bot, customer, planId, options 
   };
 }
 
+async function deleteSalesService(env, bot, customer, serviceId, options = {}) {
+  const target = await getSalesServiceOrder(env, bot, customer, serviceId);
+  if (bot.agency_status !== "active") throw new Error("پنل متصل نماینده فعال نیست");
+  const agency = { id: bot.agency_id, panel_username: bot.panel_username, panel_password_enc: bot.panel_password_enc };
+  let remoteAlreadyMissing = false;
+  try {
+    await agencyPasarguardRequest(env, agency, "DELETE", "/api/user/" + encodeURIComponent(target.remote_username));
+  } catch (error) {
+    if (Number(error?.status || 0) === 404) remoteAlreadyMissing = true;
+    else if (Number(error?.status || 0) === 403) throw new Error("حذف سرویس در پنل مجاز نیست؛ دسترسی users.delete را برای ادمین متصل فعال کنید");
+    else throw error;
+  }
+  const ts = nowIso();
+  await env.PASARGUARD_DB.prepare(`
+    UPDATE sales_orders SET remote_status='deleted',subscription_url=NULL,remote_last_synced_at=?,error_message=NULL,updated_at=?
+    WHERE bot_id=? AND customer_id=? AND LOWER(remote_username)=LOWER(?) AND status='delivered'
+  `).bind(ts,ts,bot.id,customer.id,target.remote_username).run();
+  const cleanup = [
+    ["DELETE FROM sales_service_claims WHERE bot_id=? AND customer_id=? AND LOWER(remote_username)=LOWER(?)", [bot.id,customer.id,target.remote_username]],
+    ["DELETE FROM sales_service_preferences WHERE bot_id=? AND customer_id=? AND LOWER(remote_username)=LOWER(?)", [bot.id,customer.id,target.remote_username]],
+    ["DELETE FROM sales_service_health WHERE bot_id=? AND customer_id=? AND LOWER(remote_username)=LOWER(?)", [bot.id,customer.id,target.remote_username]],
+    ["UPDATE sales_failover_jobs SET status='cancelled',updated_at=?,finished_at=? WHERE bot_id=? AND customer_id=? AND LOWER(remote_username)=LOWER(?) AND status IN ('pending','processing')", [ts,ts,bot.id,customer.id,target.remote_username]],
+    ["UPDATE sales_guarantee_claims SET status='cancelled',resolution='service_deleted',updated_at=? WHERE bot_id=? AND customer_id=? AND LOWER(remote_username)=LOWER(?) AND status='pending'", [ts,bot.id,customer.id,target.remote_username]]
+  ];
+  for (const [sql, params] of cleanup) {
+    try { await env.PASARGUARD_DB.prepare(sql).bind(...params).run(); } catch (_) {}
+  }
+  try { await salesEvent(env, bot.id, customer.id, "service_deleted", { serviceId: target.id, username: target.remote_username, actor: options.actor || "owner", remoteAlreadyMissing }); } catch (_) {}
+  try {
+    await queueReportEvent(env, bot.id, "service_deletions", "سرویس حذف شد",
+      "کاربر پنل: <code>" + botEscape(target.remote_username) + "</code>\nمشتری: <code>" + botEscape(customer.telegram_id) + "</code>\nعامل: <b>" + botEscape(options.actorLabel || options.actor || "مدیر") + "</b>",
+      "service-deleted:" + bot.id + ":" + String(target.remote_username).toLowerCase() + ":" + ts.slice(0,16));
+  } catch (_) {}
+  return { id: target.id, remote_username: target.remote_username, remoteAlreadyMissing };
+}
+
 async function salesCustomerOrdersView(env, bot, customer) {
   const rows = await env.PASARGUARD_DB.prepare(`
-    SELECT o.*,p.title AS plan_title FROM sales_orders o
-    JOIN sales_plans p ON p.id=o.plan_id
-    WHERE o.bot_id=? AND o.customer_id=? ORDER BY o.created_at DESC LIMIT 15
+    SELECT o.*,p.title AS plan_title,sc.title AS category_title,sl.title AS location_title
+    FROM sales_orders o JOIN sales_plans p ON p.id=o.plan_id
+    LEFT JOIN sales_categories sc ON sc.id=p.category_id LEFT JOIN sales_locations sl ON sl.id=p.location_id
+    WHERE o.bot_id=? AND o.customer_id=? ORDER BY o.created_at DESC LIMIT 20
   `).bind(bot.id, customer.id).all();
   const orders = rows.results || [];
-  const text = orders.length ? orders.map(order =>
-    salesOrderStatusIcon(order.status) + " <b>" + botEscape(order.plan_title) + "</b>" +
-    (order.order_type === "renewal" ? " · ♻️ تمدید" : order.order_type === "volume" ? " · ➕ افزایش حجم" : order.order_type === "imported" ? " · 🔗 انتقال سرویس قبلی" : "") + "\n" +
-    "   مبلغ: <b>" + botMoney(order.amount_toman) + " تومان</b> · " + (order.payment_method === "wallet" ? "کیف پول" : order.payment_method === "blupal" ? "بلوپال" : order.payment_method === "import" ? "ثبت با لینک اشتراک" : "کارت") + "\n" +
-    "   وضعیت: " + botEscape(salesOrderStatusLabel(order.status)) + "\n" +
-    (order.remote_username ? "   کاربری: <code>" + botEscape(order.remote_username) + "</code>\n" : "") +
-    (order.subscription_url ? "   لینک: <code>" + botEscape(order.subscription_url) + "</code>\n" : "") +
-    "   " + botDate(order.created_at)
-  ).join("\n\n") : "هنوز سفارشی ثبت نکرده‌اید.";
-  const buttons = [];
-  for (const order of orders.filter(o => o.subscription_url).slice(0, 5)) {
-    buttons.push([{ text: "📋 کپی لینک " + String(order.remote_username || "سرویس"), copy_text: { text: order.subscription_url } }]);
-  }
-  buttons.push([{ text: "🛒 خرید سرویس", callback_data: "sale:locations" }, { text: "♻️ تمدید", callback_data: "sale:services" }]);
+  const delivered = orders.filter(x => x.status === "delivered").length;
+  const pending = orders.filter(x => ["awaiting_receipt","pending_review","payment_pending","provision_failed"].includes(String(x.status))).length;
+  const lines = orders.slice(0,10).map((order,index) => {
+    const type = order.order_type === "renewal" ? "♻️ تمدید" : order.order_type === "volume" ? "➕ افزایش حجم" : order.order_type === "imported" ? "🔗 سرویس انتقالی" : "🛒 خرید سرویس";
+    return salesOrderStatusIcon(order.status) + " <b>" + (index+1) + ". " + botEscape(order.plan_title) + "</b> · " + type + "\n" +
+      "   " + botEscape(salesOrderStatusLabel(order.status)) + " · <b>" + botMoney(order.amount_toman) + " تومان</b> · " + botDate(order.created_at) +
+      (order.remote_username ? "\n   کاربری: <code>" + botEscape(order.remote_username) + "</code>" : "");
+  }).join("\n\n") || "هنوز سفارشی ثبت نکرده‌اید.";
+  const buttons = orders.slice(0,10).map((order,index) => [{
+    text: salesOrderStatusIcon(order.status) + " سفارش " + (index+1) + " — " + String(order.plan_title || "پلن").slice(0,24),
+    callback_data: "sale:order:" + order.id
+  }]);
+  buttons.push([{ text: "🛒 خرید سرویس", callback_data: "sale:locations" }, { text: "🧭 سرویس‌های من", callback_data: "sale:services" }]);
   buttons.push([{ text: "🏠 منوی اصلی", callback_data: "sale:home" }]);
-  return { text: "📦 <b>سفارش‌ها و سرویس‌های من</b>\n━━━━━━━━━━━━━━\n" + text, reply_markup: { inline_keyboard: buttons } };
+  return {
+    text: "📦 <b>سفارش‌ها و سرویس‌های من</b>\n━━━━━━━━━━━━━━\n✅ تحویل‌شده: <b>" + botMoney(delivered) + "</b> · ⏳ نیازمند پیگیری: <b>" + botMoney(pending) + "</b>\n\n" + lines + "\n\nبرای جزئیات، یکی از دکمه‌های زیر را انتخاب کنید.",
+    reply_markup: { inline_keyboard: buttons }
+  };
+}
+
+async function salesCustomerOrderDetailView(env, bot, customer, orderId) {
+  const order = await env.PASARGUARD_DB.prepare(`
+    SELECT o.*,p.title AS plan_title,sc.title AS category_title,sl.title AS location_title
+    FROM sales_orders o JOIN sales_plans p ON p.id=o.plan_id
+    LEFT JOIN sales_categories sc ON sc.id=p.category_id LEFT JOIN sales_locations sl ON sl.id=p.location_id
+    WHERE o.id=? AND o.bot_id=? AND o.customer_id=?
+  `).bind(orderId,bot.id,customer.id).first();
+  if (!order) throw new Error("سفارش پیدا نشد");
+  const type = order.order_type === "renewal" ? "تمدید" : order.order_type === "volume" ? "افزایش حجم" : order.order_type === "imported" ? "سرویس انتقالی" : "خرید جدید";
+  const payment = order.payment_method === "wallet" ? "کیف پول" : order.payment_method === "blupal" ? "پرداخت آنلاین" : order.payment_method === "import" ? "ثبت لینک قبلی" : "کارت‌به‌کارت";
+  const deleted = ["deleted","removed","remote_missing"].includes(String(order.remote_status || "").toLowerCase());
+  const text = "🧾 <b>جزئیات سفارش</b>\n━━━━━━━━━━━━━━\n" +
+    "پلن: <b>" + botEscape(order.plan_title) + "</b>\n" +
+    "نوع عملیات: <b>" + botEscape(type) + "</b>\n" +
+    "وضعیت: <b>" + botEscape(salesOrderStatusLabel(order.status)) + "</b>\n" +
+    "مبلغ: <b>" + botMoney(order.amount_toman) + " تومان</b>\n" +
+    "روش پرداخت: <b>" + botEscape(payment) + "</b>\n" +
+    (order.category_title ? "دسته‌بندی: <b>" + botEscape(order.category_title) + "</b>\n" : "") +
+    (order.location_title ? "لوکیشن: <b>" + botEscape(order.location_title) + "</b>\n" : "") +
+    (order.remote_username ? "نام کاربری: <code>" + botEscape(order.remote_username) + "</code>\n" : "") +
+    (deleted ? "وضعیت سرویس: <b>حذف‌شده</b>\n" : "") +
+    "زمان ثبت: <b>" + botEscape(botDate(order.created_at)) + "</b>" +
+    (order.error_message ? "\n\n⚠️ <code>" + botEscape(String(order.error_message).slice(0,500)) + "</code>" : "");
+  const buttons=[];
+  if (order.subscription_url && !deleted) buttons.push([{text:"📋 کپی لینک اشتراک",copy_text:{text:order.subscription_url}}]);
+  if (order.status === "delivered" && order.remote_username && !deleted) buttons.push([{text:"🧭 مشاهده سرویس",callback_data:"sale:service:"+ (order.target_order_id || order.id)}]);
+  buttons.push([{text:"↩️ سفارش‌ها",callback_data:"sale:orders"},{text:"🏠 منوی اصلی",callback_data:"sale:home"}]);
+  return {text,reply_markup:{inline_keyboard:buttons}};
 }
 
 async function salesCustomerServicesView(env, bot, customer) {
@@ -3840,6 +3911,7 @@ async function salesCustomerSendOrEdit(env, bot, target, view, options = {}) {
     }
   }
   else if (view === "orders") rendered = await salesCustomerOrdersView(env, bot, target.customer);
+  else if (view === "order_detail") rendered = await salesCustomerOrderDetailView(env, bot, target.customer, options.orderId);
   else if (view === "services") rendered = await salesCustomerServicesView(env, bot, target.customer);
   else if (view === "service_detail") rendered = await salesCustomerServiceDetailView(env, bot, target.customer, options.serviceId);
   else if (view === "wallet") rendered = await salesCustomerWalletView(env, bot, target.customer);
@@ -5336,6 +5408,10 @@ async function salesHandleCustomerCallback(env, bot, callback) {
     await revokeSalesServiceSubscription(env, bot, customer, serviceId);
     return salesCustomerSendOrEdit(env, bot, target, "service_detail", { serviceId });
   }
+  if (data.startsWith("sale:order:")) {
+    const orderId = data.slice("sale:order:".length);
+    return salesCustomerSendOrEdit(env, bot, target, "order_detail", { orderId });
+  }
   if (data.startsWith("sale:service:")) {
     const serviceId = data.slice("sale:service:".length);
     return salesCustomerSendOrEdit(env, bot, target, "service_detail", { serviceId });
@@ -6055,6 +6131,8 @@ async function resellerOwnerRender(env, bot, account, view = "home", extra = {})
   else if (view === "group_system") rendered = await resellerOwnerGroupView(env, bot, account, "system");
   else if (view === "plans") rendered = await botSalesPlansView(env, account);
   else if (view === "orders") rendered = await botSalesOrdersView(env, account);
+  else if (view === "services") rendered = await botSalesServicesView(env, account);
+  else if (view === "service") rendered = await botSalesServiceOwnerDetailView(env, account, extra.serviceId);
   else if (view === "catalog") rendered = await botSalesCatalogView(env, account);
   else if (view === "wallets") rendered = await botSalesWalletRequestsView(env, account);
   else if (view === "stats") rendered = await botSalesStatsView(env, account);
@@ -6188,7 +6266,7 @@ async function resellerOwnerHandleCallback(env, bot, callback) {
     "owner:group:overview": "group_overview", "owner:group:sales": "group_sales",
     "owner:group:content": "group_content", "owner:group:finance": "group_finance",
     "owner:group:communications": "group_communications", "owner:group:system": "group_system",
-    "owner:plans": "plans", "owner:orders": "orders", "owner:catalog": "catalog", "owner:wallets": "wallets",
+    "owner:plans": "plans", "owner:orders": "orders", "owner:services": "services", "owner:catalog": "catalog", "owner:wallets": "wallets",
     "owner:stats": "stats", "owner:users": "users", "owner:texts": "texts", "owner:promos": "promos",
     "owner:tickets": "tickets", "owner:settings": "settings",
     "owner:settings:identity": "settings_identity", "owner:settings:loyalty": "settings_loyalty",
@@ -6201,6 +6279,32 @@ async function resellerOwnerHandleCallback(env, bot, callback) {
     try { await resellerAudit(env, bot, account, "callback_action", { data }); } catch (_) {}
   }
   if (nav[data]) return resellerOwnerSendOrEdit(env, bot, target, nav[data]);
+  if (data.startsWith("osv:v:")) return resellerOwnerSendOrEdit(env,bot,target,"service",{serviceId:data.slice("osv:v:".length)});
+  if (data.startsWith("osv:r:")) {
+    const serviceId=data.slice("osv:r:".length);
+    const row=await env.PASARGUARD_DB.prepare("SELECT customer_id FROM sales_orders WHERE id=? AND bot_id=?").bind(serviceId,bot.id).first();
+    if(!row)throw new Error("سرویس پیدا نشد");
+    const customer=await env.PASARGUARD_DB.prepare("SELECT * FROM sales_customers WHERE id=? AND bot_id=?").bind(row.customer_id,bot.id).first();
+    await syncSalesService(env,bot,customer,serviceId);
+    return resellerOwnerSendOrEdit(env,bot,target,"service",{serviceId});
+  }
+  if (data.startsWith("osv:c:")) {
+    const serviceId=data.slice("osv:c:".length);
+    const row=await env.PASARGUARD_DB.prepare(`SELECT o.remote_username,c.first_name,c.username,c.telegram_id FROM sales_orders o JOIN sales_customers c ON c.id=o.customer_id WHERE o.id=? AND o.bot_id=?`).bind(serviceId,bot.id).first();
+    if(!row)throw new Error("سرویس پیدا نشد");
+    return resellerTelegramApi(env,bot,"editMessageText",{chat_id:chatId,message_id:messageId,parse_mode:"HTML",text:"🗑 <b>حذف دائمی سرویس</b>\n━━━━━━━━━━━━━━\nسرویس <code>"+botEscape(row.remote_username)+"</code> برای مشتری <b>"+botEscape(row.first_name||row.username||row.telegram_id)+"</b> از پنل PasarGuard حذف می‌شود.\n\nسوابق سفارش و پرداخت حفظ می‌شوند، اما لینک و دسترسی سرویس از بین می‌روند. ادامه می‌دهید؟",reply_markup:{inline_keyboard:[[{text:"🗑 بله، حذف شود",callback_data:"osv:d:"+serviceId}],[{text:"لغو",callback_data:"osv:v:"+serviceId}]]}});
+  }
+  if (data.startsWith("osv:d:")) {
+    const serviceId=data.slice("osv:d:".length);
+    const row=await env.PASARGUARD_DB.prepare("SELECT customer_id FROM sales_orders WHERE id=? AND bot_id=?").bind(serviceId,bot.id).first();
+    if(!row)throw new Error("سرویس پیدا نشد");
+    const customer=await env.PASARGUARD_DB.prepare("SELECT * FROM sales_customers WHERE id=? AND bot_id=?").bind(row.customer_id,bot.id).first();
+    const result=await deleteSalesService(env,bot,customer,serviceId,{actor:"reseller_bot",actorLabel:account.resellerActor?.label||"مدیر نماینده"});
+    try{await resellerAudit(env,bot,account,"service_deleted",{serviceId,username:result.remote_username,customerId:customer.id})}catch(_){}
+    try{await resellerTelegramApi(env,bot,"sendMessage",{chat_id:customer.telegram_id,parse_mode:"HTML",text:"🗑 سرویس <code>"+botEscape(result.remote_username)+"</code> توسط مدیریت فروشنده حذف شد. سوابق پرداخت شما همچنان در بخش سفارش‌ها محفوظ است."})}catch(_){}
+    try{await resellerTelegramApi(env,bot,"answerCallbackQuery",{callback_query_id:callback.id,text:"سرویس حذف شد",show_alert:true})}catch(_){}
+    return resellerOwnerSendOrEdit(env,bot,target,"services");
+  }
   if (data === "owner:child:new") {
     if(!resellerBotCanCreateDownline(bot)) throw new Error("این قابلیت فقط برای مستر نمایندگی فعال است");
     if(Number(bot.downline_sales_enabled??1)!==1) throw new Error("ساخت نماینده زیرمجموعه بسته است");
@@ -7641,6 +7745,7 @@ async function resellerOwnerDashboardView(env, account) {
     ...(can("orders") ? [{ text: "🧾 سفارش‌ها و رسیدها", callback_data: "owner:orders" }] : []),
     ...(can("users") ? [{ text: "👥 کاربران", callback_data: "owner:users" }] : [])
   ]);
+  if (can("orders")) rows.push([{ text: "🧭 مدیریت سرویس‌های فعال", callback_data: "owner:services" }]);
   if (can("wallets") || can("tickets")) rows.push([
     ...(can("wallets") ? [{ text: "💳 درخواست‌های شارژ", callback_data: "owner:wallets" }] : []),
     ...(can("tickets") ? [{ text: "🎫 تیکت‌ها", callback_data: "owner:tickets" }] : [])
@@ -7716,9 +7821,10 @@ async function resellerOwnerGroupView(env, bot, account, group) {
     sales: {
       title: "🛒 سفارش‌ها و کاربران",
       body: "رسیدگی روزانه به سفارش‌ها، مشتریان و درخواست‌های پشتیبانی.",
-      chart: ["🧾 سفارش‌ها", "👥 مشتریان", "🎫 تیکت‌های پشتیبانی"],
+      chart: ["🧾 سفارش‌ها", "🧭 سرویس‌های فعال", "👥 مشتریان", "🎫 تیکت‌های پشتیبانی"],
       rows: [
         can("orders") ? [{ text: "🧾 سفارش‌ها و رسیدها", callback_data: "owner:orders" }] : [],
+        can("orders") ? [{ text: "🧭 مدیریت سرویس‌های فعال", callback_data: "owner:services" }] : [],
         can("users") ? [{ text: "👥 مدیریت مشتریان", callback_data: "owner:users" }] : [],
         can("tickets") ? [{ text: "🎫 مرکز تیکت‌ها", callback_data: "owner:tickets" }] : []
       ]
@@ -7826,6 +7932,38 @@ async function botSalesOrdersView(env, account) {
   }
   buttons.push([{ text: "🔄 بروزرسانی", callback_data: "bot:sales:orders" }, { text: "↩️ ربات", callback_data: "bot:sales" }]);
   return { text: "🧾 <b>سفارش‌های ربات نمایندگی</b>\n━━━━━━━━━━━━━━\n" + lines, reply_markup: { inline_keyboard: buttons } };
+}
+
+async function botSalesServicesView(env, account) {
+  const bot=await getResellerBotForUser(env,account.user.id);if(!bot)throw new Error("ربات پیدا نشد");
+  const result=await env.PASARGUARD_DB.prepare(`
+    SELECT o.*,p.title AS plan_title,c.id AS customer_id,c.telegram_id,c.username AS customer_username,c.first_name,c.last_name,
+      sl.title AS location_title FROM sales_orders o JOIN sales_plans p ON p.id=o.plan_id JOIN sales_customers c ON c.id=o.customer_id
+      LEFT JOIN sales_locations sl ON sl.id=p.location_id
+    WHERE o.bot_id=? AND o.status='delivered' AND o.remote_username IS NOT NULL
+      AND COALESCE(o.remote_status,'') NOT IN ('deleted','removed','remote_missing')
+    ORDER BY o.updated_at DESC LIMIT 250
+  `).bind(bot.id).all();
+  const seen=new Set(),services=[];
+  for(const row of result.results||[]){const key=String(row.customer_id)+":"+String(row.remote_username).toLowerCase();if(seen.has(key))continue;seen.add(key);services.push(row)}
+  const lines=services.slice(0,15).map((x,i)=>"🟢 <b>"+(i+1)+". "+botEscape(x.plan_title||"سرویس")+"</b>\n   مشتری: "+botEscape(x.first_name||x.customer_username||x.telegram_id)+" · <code>"+botEscape(x.remote_username)+"</code>\n   "+botEscape(x.location_title||"بدون لوکیشن")+" · "+botEscape(x.remote_status||"active")+" · "+botDate(x.remote_expire)).join("\n\n")||"سرویس فعالی وجود ندارد.";
+  const buttons=services.slice(0,12).map((x,i)=>[{text:"🧭 سرویس "+(i+1)+" — "+String(x.remote_username).slice(0,22),callback_data:"osv:v:"+x.id}]);
+  buttons.push([{text:"🔄 بروزرسانی فهرست",callback_data:"owner:services"},{text:"↩️ مدیریت ربات",callback_data:"owner:home"}]);
+  return {text:"🧭 <b>مدیریت سرویس‌های فعال</b>\n━━━━━━━━━━━━━━\nتعداد سرویس‌ها: <b>"+botMoney(services.length)+"</b>\n\n"+lines,reply_markup:{inline_keyboard:buttons}};
+}
+
+async function botSalesServiceOwnerDetailView(env, account, serviceId) {
+  const bot=await getResellerBotForUser(env,account.user.id);if(!bot)throw new Error("ربات پیدا نشد");
+  const row=await env.PASARGUARD_DB.prepare(`SELECT o.*,p.title AS plan_title,c.id AS customer_id,c.telegram_id,c.username AS customer_username,c.first_name,c.last_name,sl.title AS location_title
+    FROM sales_orders o JOIN sales_plans p ON p.id=o.plan_id JOIN sales_customers c ON c.id=o.customer_id LEFT JOIN sales_locations sl ON sl.id=p.location_id
+    WHERE o.id=? AND o.bot_id=? AND o.status='delivered' AND COALESCE(o.remote_status,'') NOT IN ('deleted','removed','remote_missing')`).bind(serviceId,bot.id).first();
+  if(!row)throw new Error("سرویس فعال پیدا نشد");
+  const limit=Number(row.remote_data_limit||0),used=Number(row.remote_used_traffic||0),remain=limit>0?Math.max(0,limit-used):0;
+  const text="🧭 <b>جزئیات سرویس مشتری</b>\n━━━━━━━━━━━━━━\nپلن: <b>"+botEscape(row.plan_title)+"</b>\nمشتری: <b>"+botEscape(row.first_name||row.customer_username||row.telegram_id)+"</b> · <code>"+botEscape(row.telegram_id)+"</code>\nکاربری پنل: <code>"+botEscape(row.remote_username)+"</code>\nلوکیشن: <b>"+botEscape(row.location_title||"نامشخص")+"</b>\nوضعیت: <b>"+botEscape(row.remote_status||"active")+"</b>\nمصرف: <b>"+botGb(used)+"</b> از <b>"+(limit>0?botGb(limit):"نامحدود")+"</b>"+(limit>0?"\nباقی‌مانده: <b>"+botGb(remain)+"</b>":"")+"\nانقضا: <b>"+botEscape(row.remote_expire?botDate(row.remote_expire):"نامحدود/نامشخص")+"</b>";
+  const buttons=[];if(row.subscription_url)buttons.push([{text:"📋 کپی لینک",copy_text:{text:row.subscription_url}}]);
+  buttons.push([{text:"🔄 بروزرسانی",callback_data:"osv:r:"+row.id},{text:"🗑 حذف سرویس",callback_data:"osv:c:"+row.id}]);
+  buttons.push([{text:"↩️ همه سرویس‌ها",callback_data:"owner:services"}]);
+  return {text,reply_markup:{inline_keyboard:buttons}};
 }
 
 async function botSalesCatalogView(env, account) {
@@ -9817,7 +9955,7 @@ async function resellerAdminBootstrap(request, env, botId) {
   const account = await requireResellerAdminWeb(request, env, botId);
   if (account.response) return account.response;
   const bot = account.bot;
-  // A single D1 batch replaces eighteen Edge -> Core requests on the management dashboard.
+  // A single D1 batch replaces nineteen Edge -> Core requests on the management dashboard.
   const adminBootstrapBatch = await env.PASARGUARD_DB.batch([
     env.PASARGUARD_DB.prepare(`SELECT
       (SELECT COUNT(*) FROM sales_customers WHERE bot_id=?) AS customers_count,
@@ -9879,7 +10017,15 @@ async function resellerAdminBootstrap(request, env, botId) {
       FROM sales_security_events e LEFT JOIN sales_customers c ON c.id=e.customer_id WHERE e.bot_id=? ORDER BY e.created_at DESC LIMIT 120`).bind(bot.id),
     env.PASARGUARD_DB.prepare("SELECT id,telegram_id,display_name,role,status,created_at,updated_at FROM reseller_staff WHERE bot_id=? ORDER BY created_at DESC LIMIT 50").bind(bot.id),
     env.PASARGUARD_DB.prepare("SELECT id,send_mode,target_scope,message_text,scheduled_at,status,success_count,failed_count,created_at,started_at,finished_at,error_message FROM sales_campaigns WHERE bot_id=? ORDER BY created_at DESC LIMIT 100").bind(bot.id),
-    env.PASARGUARD_DB.prepare("SELECT id,title,panel_username,status,CASE WHEN panel_password_enc IS NULL THEN 0 ELSE 1 END AS has_password FROM agencies WHERE user_id=? AND COALESCE(is_trial,0)=0 ORDER BY updated_at DESC LIMIT 100").bind(account.user.id)
+    env.PASARGUARD_DB.prepare("SELECT id,title,panel_username,status,CASE WHEN panel_password_enc IS NULL THEN 0 ELSE 1 END AS has_password FROM agencies WHERE user_id=? AND COALESCE(is_trial,0)=0 ORDER BY updated_at DESC LIMIT 100").bind(account.user.id),
+    env.PASARGUARD_DB.prepare(`SELECT o.id,o.customer_id,o.remote_username,o.subscription_url,o.remote_status,o.remote_data_limit,o.remote_used_traffic,o.remote_expire,o.remote_online_at,o.remote_last_synced_at,o.updated_at,
+      p.title AS plan_title,c.telegram_id,c.username,c.first_name,c.last_name,sl.title AS location_title
+      FROM sales_orders o JOIN sales_plans p ON p.id=o.plan_id JOIN sales_customers c ON c.id=o.customer_id
+      LEFT JOIN sales_locations sl ON sl.id=p.location_id
+      WHERE o.bot_id=? AND o.status='delivered' AND o.remote_username IS NOT NULL
+        AND COALESCE(o.remote_status,'') NOT IN ('deleted','removed','remote_missing')
+        AND o.id=(SELECT o2.id FROM sales_orders o2 WHERE o2.bot_id=o.bot_id AND o2.customer_id=o.customer_id AND LOWER(o2.remote_username)=LOWER(o.remote_username) AND o2.status='delivered' AND COALESCE(o2.remote_status,'') NOT IN ('deleted','removed','remote_missing') ORDER BY o2.updated_at DESC LIMIT 1)
+      ORDER BY o.updated_at DESC LIMIT 500`).bind(bot.id)
   ]);
   const adminBatchRows = index => adminBootstrapBatch[index] || { results: [] };
   const stats = (adminBatchRows(0).results || [])[0] || {};
@@ -9900,6 +10046,7 @@ async function resellerAdminBootstrap(request, env, botId) {
   const staff = adminBatchRows(15);
   const campaigns = adminBatchRows(16);
   const ownerAgencies = adminBatchRows(17);
+  const services = adminBatchRows(18);
   const masterEnabled = resellerBotCanCreateDownline(bot);
   const settings = await getSettings(env);
   const downlines = masterEnabled ? await listDownlineBots(env, bot.id) : [];
@@ -9931,7 +10078,7 @@ async function resellerAdminBootstrap(request, env, botId) {
     settings: resellerAdminSafeSettings(bot),
     channels: parseJoinChannels(bot.join_channels_json),
     stats: stats || {},
-    orders: orders.results || [], wallets: wallets.results || [], customers: customers.results || [], plans: plans.results || [],
+    orders: orders.results || [], services: services.results || [], wallets: wallets.results || [], customers: customers.results || [], plans: plans.results || [],
     categories: categories.results || [], locations: locations.results || [], tickets: tickets.results || [], invoices: invoices.results || [],
     texts: textMap, promos: promos.results || [], snapshots: snapshots.results || [], audit_logs: auditLogs.results || [],
     health_checks: healthChecks.results || [], security_events: securityEvents.results || [], staff: staff.results || [], campaigns: campaigns.results || [],
@@ -9960,6 +10107,18 @@ async function resellerAdminAction(request, env, botId) {
   const action = cleanText(body.action, 80);
   const bool = value => value ? 1 : 0;
   try {
+    if (action === "service_delete") {
+      resellerRequirePermission(account,"orders");
+      const serviceId=cleanText(body.id,100);
+      const row=await env.PASARGUARD_DB.prepare("SELECT customer_id FROM sales_orders WHERE id=? AND bot_id=?").bind(serviceId,bot.id).first();
+      if(!row)throw new Error("سرویس پیدا نشد");
+      const customer=await env.PASARGUARD_DB.prepare("SELECT * FROM sales_customers WHERE id=? AND bot_id=?").bind(row.customer_id,bot.id).first();
+      if(!customer)throw new Error("مشتری سرویس پیدا نشد");
+      const result=await deleteSalesService(env,bot,customer,serviceId,{actor:"web_panel",actorLabel:account.resellerActor?.label||"مدیر پنل"});
+      try{await resellerAudit(env,bot,account,"service_deleted",{serviceId,username:result.remote_username,customerId:customer.id,source:"web"})}catch(_){}
+      try{await resellerTelegramApi(env,bot,"sendMessage",{chat_id:customer.telegram_id,parse_mode:"HTML",text:"🗑 سرویس <code>"+botEscape(result.remote_username)+"</code> توسط مدیریت فروشنده حذف شد. سوابق سفارش و پرداخت شما محفوظ است."})}catch(_){}
+      return json({success:true,message:"سرویس "+result.remote_username+" از پنل حذف شد"});
+    }
     if (action.startsWith("downline_")) {
       if (!resellerBotCanCreateDownline(bot)) throw new Error("این بخش فقط برای لایسنس مستر نمایندگی فعال است");
       const settings = await getSettings(env);
@@ -10419,6 +10578,7 @@ const RESELLER_CONTROL_HTML = String.raw`<!doctype html>
   <div class="navGroup"><div class="navLabel">داشبورد</div>
     <button class="navBtn active" data-page="overview"><span class="navIcon">⌂</span><span class="navText">نمای کلی</span></button>
     <button class="navBtn" data-page="orders"><span class="navIcon">🧾</span><span class="navText">سفارش‌ها</span><span id="navOrders" class="navBadge hidden">0</span></button>
+    <button class="navBtn" data-page="services"><span class="navIcon">🧭</span><span class="navText">سرویس‌ها</span></button>
     <button class="navBtn" data-page="wallets"><span class="navIcon">💳</span><span class="navText">شارژ کیف پول</span><span id="navWallets" class="navBadge hidden">0</span></button>
     <button class="navBtn" data-page="customers"><span class="navIcon">👥</span><span class="navText">مشتریان</span></button>
     <button class="navBtn" data-page="tickets"><span class="navIcon">🎫</span><span class="navText">تیکت‌ها</span><span id="navTickets" class="navBadge hidden">0</span></button>
@@ -10464,6 +10624,7 @@ const RESELLER_CONTROL_HTML = String.raw`<!doctype html>
   <div class="grid"><div class="card"><div class="cardHeader"><div><h3>وضعیت کاتالوگ</h3><div class="sub">محصولات قابل نمایش به مشتریان</div></div></div><div id="catalogSummary" class="statGrid" style="grid-template-columns:repeat(3,minmax(0,1fr));margin-top:0"></div></div><div class="card"><div class="cardHeader"><div><h3>آخرین فعالیت‌ها</h3><div class="sub">رویدادهای مدیریتی ثبت‌شده</div></div></div><div id="overviewAudit" class="list"></div></div></div>
 </section>
 <section id="page-orders" class="page"><div class="pageHead"><div><h1>سفارش‌ها و رسیدها</h1><p>تأیید رسید، ساخت سرویس و پیگیری خطاهای تحویل</p></div><span id="ordersCount" class="count">۰ مورد</span></div><div class="card"><div class="toolbar"><input id="orderSearch" class="input search" placeholder="جستجو در نام مشتری، پلن، لوکیشن یا شناسه"><select id="orderStatus" class="input select"><option value="all">همه وضعیت‌ها</option><option value="pending_review">در انتظار بررسی</option><option value="awaiting_receipt">منتظر رسید</option><option value="delivered">تحویل‌شده</option><option value="rejected">ردشده</option><option value="provision_failed">خطای ساخت</option><option value="payment_pending">پرداخت آنلاین</option></select></div><div id="ordersList" class="list"></div></div></section>
+<section id="page-services" class="page"><div class="pageHead"><div><h1>سرویس‌های فعال</h1><p>مشاهده مصرف، انقضا و حذف امن سرویس از پنل متصل</p></div><span id="servicesCount" class="count">۰ سرویس</span></div><div class="card"><div class="toolbar"><input id="serviceSearch" class="input search" placeholder="جستجو در مشتری، نام کاربری یا پلن"></div><div id="servicesList" class="list"></div></div></section>
 <section id="page-wallets" class="page"><div class="pageHead"><div><h1>درخواست‌های شارژ کیف پول</h1><p>بررسی رسیدهای شارژ و ثبت موجودی مشتری</p></div><span id="walletsCount" class="count">۰ مورد</span></div><div class="card"><div class="toolbar"><input id="walletSearch" class="input search" placeholder="جستجو در مشتری یا مبلغ"><select id="walletStatus" class="input select"><option value="all">همه وضعیت‌ها</option><option value="pending_review">در انتظار بررسی</option><option value="approved">تأییدشده</option><option value="rejected">ردشده</option></select></div><div id="walletsList" class="list"></div></div></section>
 <section id="page-customers" class="page"><div class="pageHead"><div><h1>مدیریت مشتریان</h1><p>موجودی، نوع کاربر، تخفیف عمده، وضعیت حساب و ریسک امنیتی</p></div><span id="customersCount" class="count">۰ مشتری</span></div><div class="card"><div class="toolbar"><input id="customerSearch" class="input search" placeholder="نام، نام کاربری، شماره یا Telegram ID"><select id="customerStatus" class="input select"><option value="all">همه کاربران</option><option value="active">فعال</option><option value="blocked">مسدود</option><option value="wholesale">عمده</option><option value="risky">ریسک‌دار</option></select><select id="customerSort" class="input select"><option value="recent">آخرین فعالیت</option><option value="balance">بیشترین موجودی</option><option value="spend">بیشترین خرید</option><option value="orders">بیشترین سفارش</option></select></div><div id="customersList" class="list"></div></div></section>
 <section id="page-tickets" class="page"><div class="pageHead"><div><h1>مرکز تیکت پشتیبانی</h1><p>مشاهده گفت‌وگو، پاسخ به مشتری و مدیریت وضعیت تیکت</p></div><span id="ticketsCount" class="count">۰ تیکت</span></div><div class="card"><div class="toolbar"><input id="ticketSearch" class="input search" placeholder="کد تیکت، موضوع یا مشتری"><select id="ticketStatus" class="input select"><option value="all">همه وضعیت‌ها</option><option value="waiting_owner">منتظر پاسخ نماینده</option><option value="waiting_customer">منتظر پاسخ مشتری</option><option value="closed">بسته‌شده</option></select></div><div id="ticketsList" class="list"></div></div></section>
@@ -10522,6 +10683,8 @@ async function load(silent){if(!silent){document.querySelectorAll(".list").forEa
 async function run(body,confirmText){if(confirmText&&!confirm(confirmText))return;try{var d=await action(body);toast(d.message||"انجام شد");closeModal();await load(true);return d}catch(e){toast(e.message);throw e}}
 function orderCard(x){var acts="";if(x.status==="pending_review"||x.status==="provision_failed")acts='<div class="itemActions">'+(x.receipt_file_id?'<a class="btn secondary small" target="_blank" href="/reseller-control-api/'+encodeURIComponent(BOT_ID)+'/receipt/order/'+encodeURIComponent(x.id)+'">مشاهده رسید</a>':"")+'<button class="btn ok small" data-act="order-approve" data-id="'+esc(x.id)+'">تأیید و تحویل</button><button class="btn danger small" data-act="order-reject" data-id="'+esc(x.id)+'">رد سفارش</button></div>';return'<div class="item"><div class="itemTop"><div><div class="title">'+esc(x.plan_title||"پلن")+' · '+esc(nameOf(x))+'</div><div class="meta">'+money(x.amount_toman)+' · '+esc(statusLabel(x.payment_method))+' · '+esc(x.location_title||"بدون لوکیشن")+' · '+date(x.created_at)+'</div>'+(x.error_message?'<div class="meta" style="color:var(--danger)">'+esc(x.error_message)+'</div>':"")+'</div>'+badge(x.status)+'</div>'+acts+'</div>'}
 function renderOrders(){var q=String(el("orderSearch").value||"").toLowerCase(),st=el("orderStatus").value,rows=(state.orders||[]).filter(function(x){var hay=[x.id,x.plan_title,x.username,x.first_name,x.last_name,x.telegram_id,x.category_title,x.location_title].join(" ").toLowerCase();return(st==="all"||x.status===st)&&(!q||hay.includes(q))});el("ordersCount").textContent=num(rows.length)+" مورد";el("ordersList").innerHTML=rows.length?rows.map(orderCard).join(""):empty("🧾","سفارشی با این فیلتر پیدا نشد")}
+function serviceCard(x){var limit=Number(x.remote_data_limit||0),used=Number(x.remote_used_traffic||0),remain=limit>0?Math.max(0,limit-used):0;return'<div class="item"><div class="itemTop"><div><div class="title">'+esc(x.plan_title||"سرویس")+' · <code>'+esc(x.remote_username||"")+'</code></div><div class="meta">مشتری: '+esc(nameOf(x))+' · '+esc(x.location_title||"بدون لوکیشن")+' · انقضا '+date(x.remote_expire)+'</div><div class="meta">مصرف '+bytes(used)+' از '+(limit>0?bytes(limit):"نامحدود")+(limit>0?' · باقی‌مانده '+bytes(remain):"")+'</div></div>'+badge(x.remote_status||"active")+'</div><div class="itemActions">'+(x.subscription_url?'<button class="btn secondary small" data-act="service-copy" data-id="'+esc(x.id)+'">کپی لینک</button>':"")+'<button class="btn danger small" data-act="service-delete" data-id="'+esc(x.id)+'">حذف سرویس</button></div></div>'}
+function renderServices(){var q=String(el("serviceSearch").value||"").toLowerCase(),rows=(state.services||[]).filter(function(x){return !q||[x.plan_title,x.remote_username,x.username,x.first_name,x.last_name,x.telegram_id,x.location_title].join(" ").toLowerCase().includes(q)});el("servicesCount").textContent=num(rows.length)+" سرویس";el("servicesList").innerHTML=rows.length?rows.map(serviceCard).join(""):empty("🧭","سرویس فعالی پیدا نشد")}
 function walletCard(x){var acts="";if(x.status==="pending_review")acts='<div class="itemActions">'+(x.receipt_file_id?'<a class="btn secondary small" target="_blank" href="/reseller-control-api/'+encodeURIComponent(BOT_ID)+'/receipt/wallet/'+encodeURIComponent(x.id)+'">مشاهده رسید</a>':"")+'<button class="btn ok small" data-act="wallet-approve" data-id="'+esc(x.id)+'">تأیید شارژ</button><button class="btn danger small" data-act="wallet-reject" data-id="'+esc(x.id)+'">رد درخواست</button></div>';return'<div class="item"><div class="itemTop"><div><div class="title">'+esc(nameOf(x))+'</div><div class="meta">مبلغ '+money(x.amount_toman)+' · بونس '+money(x.bonus_toman||0)+' · '+date(x.created_at)+'</div></div>'+badge(x.status)+'</div>'+acts+'</div>'}
 function renderWallets(){var q=String(el("walletSearch").value||"").toLowerCase(),st=el("walletStatus").value,rows=(state.wallets||[]).filter(function(x){var hay=[x.id,x.username,x.first_name,x.last_name,x.telegram_id,x.amount_toman].join(" ").toLowerCase();return(st==="all"||x.status===st)&&(!q||hay.includes(q))});el("walletsCount").textContent=num(rows.length)+" مورد";el("walletsList").innerHTML=rows.length?rows.map(walletCard).join(""):empty("💳","درخواست شارژی پیدا نشد")}
 function customerCard(x){var risk=Number(x.risk_score||0)>0?'<span class="badge '+(Number(x.risk_score)>=100?'critical':'warning')+'">ریسک '+num(x.risk_score)+'</span>':"";return'<div class="item"><div class="itemTop"><div><div class="title">'+esc(nameOf(x))+' '+(x.username?'· @'+esc(x.username):"")+'</div><div class="meta">Telegram ID: '+esc(x.telegram_id)+' · '+num(x.orders_count)+' سفارش · '+num(x.delivered_count)+' تحویل · آخرین فعالیت '+date(x.last_seen_at)+'</div><div class="pillRow">'+badge(x.status)+badge(x.customer_type)+risk+'<span class="miniPill">باشگاه '+esc(x.loyalty_level||"bronze")+'</span></div></div><div class="amount">'+money(x.wallet_balance)+'</div></div><div class="itemActions"><button class="btn secondary small" data-act="customer-balance" data-id="'+esc(x.id)+'">اصلاح موجودی</button><button class="btn secondary small" data-act="customer-type" data-id="'+esc(x.id)+'">نوع و تخفیف</button><button class="btn '+(x.status==="active"?'danger':'ok')+' small" data-act="customer-toggle" data-id="'+esc(x.id)+'">'+(x.status==="active"?'مسدودسازی':'فعال‌سازی')+'</button>'+(Number(x.risk_score||0)>0?'<button class="btn warn small" data-act="customer-risk" data-id="'+esc(x.id)+'">پاک‌کردن ریسک</button>':"")+'</div></div>'}
@@ -10559,7 +10722,7 @@ function renderOverview(){var s=state.stats||{},b=state.bot,l=b.license||{};el("
 function renderCampaigns(){var rows=state.campaigns||[];el("campaignsList").innerHTML=rows.length?rows.map(function(x){return'<div class="item"><div class="itemTop"><div><div class="title">'+esc(statusLabel(x.target_scope))+' · '+date(x.scheduled_at)+'</div><div class="meta">'+esc((x.message_text||"").slice(0,180))+' · موفق '+num(x.success_count)+' · ناموفق '+num(x.failed_count)+'</div></div>'+badge(x.status)+'</div>'+(x.status==="pending"?'<div class="itemActions"><button class="btn danger small" data-act="campaign-cancel" data-id="'+esc(x.id)+'">لغو کمپین</button></div>':'')+'</div>'}).join(""):empty("📣","کمپینی ثبت نشده است")}
 function renderTeam(){var rows=state.staff||[];el("staffList").innerHTML=rows.length?rows.map(function(x){return'<div class="item"><div class="itemTop"><div><div class="title">'+esc(x.display_name||x.telegram_id)+'</div><div class="meta">Telegram ID: '+esc(x.telegram_id)+' · '+esc(x.role)+'</div></div>'+badge(x.status)+'</div><div class="itemActions"><button class="btn secondary small" data-act="staff-toggle" data-id="'+esc(x.id)+'">تغییر وضعیت</button><button class="btn danger small" data-act="staff-delete" data-id="'+esc(x.id)+'">حذف</button></div></div>'}).join(""):empty("👥","عضوی برای تیم ثبت نشده است");var form=el("panelForm");if(!state.bot.panel_access){form.innerHTML='<div class="cardHeader"><div><h3>پنل ساخت سرویس</h3><div class="sub">این ربات زیرمجموعه مستر نمایندگی است.</div></div></div><div class="notice">نماینده زیرمجموعه پنل PasarGuard مستقل ندارد. تمام سرویس‌های مشتریان این ربات از پنل مستر بالادست ساخته می‌شوند و مصرف در حساب مستر محاسبه می‌شود.</div>';return}var opts=(state.owner_agencies||[]).map(function(x){return'<option value="'+esc(x.id)+'"'+(x.id===state.bot.agency_id?' selected':'')+'>'+esc(x.title+" · "+x.panel_username+(x.has_password?"":" · نیازمند تأیید رمز"))+'</option>'}).join("");el("ownerAgency").innerHTML=opts||'<option value="">پنلی موجود نیست</option>';el("panelHint").textContent=state.bot.locked_by_central?"فروش ربات توسط مدیریت مرکزی قفل است؛ تغییر پنل قفل فروش را برنمی‌دارد.":"پنل‌های دستی بدون رمز تأییدشده قابل اتصال نیستند."}
 function renderActivity(){renderAudit("activityAuditList",150);var rows=state.security_events||[];el("activitySecurityList").innerHTML=rows.length?rows.slice(0,100).map(function(x){return'<div class="item"><div class="itemTop"><div><div class="title">'+esc(x.event_type)+' · '+esc(nameOf(x))+'</div><div class="meta">'+esc((function(d){return typeof d==="string"?d:JSON.stringify(d||{})})(parseDetails(x.details)))+' · '+date(x.created_at)+'</div></div>'+badge(x.severity)+'</div></div>'}).join(""):empty("🛡","رویداد امنیتی ثبت نشده است")}
-function renderAll(){var b=state.bot,s=state.stats||{};el("sideBrand").textContent=b.brand_name||"BluePanel";el("topBrand").textContent=b.brand_name||"BluePanel";el("topBot").textContent="@"+(b.username||"")+" · "+(b.agency_title||"نمایندگی");el("sideBotState").textContent=b.status==="active"?"ربات و فروش فعال":"فروش ربات متوقف";el("sideVersion").textContent=state.version;el("openCustomerBot").href=b.customer_bot_url||"#";el("openCustomerApp").href=b.customer_miniapp_url||"#";setNavBadge("navOrders",s.pending_orders);setNavBadge("navWallets",s.pending_wallet);setNavBadge("navTickets",s.waiting_tickets);renderOverview();renderOrders();renderWallets();renderCustomers();renderCatalog();renderTickets();renderPromos();renderTexts();renderChannels();renderPayments();fillSettings();renderCampaigns();renderTeam();renderDownline();renderActivity();renderHealth();renderBackups();renderSecurity();renderAudit("auditList",80);if(state.bot.locked_by_central){el("setStatus").value="paused";el("setStatus").disabled=true;document.querySelectorAll('[data-act="bot-toggle"]').forEach(function(x){x.disabled=true;x.title="قفل‌شده توسط مدیریت مرکزی"})}else{el("setStatus").disabled=false}}
+function renderAll(){var b=state.bot,s=state.stats||{};el("sideBrand").textContent=b.brand_name||"BluePanel";el("topBrand").textContent=b.brand_name||"BluePanel";el("topBot").textContent="@"+(b.username||"")+" · "+(b.agency_title||"نمایندگی");el("sideBotState").textContent=b.status==="active"?"ربات و فروش فعال":"فروش ربات متوقف";el("sideVersion").textContent=state.version;el("openCustomerBot").href=b.customer_bot_url||"#";el("openCustomerApp").href=b.customer_miniapp_url||"#";setNavBadge("navOrders",s.pending_orders);setNavBadge("navWallets",s.pending_wallet);setNavBadge("navTickets",s.waiting_tickets);renderOverview();renderOrders();renderServices();renderWallets();renderCustomers();renderCatalog();renderTickets();renderPromos();renderTexts();renderChannels();renderPayments();fillSettings();renderCampaigns();renderTeam();renderDownline();renderActivity();renderHealth();renderBackups();renderSecurity();renderAudit("auditList",80);if(state.bot.locked_by_central){el("setStatus").value="paused";el("setStatus").disabled=true;document.querySelectorAll('[data-act="bot-toggle"]').forEach(function(x){x.disabled=true;x.title="قفل‌شده توسط مدیریت مرکزی"})}else{el("setStatus").disabled=false}}
 function categoryOptions(selected){return'<option value="">بدون دسته‌بندی</option>'+(state.categories||[]).map(function(x){return'<option value="'+esc(x.id)+'"'+(selected===x.id?' selected':'')+'>'+esc((x.emoji||"")+" "+x.title)+'</option>'}).join("")}
 function locationOptions(selected){return'<option value="">بدون لوکیشن</option>'+(state.locations||[]).map(function(x){return'<option value="'+esc(x.id)+'"'+(selected===x.id?' selected':'')+'>'+esc((x.emoji||"")+" "+x.title)+'</option>'}).join("")}
 function openCategoryForm(x){x=x||{};openModal(x.id?"ویرایش دسته‌بندی":"دسته‌بندی جدید",'<form id="modalForm"><div class="formGrid"><div class="field"><label>عنوان دسته‌بندی</label><input id="mfTitle" class="input" value="'+esc(x.title||"")+'" required></div><div class="field"><label>ایموجی</label><input id="mfEmoji" class="input" value="'+esc(x.emoji||"")+'" maxlength="20"></div><div class="field"><label>اولویت نمایش</label><input id="mfSort" class="input" type="number" value="'+esc(x.sort_order||0)+'"></div></div><button class="btn" type="submit">ذخیره دسته‌بندی</button></form>');el("modalForm").onsubmit=function(e){e.preventDefault();run({action:"category_save",id:x.id||"",title:el("mfTitle").value,emoji:el("mfEmoji").value,sort_order:el("mfSort").value})}}
@@ -10573,10 +10736,10 @@ function collectSettings(){return{action:"save_settings",brand_name:el("setBrand
 el("loginForm").onsubmit=async function(e){e.preventDefault();var b=el("loginBtn");b.disabled=true;el("loginError").textContent="";try{var r=await fetch("/reseller-control-auth/"+encodeURIComponent(BOT_ID)+"/login",{method:"POST",credentials:"same-origin",headers:{"content-type":"application/json"},body:JSON.stringify({username:el("loginUsername").value,password:el("loginPassword").value})}),d=await r.json();if(!r.ok||d.success===false)throw new Error(d.error||"ورود ناموفق بود");el("loginPassword").value="";await load()}catch(x){el("loginError").textContent=x.message}finally{b.disabled=false}};
 el("logoutBtn").onclick=async function(){try{await fetch("/reseller-control-auth/"+encodeURIComponent(BOT_ID)+"/logout",{method:"POST",credentials:"same-origin"})}catch(_){}location.reload()};el("menuBtn").onclick=function(){el("sidebar").classList.toggle("open")};el("refreshTop").onclick=function(){load(true)};
 document.querySelectorAll(".navBtn").forEach(function(b){b.onclick=function(){page(b.dataset.page)}});document.querySelectorAll(".catalogTab").forEach(function(b){b.onclick=function(){currentCatalog=b.dataset.catalog;document.querySelectorAll(".catalogTab").forEach(function(x){x.classList.toggle("active",x===b)});document.querySelectorAll(".catalogPanel").forEach(function(x){x.classList.toggle("active",x.id==="catalog-"+currentCatalog)})}});
-["orderSearch","walletSearch","customerSearch","ticketSearch","planSearch","promoSearch","paymentSearch"].forEach(function(id){el(id).oninput=function(){if(id==="orderSearch")renderOrders();else if(id==="walletSearch")renderWallets();else if(id==="customerSearch")renderCustomers();else if(id==="ticketSearch")renderTickets();else if(id==="planSearch")renderPlans();else if(id==="promoSearch")renderPromos();else renderPayments()}});["orderStatus","walletStatus","customerStatus","customerSort","ticketStatus","planTypeFilter","planStateFilter","promoStatus","paymentStatus"].forEach(function(id){el(id).onchange=function(){if(id==="orderStatus")renderOrders();else if(id==="walletStatus")renderWallets();else if(id==="customerStatus"||id==="customerSort")renderCustomers();else if(id==="ticketStatus")renderTickets();else if(id==="planTypeFilter"||id==="planStateFilter")renderPlans();else if(id==="promoStatus")renderPromos();else renderPayments()}});
+["orderSearch","serviceSearch","walletSearch","customerSearch","ticketSearch","planSearch","promoSearch","paymentSearch"].forEach(function(id){el(id).oninput=function(){if(id==="orderSearch")renderOrders();else if(id==="serviceSearch")renderServices();else if(id==="walletSearch")renderWallets();else if(id==="customerSearch")renderCustomers();else if(id==="ticketSearch")renderTickets();else if(id==="planSearch")renderPlans();else if(id==="promoSearch")renderPromos();else renderPayments()}});["orderStatus","walletStatus","customerStatus","customerSort","ticketStatus","planTypeFilter","planStateFilter","promoStatus","paymentStatus"].forEach(function(id){el(id).onchange=function(){if(id==="orderStatus")renderOrders();else if(id==="walletStatus")renderWallets();else if(id==="customerStatus"||id==="customerSort")renderCustomers();else if(id==="ticketStatus")renderTickets();else if(id==="planTypeFilter"||id==="planStateFilter")renderPlans();else if(id==="promoStatus")renderPromos();else renderPayments()}});
 el("downlineSettingsForm").onsubmit=function(e){e.preventDefault();run({action:"downline_settings_save",sales_enabled:el("downlineSalesEnabled").checked,default_price_per_gb:el("downlineDefaultPrice").value,setup_fee:el("downlineSetupFee").value,renewal_fee:el("downlineRenewalFee").value})};el("downlineCreateForm").onsubmit=function(e){e.preventDefault();run({action:"downline_create",telegram_id:el("downlineTelegram").value,brand_name:el("downlineBrand").value,price_per_gb:el("downlinePrice").value,initial_balance_toman:el("downlineInitialBalance").value,control_username:el("downlineUsername").value,control_password:el("downlinePassword").value,bot_token:el("downlineToken").value}).then(function(d){el("downlineToken").value="";el("downlinePassword").value="";if(d&&d.result)openModal("ربات نماینده ساخته شد",'<div class="notice">پنل PasarGuard برای این نماینده ساخته نشده است.<br>آدرس مدیریت: <span class="ltr">'+esc(d.result.management_url)+'</span><br>نام کاربری: <b class="ltr">'+esc(d.result.control_username)+'</b><br>رمز یک‌بار نمایش: <b class="ltr">'+esc(d.result.control_password)+'</b></div>')})};el("textsForm").onsubmit=function(e){e.preventDefault();var texts={};document.querySelectorAll(".textValue").forEach(function(x){texts[x.dataset.key]=x.value});run({action:"save_texts",texts:texts})};el("channelsForm").onsubmit=function(e){e.preventDefault();var channels=Array.from(document.querySelectorAll(".channelRow")).map(function(r){return{chat_id:r.querySelector(".chId").value,title:r.querySelector(".chTitle").value,url:r.querySelector(".chUrl").value}}).filter(function(x){return x.chat_id.trim()});run({action:"save_channels",join_enabled:el("joinEnabled").checked,channels:channels})};el("settingsForm").onsubmit=function(e){e.preventDefault();run(collectSettings()).then(function(){el("setBlupalKey").value=""})};el("campaignForm").onsubmit=function(e){e.preventDefault();run({action:"campaign_create",message:el("campaignMessage").value,target_scope:el("campaignTarget").value,schedule_hours:el("campaignHours").value}).then(function(){el("campaignMessage").value=""})};el("staffForm").onsubmit=function(e){e.preventDefault();run({action:"staff_save",telegram_id:el("staffTelegram").value,display_name:el("staffName").value,role:el("staffRole").value}).then(function(){el("staffTelegram").value="";el("staffName").value=""})};el("panelForm").onsubmit=function(e){e.preventDefault();if(!state.bot.panel_access)return;run({action:"change_agency",agency_id:el("ownerAgency").value},"پنل متصل ربات تغییر کند؟")};
-document.onclick=function(e){var b=e.target.closest("[data-act],[data-page]");if(!b)return;if(b.dataset.page){page(b.dataset.page);return}var a=b.dataset.act,idv=b.dataset.id||"";if(a==="refresh")load(true);else if(a==="downline-generate")generateDownlineCredentials();else if(a==="downline-sync-all")run({action:"downline_sync_all"});else if(a==="downline-sync")run({action:"downline_sync_usage",id:idv});else if(a==="downline-balance")openDownlineBalance(findDownline(idv));else if(a==="downline-price")openDownlinePrice(findDownline(idv));else if(a==="downline-password")openDownlinePassword(findDownline(idv));else if(a==="downline-renew")run({action:"downline_renew",id:idv},"لایسنس این ربات یک ماه تمدید شود؟");else if(a==="downline-toggle")run({action:"downline_toggle",id:idv},"وضعیت فروش این ربات تغییر کند؟");else if(a==="bot-toggle")run({action:"bot_toggle"},"وضعیت فروش ربات تغییر کند؟");else if(a==="configure")run({action:"configure_bot"},"Webhook، دستورات، منو و مینی‌اپ ربات ترمیم شوند؟");else if(a==="test")run({action:"test_message"});else if(a==="order-approve")run({action:"order_approve",id:idv},"سفارش تأیید و سرویس ساخته شود؟");else if(a==="order-reject")run({action:"order_reject",id:idv},"سفارش رد شود؟");else if(a==="wallet-approve")run({action:"wallet_approve",id:idv},"شارژ کیف پول تأیید شود؟");else if(a==="wallet-reject")run({action:"wallet_reject",id:idv},"درخواست شارژ رد شود؟");else if(a==="customer-toggle"){var c=(state.customers||[]).find(function(x){return x.id===idv});run({action:"customer_toggle",id:idv},c&&c.status==="active"?"مشتری مسدود شود؟":"مشتری فعال شود؟")}else if(a==="customer-balance")openBalance((state.customers||[]).find(function(x){return x.id===idv}));else if(a==="customer-type")openCustomerType((state.customers||[]).find(function(x){return x.id===idv}));else if(a==="customer-risk")run({action:"customer_risk_reset",id:idv},"امتیاز ریسک مشتری بازنشانی شود؟");else if(a==="catalog-new"){if(currentCatalog==="categories")openCategoryForm();else if(currentCatalog==="locations")openLocationForm();else openPlanForm()}else if(a==="category-edit")openCategoryForm((state.categories||[]).find(function(x){return x.id===idv}));else if(a==="category-toggle")run({action:"category_toggle",id:idv});else if(a==="category-delete")run({action:"category_delete",id:idv},"دسته‌بندی حذف شود؟ پلن‌های آن بدون دسته باقی می‌مانند.");else if(a==="location-edit")openLocationForm((state.locations||[]).find(function(x){return x.id===idv}));else if(a==="location-toggle")run({action:"location_toggle",id:idv});else if(a==="location-delete")run({action:"location_delete",id:idv},"لوکیشن حذف شود؟ پلن‌های آن بدون لوکیشن باقی می‌مانند.");else if(a==="plan-edit")openPlanForm((state.plans||[]).find(function(x){return x.id===idv}));else if(a==="plan-toggle")run({action:"plan_toggle",id:idv});else if(a==="plan-delete")run({action:"plan_delete",id:idv},"پلن حذف شود؟ پلن دارای سابقه سفارش حذف نمی‌شود.");else if(a==="ticket-open")openTicket(idv);else if(a==="ticket-toggle")run({action:"ticket_toggle",id:idv});else if(a==="promo-new")openPromoForm();else if(a==="promo-edit")openPromoForm((state.promos||[]).find(function(x){return x.id===idv}));else if(a==="promo-toggle")run({action:"promo_toggle",id:idv});else if(a==="promo-delete")run({action:"promo_delete",id:idv},"کد حذف شود؟ کد دارای سابقه استفاده حذف نمی‌شود.");else if(a==="channel-add")addChannel({});else if(a==="texts-reset"){if(confirm("همه متن‌ها به نسخه پیش‌فرض برگردند؟")){document.querySelectorAll(".textValue").forEach(function(x){x.value=(state.text_defaults||{})[x.dataset.key]||""})}}else if(a==="payment-recheck")run({action:"payment_recheck",id:idv});else if(a==="campaign-cancel")run({action:"campaign_cancel",id:idv},"کمپین لغو شود؟");else if(a==="staff-toggle")run({action:"staff_toggle",id:idv});else if(a==="staff-delete")run({action:"staff_delete",id:idv},"عضو تیم حذف شود؟");else if(a==="health")run({action:"health_check"});else if(a==="backup-create")run({action:"backup_create"},"نسخه پشتیبان جدید ساخته شود؟");else if(a==="backup-restore")run({action:"backup_restore",id:idv},"این نسخه پشتیبان بازیابی شود؟ تنظیمات و کاتالوگ فعلی تغییر می‌کند.")};
-var initial=String(location.hash||"").replace("#","");var allowed=["overview","orders","wallets","customers","tickets","catalog","promos","texts","channels","campaigns","payments","downline","settings","team","activity","system"];if(allowed.includes(initial))page(initial);load();
+document.onclick=function(e){var b=e.target.closest("[data-act],[data-page]");if(!b)return;if(b.dataset.page){page(b.dataset.page);return}var a=b.dataset.act,idv=b.dataset.id||"";if(a==="refresh")load(true);else if(a==="downline-generate")generateDownlineCredentials();else if(a==="downline-sync-all")run({action:"downline_sync_all"});else if(a==="downline-sync")run({action:"downline_sync_usage",id:idv});else if(a==="downline-balance")openDownlineBalance(findDownline(idv));else if(a==="downline-price")openDownlinePrice(findDownline(idv));else if(a==="downline-password")openDownlinePassword(findDownline(idv));else if(a==="downline-renew")run({action:"downline_renew",id:idv},"لایسنس این ربات یک ماه تمدید شود؟");else if(a==="downline-toggle")run({action:"downline_toggle",id:idv},"وضعیت فروش این ربات تغییر کند؟");else if(a==="bot-toggle")run({action:"bot_toggle"},"وضعیت فروش ربات تغییر کند؟");else if(a==="configure")run({action:"configure_bot"},"Webhook، دستورات، منو و مینی‌اپ ربات ترمیم شوند؟");else if(a==="test")run({action:"test_message"});else if(a==="order-approve")run({action:"order_approve",id:idv},"سفارش تأیید و سرویس ساخته شود؟");else if(a==="order-reject")run({action:"order_reject",id:idv},"سفارش رد شود؟");else if(a==="service-copy"){var sv=(state.services||[]).find(function(x){return x.id===idv});if(sv&&sv.subscription_url)navigator.clipboard.writeText(sv.subscription_url).then(function(){toast("لینک کپی شد")}).catch(function(){toast("کپی لینک ناموفق بود")})}else if(a==="service-delete")run({action:"service_delete",id:idv},"این سرویس از پنل PasarGuard حذف شود؟ این عملیات قابل بازگشت نیست.");else if(a==="wallet-approve")run({action:"wallet_approve",id:idv},"شارژ کیف پول تأیید شود؟");else if(a==="wallet-reject")run({action:"wallet_reject",id:idv},"درخواست شارژ رد شود؟");else if(a==="customer-toggle"){var c=(state.customers||[]).find(function(x){return x.id===idv});run({action:"customer_toggle",id:idv},c&&c.status==="active"?"مشتری مسدود شود؟":"مشتری فعال شود؟")}else if(a==="customer-balance")openBalance((state.customers||[]).find(function(x){return x.id===idv}));else if(a==="customer-type")openCustomerType((state.customers||[]).find(function(x){return x.id===idv}));else if(a==="customer-risk")run({action:"customer_risk_reset",id:idv},"امتیاز ریسک مشتری بازنشانی شود؟");else if(a==="catalog-new"){if(currentCatalog==="categories")openCategoryForm();else if(currentCatalog==="locations")openLocationForm();else openPlanForm()}else if(a==="category-edit")openCategoryForm((state.categories||[]).find(function(x){return x.id===idv}));else if(a==="category-toggle")run({action:"category_toggle",id:idv});else if(a==="category-delete")run({action:"category_delete",id:idv},"دسته‌بندی حذف شود؟ پلن‌های آن بدون دسته باقی می‌مانند.");else if(a==="location-edit")openLocationForm((state.locations||[]).find(function(x){return x.id===idv}));else if(a==="location-toggle")run({action:"location_toggle",id:idv});else if(a==="location-delete")run({action:"location_delete",id:idv},"لوکیشن حذف شود؟ پلن‌های آن بدون لوکیشن باقی می‌مانند.");else if(a==="plan-edit")openPlanForm((state.plans||[]).find(function(x){return x.id===idv}));else if(a==="plan-toggle")run({action:"plan_toggle",id:idv});else if(a==="plan-delete")run({action:"plan_delete",id:idv},"پلن حذف شود؟ پلن دارای سابقه سفارش حذف نمی‌شود.");else if(a==="ticket-open")openTicket(idv);else if(a==="ticket-toggle")run({action:"ticket_toggle",id:idv});else if(a==="promo-new")openPromoForm();else if(a==="promo-edit")openPromoForm((state.promos||[]).find(function(x){return x.id===idv}));else if(a==="promo-toggle")run({action:"promo_toggle",id:idv});else if(a==="promo-delete")run({action:"promo_delete",id:idv},"کد حذف شود؟ کد دارای سابقه استفاده حذف نمی‌شود.");else if(a==="channel-add")addChannel({});else if(a==="texts-reset"){if(confirm("همه متن‌ها به نسخه پیش‌فرض برگردند؟")){document.querySelectorAll(".textValue").forEach(function(x){x.value=(state.text_defaults||{})[x.dataset.key]||""})}}else if(a==="payment-recheck")run({action:"payment_recheck",id:idv});else if(a==="campaign-cancel")run({action:"campaign_cancel",id:idv},"کمپین لغو شود؟");else if(a==="staff-toggle")run({action:"staff_toggle",id:idv});else if(a==="staff-delete")run({action:"staff_delete",id:idv},"عضو تیم حذف شود؟");else if(a==="health")run({action:"health_check"});else if(a==="backup-create")run({action:"backup_create"},"نسخه پشتیبان جدید ساخته شود؟");else if(a==="backup-restore")run({action:"backup_restore",id:idv},"این نسخه پشتیبان بازیابی شود؟ تنظیمات و کاتالوگ فعلی تغییر می‌کند.")};
+var initial=String(location.hash||"").replace("#","");var allowed=["overview","orders","services","wallets","customers","tickets","catalog","promos","texts","channels","campaigns","payments","downline","settings","team","activity","system"];if(allowed.includes(initial))page(initial);load();
 })();
 </script>
 </body></html>
@@ -10997,7 +11160,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_EDGE_VERSION='3.3.6';
+const BLUEPANEL_EDGE_VERSION='3.3.7';
 function bluePanelEdgeJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function bluePanelEdgeInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
 function bluePanelEdgeRuntimeBinding(env,name){const value=env?.[name];return{name,exact_key_present:Object.prototype.hasOwnProperty.call(env||{},name),value_present:value!==undefined&&value!==null,fetch_callable:Boolean(value&&typeof value.fetch==='function'),constructor_name:value?.constructor?.name||''}}

@@ -1,7 +1,7 @@
 {
-  "version": "3.3.6",
-  "release_id": "3.3.6-20260715-processor-auto-repair-runtime-isolation",
-  "architecture": "fully-split-three-worker-processor-self-healing-runtime",
+  "version": "3.3.7",
+  "release_id": "3.3.7-20260715-service-center-safe-delete-ui",
+  "architecture": "fully-split-three-worker-compact-service-management-safe-delete",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -10,7 +10,7 @@
   },
   "roles": {
     "core": "central bot, D1 authority, payment callbacks, report outbox, safe update controller and Durable Object live usage engine",
-    "edge": "reseller bots, customer miniapps and imported-subscription lifecycle with normalized reseller growth settings",
+    "edge": "reseller bots, customer order/service UI, reseller web dashboard and PasarGuard service lifecycle",
     "processor": "advanced schedules, auto-renewal, service health, reseller tiers, backups, campaigns and background reports"
   },
   "bindings": {
@@ -32,48 +32,52 @@
     ]
   },
   "features": [
-    "repairs Processor from the central bot by testing the current runtime, deploying processor/worker.js from GitHub when needed and retrying the Service Binding",
-    "prevents D1 telemetry writes from converting a successful Processor request into a false failure",
-    "isolates every Processor business job so one optional task cannot stop all scheduled processing",
-    "returns exact Processor repair error, action, version and deployment state in the Telegram repair result",
-    "marks repair status completed only when all five repair groups, including Processor, actually succeed",
-    "keeps normalized reseller_growth_settings and all previous D1 recovery protections",
-    "README files are excluded"
+    "replaces the customer raw order/link dump with a compact order list and a separate order detail view",
+    "adds an active-service center to the reseller Telegram management bot with view, refresh and two-step deletion",
+    "adds an active-service page to the reseller web dashboard with search, link copy and confirmed deletion",
+    "deletes the remote PasarGuard user through DELETE /api/user/{username} while treating HTTP 404 as already removed",
+    "keeps financial and order history, marks the service deleted locally and removes it from all customer service views",
+    "cleans auto-renewal, health, failover, guarantee and imported-service claim records with fail-open compatibility",
+    "shows a clear permission error when the connected PasarGuard admin lacks users.delete permission",
+    "keeps every new Telegram callback_data below the 64-byte Bot API limit",
+    "does not add or alter D1 schema and excludes README files"
   ],
   "deployment": {
     "automatic_provisioning": "upload the ZIP through the central bot; no manual D1 action is required",
-    "processor_repair_flow": "current runtime test -> automatic Processor deploy -> source verification -> repeated runtime test -> business job execution",
     "required_binding_name": "LIVE_USAGE_COORDINATOR",
     "required_class_name": "LiveUsageCoordinator",
     "migration_tag": "v3.1.9-live-usage (unchanged)",
     "db_schema_revision": "3.3.5 (unchanged; no new schema migration)",
-    "cron": "existing schedules may remain"
+    "cron": "existing schedules may remain",
+    "pasarguard_delete_permission": "the connected panel administrator must have users.delete permission"
   },
   "validation": {
-    "node_syntax_core": "pending",
-    "node_syntax_edge": "pending",
-    "node_syntax_processor": "pending",
-    "processor_telemetry_fail_open": "passed by static assertion",
-    "processor_step_isolation": "passed by static assertion",
-    "repair_completed_requires_processor": "passed by static assertion",
-    "release_manifest_hashes": "recalculated",
-    "zip_integrity": "pending",
-    "live_cloudflare_deployment": "not run without production credentials"
+    "node_syntax_core": "passed",
+    "node_syntax_edge": "passed",
+    "node_syntax_processor": "passed",
+    "embedded_reseller_dashboard_javascript_syntax": "passed",
+    "service_query_sqlite_smoke_test": "passed",
+    "service_deleted_filter": "passed by static and SQLite assertions",
+    "telegram_callback_data_max_64_bytes": "passed",
+    "release_manifest_hashes": "recalculated and verified",
+    "zip_integrity": "passed",
+    "live_cloudflare_telegram_pasarguard_deployment": "not run without production credentials"
   },
   "limitations": [
     "production Cloudflare, Telegram and PasarGuard calls were not executed without account credentials",
-    "automatic Processor repair still requires the PROCESSOR_WORKER Service Binding and stored Cloudflare/GitHub deployment settings"
+    "remote service deletion requires the connected PasarGuard administrator to have users.delete permission",
+    "deleting a service is irreversible on the remote panel; BluePanel intentionally preserves its payment history"
   ],
   "sha256": {
-    "core": "b7ff6d93461037039f8a77ba7f5fb4029168170cf02de7878066863b3754f1eb",
-    "edge": "de94d4dc8680480e44efd128d2decc949551d34cdb3058bfc013c57289d5c61f",
-    "processor": "25e9e3fe0752f61b347df835a8ef731356810aac194fb718dd6fa8f29b711ddb",
+    "core": "445a6a02d46c6e5f0099874003f0075aa317e16f522e986e28ab30b4f8fc2923",
+    "edge": "f74c1fe2c1c0dbf8542cd5274a5cbf56086a95b9847423e55473a682a360cbf6",
+    "processor": "e9a9c2d2b7f39b7fc740e6127f5b1563de07a8e890d93050eead2de41d9bacba",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "hashes": {
-    "core/worker.js": "b7ff6d93461037039f8a77ba7f5fb4029168170cf02de7878066863b3754f1eb",
-    "edge/worker.js": "de94d4dc8680480e44efd128d2decc949551d34cdb3058bfc013c57289d5c61f",
-    "processor/worker.js": "25e9e3fe0752f61b347df835a8ef731356810aac194fb718dd6fa8f29b711ddb",
+    "core/worker.js": "445a6a02d46c6e5f0099874003f0075aa317e16f522e986e28ab30b4f8fc2923",
+    "edge/worker.js": "f74c1fe2c1c0dbf8542cd5274a5cbf56086a95b9847423e55473a682a360cbf6",
+    "processor/worker.js": "e9a9c2d2b7f39b7fc740e6127f5b1563de07a8e890d93050eead2de41d9bacba",
     "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   }
 }
