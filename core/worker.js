@@ -1,15 +1,25 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.0
+ * Version: 3.3.1
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.3.0";
+const APP_VERSION = "3.3.1";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.1": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🗄", text: "رفع خطای نبود جدول system_error_center در دیتابیس‌های ارتقایافته" },
+      { emoji: "🧩", text: "افزایش Revision دیتابیس و اجرای خودکار مهاجرت جداول بسته ۳.۳" },
+      { emoji: "🛠", text: "افزودن تشخیص و ترمیم خودکار جداول حیاتی حتی در صورت وجود Marker ناقص" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "✅", text: "پایداری مرکز خطا، تعمیر خودکار، تمدید و قابلیت‌های رشد روی نصب‌های قدیمی" }
+    ])
+  }),
   "3.3.0": Object.freeze({
     central: Object.freeze([
       { emoji: "🚀", text: "افزودن بسته کامل رشد، وفاداری، سلامت سرویس و اتوماسیون پیشرفته نمایندگان" },
@@ -192,7 +202,7 @@ let schemaReadyPromise = null;
 
 // Persistent schema marker: avoids replaying the full D1 migration sweep whenever
 // Cloudflare starts a fresh isolate after an idle period.
-const DB_SCHEMA_REVISION = "3.1.7";
+const DB_SCHEMA_REVISION = "3.3.1";
 
 let settingsCache = null;
 
@@ -1650,8 +1660,20 @@ async function ensureDbInternal(env) {
       "SELECT value FROM app_settings WHERE key=\'db_schema_revision\'"
     ).first();
     if (String(marker?.value || "") === DB_SCHEMA_REVISION) {
-      schemaReady = true;
-      return;
+      const criticalTables = await env.PASARGUARD_DB.prepare(`
+        SELECT COUNT(*) AS c FROM sqlite_master
+        WHERE type='table' AND name IN (
+          'sales_service_preferences','sales_gifts','sales_service_health',
+          'sales_failover_jobs','sales_guarantee_claims','reseller_tier_history',
+          'auto_recharge_alerts','system_error_center','repair_runs','release_rollouts'
+        )
+      `).first();
+      if (Number(criticalTables?.c || 0) === 10) {
+        schemaReady = true;
+        return;
+      }
+      // The revision marker may have been written by an incomplete/older package.
+      // Continue through the idempotent schema bootstrap to self-heal missing tables.
     }
   } catch (_) {
     // Fresh installations may not have app_settings yet; continue with bootstrap.
@@ -13764,7 +13786,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.3.0';
+const BLUEPANEL_CORE_VERSION = '3.3.1';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {

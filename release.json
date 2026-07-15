@@ -1,7 +1,7 @@
 {
-  "version": "3.3.0",
-  "release_id": "3.3.0-20260715-growth-loyalty-health-automation-suite",
-  "architecture": "fully-split-three-worker-growth-and-reliability-suite",
+  "version": "3.3.1",
+  "release_id": "3.3.1-20260715-d1-growth-suite-schema-migration-fix",
+  "architecture": "fully-split-three-worker-growth-suite-schema-self-healing",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -32,15 +32,11 @@
     ]
   },
   "features": [
-    "per-service automatic renewal from customer wallet with idempotent renewal runs",
-    "automatic low-balance alert and prepared recharge recommendation for representatives",
-    "smart plan recommendation, dynamic upsell, favorite plan and one-tap repurchase",
-    "abandoned-cart and win-back automation, gift service purchases, gift codes and loyalty points",
-    "service health snapshots, optional automatic failover queue and plan guarantee claims",
-    "real-profit and reseller tier dashboards",
-    "QR subscription import using an optional QR decoder endpoint",
-    "edge-first staged updates, rollout records, error center and repair-all workflow",
-    "existing Plisio, CubePay, live usage, topic reports and PasarGuard compatibility are preserved",
+    "fixes D1_ERROR no such table system_error_center on upgraded installations",
+    "bumps the persistent D1 schema revision from 3.1.7 to 3.3.1 so all 3.3 growth-suite tables are created",
+    "the cold-isolate fast path now verifies ten critical growth-suite tables before accepting the schema marker",
+    "an incomplete or stale schema marker automatically falls through to the idempotent schema bootstrap",
+    "all 3.3.0 growth, loyalty, health, automation, payments and live-usage features remain included",
     "README files are excluded"
   ],
   "deployment": {
@@ -56,28 +52,24 @@
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "top_level_module_execution": "passed",
-    "sqlite_schema_tables": 55,
-    "schema_creation": "passed",
-    "auto_renew_exactly_once_claim": "passed; first claim accepted, duplicate claim rejected",
-    "customer_wallet_debit_model": "passed",
-    "low_balance_daily_dedupe": "passed",
-    "error_center_upsert_occurrence_count": "passed",
-    "telegram_literal_callback_max_64_bytes": "passed",
-    "release_notes_current_version_filter": "passed",
-    "readme_excluded": true,
-    "live_telegram_cloudflare_pasarguard_payments": "not run without production credentials"
+    "db_schema_revision": "3.3.1",
+    "critical_table_guard_count": 10,
+    "fresh_schema_system_error_center": "passed",
+    "legacy_marker_self_heal": "passed",
+    "release_manifest_hashes": "recalculated",
+    "zip_integrity": "passed",
+    "live_d1_migration": "not run without production binding"
   },
   "sha256": {
-    "core": "288de03e4ef47e8c75e07a2946e148a632cbf7dd44d5d273792fb70be7e3eba6",
-    "edge": "823d0b877a3737ed17f0453bce896757b57d76eb49c97b203b3911c4648e9264",
-    "processor": "048bc4d3c493b45bacaf95c0300b9aba5ddee6835233945bf4ab6539dd09cd70",
+    "core": "e6a1ade712144d02bbcb1dfe3315faf4096aa427aa472fa856f40318cdff1352",
+    "edge": "93c0973afd2921ad75352a0b92a804be35343041dc4f3b8b5ed5ea993bf9ec8f",
+    "processor": "99e17ef896e73d44c4eed59eea39a48ab14223fe2fded20462e16f3d3d6007a3",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "hashes": {
-    "core/worker.js": "288de03e4ef47e8c75e07a2946e148a632cbf7dd44d5d273792fb70be7e3eba6",
-    "edge/worker.js": "823d0b877a3737ed17f0453bce896757b57d76eb49c97b203b3911c4648e9264",
-    "processor/worker.js": "048bc4d3c493b45bacaf95c0300b9aba5ddee6835233945bf4ab6539dd09cd70",
+    "core/worker.js": "e6a1ade712144d02bbcb1dfe3315faf4096aa427aa472fa856f40318cdff1352",
+    "edge/worker.js": "93c0973afd2921ad75352a0b92a804be35343041dc4f3b8b5ed5ea993bf9ec8f",
+    "processor/worker.js": "99e17ef896e73d44c4eed59eea39a48ab14223fe2fded20462e16f3d3d6007a3",
     "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "limitations": [
