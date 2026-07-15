@@ -1,15 +1,24 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.8
+ * Version: 3.3.9
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.8';
+const APP_VERSION = '3.3.9';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.9": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🧹", text: "حذف نمایش تکراری جزئیات سفارش‌ها در بالای دکمه‌های سرویس" },
+      { emoji: "🏷", text: "نمایش مستقیم نام کاربری سرویس روی دکمه‌ها بدون شماره سفارش و عنوان پلن" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "📱", text: "ساده‌سازی فهرست سرویس‌های مشتری؛ فقط نام هر سرویس و ورود مستقیم به جزئیات" }
+    ])
+  }),
   "3.3.8": Object.freeze({
     central: Object.freeze([
       { emoji: "🧪", text: "رفع تشخیص نامشخص نسخه فایل Worker در پاسخ multipart و JSON-escaped کلادفلر" },
@@ -14253,7 +14262,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.3.8';
+const BLUEPANEL_CORE_VERSION = '3.3.9';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {

@@ -1,7 +1,7 @@
 {
-  "version": "3.3.8",
-  "release_id": "3.3.8-20260715-cloudflare-content-version-processor-repair-fix",
-  "architecture": "fully-split-three-worker-runtime-version-verification-and-processor-repair-fixed",
+  "version": "3.3.9",
+  "release_id": "3.3.9-20260715-service-name-only-telegram-list",
+  "architecture": "fully-split-three-worker-service-name-only-customer-list",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -32,13 +32,12 @@
     ]
   },
   "features": [
-    "parses Cloudflare Worker content from multipart, JSON-escaped and plain-text responses",
-    "detects APP_VERSION from single or double quotes, header comments and nested response strings",
-    "falls back to verified Edge or Processor runtime version when Cloudflare content propagation is delayed",
-    "marks Processor repair successful when the runtime and database are healthy even if one optional business execution is partial",
-    "shows non-blocking Processor warnings separately from real repair failures",
-    "keeps service center and safe two-step service deletion from 3.3.7",
-    "uses single-quoted APP_VERSION and explicit role version constants for compatibility with older bootstrap verifiers",
+    "shows only the actual remote service username on customer service buttons",
+    "removes repeated order and service details above the inline keyboard",
+    "deduplicates renewal and volume operations into one button per active service",
+    "opens the service detail page directly from the username button",
+    "keeps safe two-step service deletion, service management and all 3.3.8 runtime repair fixes",
+    "does not add or migrate any D1 table",
     "README files are excluded"
   ],
   "deployment": {
@@ -54,28 +53,27 @@
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "cloudflare_multipart_version_parser": "passed by fixture tests",
-    "json_escaped_worker_version_parser": "passed by fixture tests",
-    "processor_health_success_with_optional_warning": "passed by static assertion",
+    "service_button_labels_username_only": "passed by static assertion",
+    "duplicate_service_text_removed": "passed by static assertion",
     "release_manifest_hashes": "recalculated",
     "zip_integrity": "passed",
     "live_cloudflare_deployment": "not run without production credentials"
   },
   "limitations": [
     "production Cloudflare, Telegram and PasarGuard calls were not executed without account credentials",
-    "remote service deletion requires the connected PasarGuard administrator to have users.delete permission",
-    "deleting a service is irreversible on the remote panel; BluePanel intentionally preserves its payment history"
+    "the list intentionally shows active delivered services only; cancelled orders are not repeated in the service selector",
+    "remote service deletion still requires users.delete permission on the connected PasarGuard administrator"
   ],
   "sha256": {
-    "core": "50ecfa92257691ca9809b4bf23935f84ce1f459ee2b03cc55b5b2af6660a8ae7",
-    "edge": "59f7bc25cafdeed0aadb105b8c88c3b3f83b147d55050acf3e96f3266defb417",
-    "processor": "6f5c1094baf967c316191b1bb4ba70f61b61174c76d3f09d51a9fcbb45aaa6f0",
+    "core": "812eb7bf00402f7c9a486fcafa214b99baff9983ce3d280e4a8c05464e61d428",
+    "edge": "eec0d993fb0b8405e599674a24262c8253b4470f2604775792e61dad575fcb80",
+    "processor": "5f93530c9898ce46fc3d6e915f49620a05a6829a27d3b913aee55d2571edc81f",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "hashes": {
-    "core/worker.js": "50ecfa92257691ca9809b4bf23935f84ce1f459ee2b03cc55b5b2af6660a8ae7",
-    "edge/worker.js": "59f7bc25cafdeed0aadb105b8c88c3b3f83b147d55050acf3e96f3266defb417",
-    "processor/worker.js": "6f5c1094baf967c316191b1bb4ba70f61b61174c76d3f09d51a9fcbb45aaa6f0",
+    "core/worker.js": "812eb7bf00402f7c9a486fcafa214b99baff9983ce3d280e4a8c05464e61d428",
+    "edge/worker.js": "eec0d993fb0b8405e599674a24262c8253b4470f2604775792e61dad575fcb80",
+    "processor/worker.js": "5f93530c9898ce46fc3d6e915f49620a05a6829a27d3b913aee55d2571edc81f",
     "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   }
 }

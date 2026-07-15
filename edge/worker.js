@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.8
+ * Version: 3.3.9
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = '3.3.8';
+const APP_VERSION = '3.3.9';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -3637,28 +3637,26 @@ async function deleteSalesService(env, bot, customer, serviceId, options = {}) {
 
 async function salesCustomerOrdersView(env, bot, customer) {
   const rows = await env.PASARGUARD_DB.prepare(`
-    SELECT o.*,p.title AS plan_title,sc.title AS category_title,sl.title AS location_title
+    SELECT o.*,p.title AS plan_title,p.category_id,p.location_id,
+           sc.title AS category_title,sc.emoji AS category_emoji,
+           sl.title AS location_title,sl.emoji AS location_emoji
     FROM sales_orders o JOIN sales_plans p ON p.id=o.plan_id
-    LEFT JOIN sales_categories sc ON sc.id=p.category_id LEFT JOIN sales_locations sl ON sl.id=p.location_id
-    WHERE o.bot_id=? AND o.customer_id=? ORDER BY o.created_at DESC LIMIT 20
+    LEFT JOIN sales_categories sc ON sc.id=p.category_id
+    LEFT JOIN sales_locations sl ON sl.id=p.location_id
+    WHERE o.bot_id=? AND o.customer_id=? AND o.status='delivered' AND o.remote_username IS NOT NULL
+    ORDER BY o.updated_at DESC LIMIT 80
   `).bind(bot.id, customer.id).all();
-  const orders = rows.results || [];
-  const delivered = orders.filter(x => x.status === "delivered").length;
-  const pending = orders.filter(x => ["awaiting_receipt","pending_review","payment_pending","provision_failed"].includes(String(x.status))).length;
-  const lines = orders.slice(0,10).map((order,index) => {
-    const type = order.order_type === "renewal" ? "♻️ تمدید" : order.order_type === "volume" ? "➕ افزایش حجم" : order.order_type === "imported" ? "🔗 سرویس انتقالی" : "🛒 خرید سرویس";
-    return salesOrderStatusIcon(order.status) + " <b>" + (index+1) + ". " + botEscape(order.plan_title) + "</b> · " + type + "\n" +
-      "   " + botEscape(salesOrderStatusLabel(order.status)) + " · <b>" + botMoney(order.amount_toman) + " تومان</b> · " + botDate(order.created_at) +
-      (order.remote_username ? "\n   کاربری: <code>" + botEscape(order.remote_username) + "</code>" : "");
-  }).join("\n\n") || "هنوز سفارشی ثبت نکرده‌اید.";
-  const buttons = orders.slice(0,10).map((order,index) => [{
-    text: salesOrderStatusIcon(order.status) + " سفارش " + (index+1) + " — " + String(order.plan_title || "پلن").slice(0,24),
-    callback_data: "sale:order:" + order.id
+  const services = buildSalesServices(rows.results || []);
+  const buttons = services.slice(0, 10).map(service => [{
+    text: cleanText(service.remote_username || "سرویس", 48),
+    callback_data: "sale:service:" + service.id
   }]);
-  buttons.push([{ text: "🛒 خرید سرویس", callback_data: "sale:locations" }, { text: "🧭 سرویس‌های من", callback_data: "sale:services" }]);
+  buttons.push([{ text: "🛒 خرید سرویس", callback_data: "sale:locations" }, { text: "🔗 افزودن سرویس قبلی", callback_data: "sale:import" }]);
   buttons.push([{ text: "🏠 منوی اصلی", callback_data: "sale:home" }]);
   return {
-    text: "📦 <b>سفارش‌ها و سرویس‌های من</b>\n━━━━━━━━━━━━━━\n✅ تحویل‌شده: <b>" + botMoney(delivered) + "</b> · ⏳ نیازمند پیگیری: <b>" + botMoney(pending) + "</b>\n\n" + lines + "\n\nبرای جزئیات، یکی از دکمه‌های زیر را انتخاب کنید.",
+    text: services.length
+      ? "📦 <b>سرویس‌های من</b>\n━━━━━━━━━━━━━━\nسرویس موردنظر را انتخاب کنید."
+      : "📦 <b>سرویس‌های من</b>\n━━━━━━━━━━━━━━\nهنوز سرویس فعالی ندارید.",
     reply_markup: { inline_keyboard: buttons }
   };
 }
@@ -3706,24 +3704,18 @@ async function salesCustomerServicesView(env, bot, customer) {
     ORDER BY o.updated_at DESC LIMIT 80
   `).bind(bot.id, customer.id).all();
   const services = buildSalesServices(rows.results || []);
-  const lines = services.map((service, index) => {
-    const limit = Number(service.remote_data_limit || 0);
-    const used = Number(service.remote_used_traffic || 0);
-    const remaining = limit > 0 ? Math.max(0, limit - used) : 0;
-    const expire = service.remote_expire ? botDate(service.remote_expire) : "نامحدود/نامشخص";
-    return (index + 1) + ". <b>" + botEscape(service.plan_title) + "</b> · " + botEscape(service.remote_status || "active") + "\n" +
-      "   <code>" + botEscape(service.remote_username) + "</code>\n" +
-      "   مصرف: <b>" + botGb(used) + "</b> از <b>" + (limit > 0 ? botGb(limit) : "نامحدود") + "</b>" +
-      (limit > 0 ? " · باقی‌مانده: <b>" + botGb(remaining) + "</b>" : "") + "\n" +
-      "   انقضا: <b>" + botEscape(expire) + "</b>";
-  }).join("\n\n") || "هنوز سرویس تحویل‌شده‌ای ندارید.";
-  const buttons = [];
-  services.slice(0, 8).forEach((service, index) => {
-    buttons.push([{ text: "🧭 سرویس " + (index + 1) + " — " + service.remote_username, callback_data: "sale:service:" + service.id }]);
-  });
+  const buttons = services.slice(0, 10).map(service => [{
+    text: cleanText(service.remote_username || "سرویس", 48),
+    callback_data: "sale:service:" + service.id
+  }]);
   buttons.push([{ text: "🔗 افزودن سرویس قبلی", callback_data: "sale:import" }]);
-  buttons.push([{ text: "🏠 منوی اصلی", callback_data: "sale:home" }]);
-  return { text: "🧭 <b>مرکز سرویس‌های من</b>\n━━━━━━━━━━━━━━\n" + lines, reply_markup: { inline_keyboard: buttons } };
+  buttons.push([{ text: "🛒 خرید سرویس", callback_data: "sale:locations" }, { text: "🏠 منوی اصلی", callback_data: "sale:home" }]);
+  return {
+    text: services.length
+      ? "🧭 <b>سرویس‌های من</b>\n━━━━━━━━━━━━━━\nسرویس موردنظر را انتخاب کنید."
+      : "🧭 <b>سرویس‌های من</b>\n━━━━━━━━━━━━━━\nهنوز سرویس فعالی ندارید.",
+    reply_markup: { inline_keyboard: buttons }
+  };
 }
 
 async function salesCustomerServiceDetailView(env, bot, customer, serviceId) {
@@ -11160,7 +11152,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_EDGE_VERSION='3.3.8';
+const BLUEPANEL_EDGE_VERSION='3.3.9';
 function bluePanelEdgeJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function bluePanelEdgeInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
 function bluePanelEdgeRuntimeBinding(env,name){const value=env?.[name];return{name,exact_key_present:Object.prototype.hasOwnProperty.call(env||{},name),value_present:value!==undefined&&value!==null,fetch_callable:Boolean(value&&typeof value.fetch==='function'),constructor_name:value?.constructor?.name||''}}
