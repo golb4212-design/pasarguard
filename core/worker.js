@@ -1,15 +1,36 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.2
+ * Version: 3.3.4
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.3.2";
+const APP_VERSION = "3.3.4";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.4": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🛟", text: "بازیابی اضطراری Webhook و جلوگیری از ازکارافتادن ربات هنگام خطای آپدیت یا D1" },
+      { emoji: "🧱", text: "اختیاری‌شدن کامل جداول گزارش Rollout؛ نبود یا خطای آن‌ها دیگر استقرار و ربات را متوقف نمی‌کند" },
+      { emoji: "🔒", text: "حذف بررسی خودکار آپدیت از مسیر درخواست‌های عادی و ایزوله‌کردن خطاهای Cron" },
+      { emoji: "✅", text: "بازگرداندن پاسخ ۲۰۰ به Telegram Webhook حتی هنگام خطای داخلی و ثبت گزارش بازیابی" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "🚑", text: "پایداری Webhook ربات‌های فروش و جلوگیری از قطع کامل ربات در خطاهای موقت Core یا دیتابیس" }
+    ])
+  }),
+  "3.3.3": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🔄", text: "رفع خطای کاذب تأیید نسخه Edge پس از Deploy و پشتیبانی از تأخیر انتشار Runtime" },
+      { emoji: "☁️", text: "تأیید فایل نصب‌شده مستقیماً از Cloudflare API پیش از ادامه انتشار مرحله‌ای" },
+      { emoji: "🧹", text: "تکمیل و پاک‌سازی خودکار Rolloutهای نیمه‌تمام پس از جایگزینی Core" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "✅", text: "پایداری بیشتر آپدیت خودکار سه Worker بدون توقف روی نسخه پاسخ‌گوی موقت" }
+    ])
+  }),
   "3.3.2": Object.freeze({
     central: Object.freeze([
       { emoji: "🚑", text: "ساخت اضطراری جدول release_rollouts پیش از شروع استقرار خودکار" },
@@ -212,7 +233,7 @@ let schemaReadyPromise = null;
 
 // Persistent schema marker: avoids replaying the full D1 migration sweep whenever
 // Cloudflare starts a fresh isolate after an idle period.
-const DB_SCHEMA_REVISION = "3.3.2";
+const DB_SCHEMA_REVISION = "3.3.3";
 
 let settingsCache = null;
 
@@ -6825,7 +6846,8 @@ async function deployUploadedGithubVersion(env, chatId, version) {
     if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 1800));
     try {
       lastResult = await automaticUpdateTick(env, { source: "telegram_zip_upload", forceCheck: true, intervalSeconds: 5 });
-      if (String(lastResult?.latest || "") === String(version) && (lastResult?.deployed || lastResult?.reason === "none" || !lastResult?.update_required)) break;
+      if (lastResult?.failed) lastError = new Error(lastResult.error || "استقرار کامل نشد");
+      if (String(lastResult?.latest || "") === String(version) && !lastResult?.failed && (lastResult?.deployed || lastResult?.reason === "none" || !lastResult?.update_required)) break;
     } catch (error) { lastError = error; }
   }
   try {
@@ -7299,22 +7321,62 @@ async function verifyEdgeCoreRequest(request, env) {
   return json({ success: true, role: "bluepanel-core", version: APP_VERSION, core_url: new URL(request.url).origin, edge_url: edgeUrl });
 }
 
-async function verifyEdgeDeploymentVersion(env, expectedVersion, attempts = 6) {
-  let last = null;
+function bluePanelVersionFromWorkerContent(source) {
+  const text = String(source || "");
+  const match = text.match(/const\s+(?:APP_VERSION|EDGE_VERSION|PROCESSOR_VERSION|BLUEPANEL_EDGE_VERSION|BLUEPANEL_PROCESSOR_VERSION)\s*=\s*["']([^"']+)["']/);
+  return cleanText(match?.[1] || "", 80);
+}
+
+async function verifyCloudflareWorkerContent(settings, scriptName, expectedVersion, roleMarker, attempts = 5) {
+  const apiBase = "https://api.cloudflare.com/client/v4/accounts/" + settings.cf_account_id + "/workers/scripts/" + encodeURIComponent(scriptName);
+  let last = { version: "", status: 0, error: "" };
   for (let i = 0; i < Math.max(1, attempts); i++) {
-    if (i > 0) await new Promise(resolve => setTimeout(resolve, 900));
+    if (i > 0) await new Promise(resolve => setTimeout(resolve, 1000 + i * 250));
     try {
-      last = await inspectEdgeServiceBinding(env);
-      const activeVersion = String(last?.version || last?.probe?.response_version || "");
-      if (last?.connected === true && activeVersion === String(expectedVersion || "")) {
-        return { verified: true, version: activeVersion, diagnostics: last };
+      const response = await fetch(apiBase + "/content?_bp_deploy_check=" + Date.now() + "_" + i, {
+        headers: { authorization: "Bearer " + settings.cf_api_token, accept: "text/plain, multipart/form-data, */*", "cache-control": "no-cache" },
+        cache: "no-store"
+      });
+      const raw = await response.text();
+      const version = bluePanelVersionFromWorkerContent(raw);
+      last = { version, status: response.status, marker_found: raw.includes(roleMarker), bytes: raw.length, error: response.ok ? "" : ("HTTP " + response.status) };
+      if (response.ok && last.marker_found && version === String(expectedVersion || "")) {
+        return { verified: true, source: "cloudflare_content_api", ...last };
       }
     } catch (error) {
-      last = { error: cleanText(error?.message || error, 500) };
+      last = { ...last, error: cleanText(error?.message || error, 500) };
     }
   }
-  const activeVersion = String(last?.version || last?.probe?.response_version || "unknown");
-  throw new Error("Worker دوم Deploy شد اما نسخه فعال تأیید نشد؛ نسخه مورد انتظار " + expectedVersion + " و نسخه پاسخ‌گو " + activeVersion + " است");
+  throw new Error("فایل Worker در Cloudflare با نسخه مورد انتظار تأیید نشد؛ نسخه مورد انتظار " + expectedVersion + " و نسخه فایل " + (last.version || "نامشخص") + " است");
+}
+
+async function probeEdgeRuntimeVersion(env, attempt = 0) {
+  if (!env?.EDGE_WORKER || typeof env.EDGE_WORKER.fetch !== "function") return { reachable: false, version: "", error: "EDGE_WORKER متصل نیست" };
+  try {
+    const response = await env.EDGE_WORKER.fetch(new Request("https://bluepanel-edge.internal/__bluepanel/service/edge-local-health?_bp_deploy_check=" + Date.now() + "_" + attempt, {
+      headers: { "x-bluepanel-service-hop": "core-deployment-check", accept: "application/json", "cache-control": "no-cache" }
+    }));
+    const data = await response.json().catch(() => ({}));
+    return { reachable: true, ok: response.ok && String(data?.role || "") === "bluepanel-edge", version: String(data?.version || response.headers.get("x-bluepanel-version") || ""), status: response.status, data };
+  } catch (error) {
+    return { reachable: false, version: "", error: cleanText(error?.message || error, 500) };
+  }
+}
+
+async function verifyEdgeDeploymentVersion(env, settings, scriptName, expectedVersion, attempts = 10) {
+  const sourceVerification = await verifyCloudflareWorkerContent(settings, scriptName, expectedVersion, "BLUEPANEL_EDGE_WORKER", 6);
+  let last = null;
+  for (let i = 0; i < Math.max(1, attempts); i++) {
+    if (i > 0) await new Promise(resolve => setTimeout(resolve, 1200 + Math.min(i, 4) * 300));
+    last = await probeEdgeRuntimeVersion(env, i);
+    if (last?.ok === true && last.version === String(expectedVersion || "")) {
+      return { verified: true, version: expectedVersion, runtime_verified: true, runtime_pending: false, runtime_version: last.version, source_verification: sourceVerification, diagnostics: last };
+    }
+  }
+  // The script-content API is authoritative for the uploaded code. A Service
+  // Binding can keep answering from the previous runtime for a short period
+  // during propagation, especially inside the same Core request that deployed it.
+  return { verified: true, version: expectedVersion, runtime_verified: false, runtime_pending: true, runtime_version: String(last?.version || "unknown"), source_verification: sourceVerification, diagnostics: last };
 }
 
 async function deployEdgeWorkerFromGithub(env, force = false, targetVersion = "") {
@@ -7346,9 +7408,9 @@ async function deployEdgeWorkerFromGithub(env, force = false, targetVersion = ""
   const response = await fetch(apiBase + "?bindings_inherit=strict", { method: "PUT", headers: { authorization: "Bearer " + settings.cf_api_token }, body: form });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.success === false) throw new Error(data?.errors?.[0]?.message || "Cloudflare Edge deploy failed");
-  const verification = await verifyEdgeDeploymentVersion(env, deployedVersion);
+  const verification = await verifyEdgeDeploymentVersion(env, settings, scriptName, deployedVersion);
   await setSettings(env, { edge_worker_script_name: scriptName, edge_worker_last_sha: codeSha, edge_worker_last_version: verification.version, edge_worker_last_deployed_at: nowIso(), edge_worker_last_error: "", github_edge_worker_file: file });
-  return { deployed: true, verified: true, sha: codeSha, script_name: scriptName, version: verification.version };
+  return { deployed: true, verified: true, runtime_verified: verification.runtime_verified, runtime_pending: verification.runtime_pending, runtime_version: verification.runtime_version, source_verification: verification.source_verification, sha: codeSha, script_name: scriptName, version: verification.version };
 }
 
 async function deployProcessorWorkerFromGithub(env, force = false, targetVersion = "") {
@@ -7380,8 +7442,9 @@ async function deployProcessorWorkerFromGithub(env, force = false, targetVersion
   const response = await fetch(apiBase + "?bindings_inherit=strict", { method: "PUT", headers: { authorization: "Bearer " + settings.cf_api_token }, body: form });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.success === false) throw new Error(data?.errors?.[0]?.message || "Cloudflare Processor deploy failed");
+  const sourceVerification = await verifyCloudflareWorkerContent(settings, scriptName, deployedVersion, "BLUEPANEL_PROCESSOR_WORKER", 6);
   await setSettings(env, { processor_worker_script_name: scriptName, processor_worker_last_sha: codeSha, processor_worker_last_version: deployedVersion, processor_worker_last_deployed_at: nowIso(), processor_worker_last_error: "", github_processor_worker_file: file });
-  return { deployed: true, sha: codeSha, script_name: scriptName, version: deployedVersion };
+  return { deployed: true, verified: true, source_verification: sourceVerification, sha: codeSha, script_name: scriptName, version: deployedVersion };
 }
 
 async function checkUpdate(env) {
@@ -7516,10 +7579,73 @@ async function ensureDeploymentTrackingTables(env) {
   for (const sql of statements) await env.PASARGUARD_DB.prepare(sql).run();
 }
 
-async function deployClusterFromGithub(env, force = false, prechecked = null) {
-  // Must run before the first rollout INSERT. This also repairs installations
-  // where the old Core set schemaReady=true before 3.3 tables existed.
+async function reconcileReleaseRollouts(env) {
   await ensureDeploymentTrackingTables(env);
+  const rows = await env.PASARGUARD_DB.prepare("SELECT id,version,status,edge_status,processor_status,core_status,updated_at FROM release_rollouts WHERE status IN ('running','core_deploying') ORDER BY created_at DESC LIMIT 20").all();
+  const now = Date.now();
+  let completed = 0, superseded = 0;
+  for (const row of (rows.results || [])) {
+    const ageMs = Math.max(0, now - Date.parse(row.updated_at || 0));
+    const versionCmp = semverCompare(APP_VERSION, row.version || "0.0.0");
+    const edgeReady = ["verified","uploaded","runtime_pending"].includes(String(row.edge_status || ""));
+    const processorReady = ["deployed","verified","skipped"].includes(String(row.processor_status || ""));
+    if (versionCmp === 0 && edgeReady && processorReady && ["pending","deploying","deployed"].includes(String(row.core_status || ""))) {
+      await env.PASARGUARD_DB.prepare("UPDATE release_rollouts SET status='completed',core_status='deployed',finished_at=?,updated_at=? WHERE id=?")
+        .bind(nowIso(), nowIso(), row.id).run();
+      completed++;
+    } else if (versionCmp > 0 && ageMs > 120000) {
+      await env.PASARGUARD_DB.prepare("UPDATE release_rollouts SET status='superseded',core_status=CASE WHEN core_status IN ('pending','deploying') THEN 'superseded' ELSE core_status END,finished_at=?,updated_at=? WHERE id=?")
+        .bind(nowIso(), nowIso(), row.id).run();
+      superseded++;
+    }
+  }
+  if (completed > 0) {
+    try {
+      await env.PASARGUARD_DB.prepare("UPDATE system_error_center SET status='resolved',resolved_at=?,last_seen_at=? WHERE scope='release_rollout' AND error_code='STAGED_DEPLOY_FAILED' AND status='open'")
+        .bind(nowIso(), nowIso()).run();
+    } catch (_) {}
+  }
+  return { completed, superseded };
+}
+
+async function safeRolloutStatement(env, sql, params = []) {
+  try {
+    if (!env?.PASARGUARD_DB) return { ok: false, skipped: true, error: "D1 binding missing" };
+    const result = await env.PASARGUARD_DB.prepare(sql).bind(...params).run();
+    return { ok: true, result };
+  } catch (error) {
+    console.error("optional rollout tracking failed", error);
+    return { ok: false, error: cleanText(error?.message || error, 800) };
+  }
+}
+
+async function safePrepareDeploymentTracking(env) {
+  try {
+    await ensureDeploymentTrackingTables(env);
+    try { await reconcileReleaseRollouts(env); } catch (error) { console.error("rollout reconcile skipped", error); }
+    return true;
+  } catch (error) {
+    // Tracking is observability only. It must never take the bot or deployment down.
+    console.error("deployment tracking bootstrap skipped", error);
+    return false;
+  }
+}
+
+async function safeRecordStagedDeployError(env, error, context = {}) {
+  const message = cleanText(error?.message || error, 1500);
+  try { await setSettings(env,{auto_update_last_status:"failed_staged",auto_update_last_error:cleanText(message,800)}); } catch (_) {}
+  try {
+    await env.PASARGUARD_DB.prepare(`INSERT INTO system_error_center(id,scope,bot_id,error_code,message,context_json,occurrence_count,status,first_seen_at,last_seen_at)
+      VALUES(?,'release_rollout','','STAGED_DEPLOY_FAILED',?,?,1,'open',?,?)
+      ON CONFLICT(scope,bot_id,error_code,status) DO UPDATE SET message=excluded.message,context_json=excluded.context_json,occurrence_count=system_error_center.occurrence_count+1,last_seen_at=excluded.last_seen_at`)
+      .bind(id("err"),message,JSON.stringify(context),nowIso(),nowIso()).run();
+  } catch (trackingError) { console.error("error center write skipped", trackingError); }
+}
+
+async function deployClusterFromGithub(env, force = false, prechecked = null) {
+  // Rollout tables are optional diagnostics. A missing/locked D1 table can never
+  // block the actual Worker update or the Telegram webhook.
+  const trackingReady = await safePrepareDeploymentTracking(env);
   const check = prechecked || await checkUpdate(env);
   const shouldSync = force || check.available || check.cluster_sync_required;
   const settings = await getSettings(env);
@@ -7529,46 +7655,60 @@ async function deployClusterFromGithub(env, force = false, prechecked = null) {
   let core = { ...check, deployed: false };
   if (!shouldSync && !check.available && !force) return { ...check, deployed: false, edge_update, processor_update };
 
-  await env.PASARGUARD_DB.prepare(`INSERT INTO release_rollouts(
-    id,version,release_id,mode,status,edge_status,processor_status,core_status,
-    previous_core_version,previous_edge_version,previous_processor_version,details_json,created_at,updated_at
-  ) VALUES(?,?,?,'edge_first','running','pending','pending','pending',?,?,?,?,?,?)`)
-    .bind(rolloutId,check.latest||APP_VERSION,check.release_id||"",APP_VERSION,
-      settings.edge_worker_last_version||"",settings.processor_worker_last_version||"",JSON.stringify({force}),ts,ts).run();
+  if (trackingReady) {
+    await safeRolloutStatement(env, `INSERT INTO release_rollouts(
+      id,version,release_id,mode,status,edge_status,processor_status,core_status,
+      previous_core_version,previous_edge_version,previous_processor_version,details_json,created_at,updated_at
+    ) VALUES(?,?,?,'edge_first','running','pending','pending','pending',?,?,?,?,?,?)`, [
+      rolloutId,check.latest||APP_VERSION,check.release_id||"",APP_VERSION,
+      settings.edge_worker_last_version||"",settings.processor_worker_last_version||"",JSON.stringify({force}),ts,ts
+    ]);
+  }
 
   try {
     if (shouldSync) {
       edge_update = await deployEdgeWorkerFromGithub(env, true, check.latest || APP_VERSION);
-      const edgeReady = edge_update?.verified === true || (edge_update?.skipped && edge_update?.reason === "up_to_date" && String(edge_update?.version||"") === String(check.latest||APP_VERSION));
-      await env.PASARGUARD_DB.prepare("UPDATE release_rollouts SET edge_status=?,details_json=?,updated_at=? WHERE id=?")
-        .bind(edgeReady?"verified":"failed",JSON.stringify({force,edge_update}),nowIso(),rolloutId).run();
-      if (!edgeReady) throw new Error("نسخه Edge پس از نصب تأیید نشد؛ نصب Core متوقف شد");
+      const edgeReady = edge_update?.verified === true || edge_update?.deployed === true ||
+        (edge_update?.skipped && edge_update?.reason === "up_to_date" && String(edge_update?.version||"") === String(check.latest||APP_VERSION));
+      if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET edge_status=?,details_json=?,updated_at=? WHERE id=?",[
+        edgeReady?"verified":"failed",JSON.stringify({force,edge_update}),nowIso(),rolloutId
+      ]);
+      if (!edgeReady) throw new Error("نصب Edge کامل نشد؛ Core دست‌نخورده باقی ماند");
 
       if (hasProcessorServiceBinding(env)) {
         processor_update = await deployProcessorWorkerFromGithub(env, true, check.latest || APP_VERSION);
-        const processorReady = processor_update?.deployed === true || (processor_update?.skipped && processor_update?.reason === "up_to_date");
-        await env.PASARGUARD_DB.prepare("UPDATE release_rollouts SET processor_status=?,details_json=?,updated_at=? WHERE id=?")
-          .bind(processorReady?"deployed":"failed",JSON.stringify({force,edge_update,processor_update}),nowIso(),rolloutId).run();
-        if (!processorReady) throw new Error("نصب Processor کامل نشد؛ نصب Core متوقف شد");
+        const processorReady = processor_update?.verified === true || processor_update?.deployed === true ||
+          (processor_update?.skipped && processor_update?.reason === "up_to_date");
+        if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET processor_status=?,details_json=?,updated_at=? WHERE id=?",[
+          processorReady?"deployed":"failed",JSON.stringify({force,edge_update,processor_update}),nowIso(),rolloutId
+        ]);
+        if (!processorReady) throw new Error("نصب Processor کامل نشد؛ Core دست‌نخورده باقی ماند");
       } else {
         processor_update={skipped:true,reason:"processor_service_binding_missing"};
-        await env.PASARGUARD_DB.prepare("UPDATE release_rollouts SET processor_status='skipped',updated_at=? WHERE id=?").bind(nowIso(),rolloutId).run();
+        if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET processor_status='skipped',updated_at=? WHERE id=?",[nowIso(),rolloutId]);
       }
     }
 
-    if (check.available || force) core = await deploySelfFromGithub(env, force, check);
+    if (check.available || force) {
+      if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET status='core_deploying',core_status='deploying',details_json=?,updated_at=? WHERE id=?",[
+        JSON.stringify({force,edge_update,processor_update}),nowIso(),rolloutId
+      ]);
+      core = await deploySelfFromGithub(env, force, check);
+    }
     const deployed = Boolean(core.deployed || edge_update?.deployed || processor_update?.deployed);
-    await env.PASARGUARD_DB.prepare("UPDATE release_rollouts SET status='completed',core_status=?,details_json=?,finished_at=?,updated_at=? WHERE id=?")
-      .bind(core.deployed?"deployed":"unchanged",JSON.stringify({force,edge_update,processor_update,core:{deployed:core.deployed,version:check.latest}}),nowIso(),nowIso(),rolloutId).run();
-    return { ...check, ...core, deployed, rollout_id:rolloutId, rollout_status:"completed", core_deployed:Boolean(core.deployed), edge_update, processor_update };
+    if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET status='completed',core_status=?,details_json=?,finished_at=?,updated_at=? WHERE id=?",[
+      core.deployed?"deployed":"unchanged",JSON.stringify({force,edge_update,processor_update,core:{deployed:core.deployed,version:check.latest}}),nowIso(),nowIso(),rolloutId
+    ]);
+    try {
+      await env.PASARGUARD_DB.prepare("UPDATE system_error_center SET status='resolved',resolved_at=?,last_seen_at=? WHERE scope='release_rollout' AND error_code='STAGED_DEPLOY_FAILED' AND status='open'")
+        .bind(nowIso(), nowIso()).run();
+    } catch (_) {}
+    return { ...check, ...core, deployed, rollout_id:rolloutId, rollout_status:"completed", tracking_ready:trackingReady, core_deployed:Boolean(core.deployed), edge_update, processor_update };
   } catch (error) {
-    await env.PASARGUARD_DB.prepare("UPDATE release_rollouts SET status='failed',core_status='blocked',details_json=?,finished_at=?,updated_at=? WHERE id=?")
-      .bind(JSON.stringify({force,edge_update,processor_update,error:cleanText(error.message,1000)}),nowIso(),nowIso(),rolloutId).run();
-    await setSettings(env,{auto_update_last_status:"failed_staged",auto_update_last_error:cleanText(error.message,800)});
-    try { await env.PASARGUARD_DB.prepare(`INSERT INTO system_error_center(id,scope,bot_id,error_code,message,context_json,occurrence_count,status,first_seen_at,last_seen_at)
-      VALUES(?,'release_rollout','','STAGED_DEPLOY_FAILED',?,?,1,'open',?,?)
-      ON CONFLICT(scope,bot_id,error_code,status) DO UPDATE SET message=excluded.message,context_json=excluded.context_json,occurrence_count=system_error_center.occurrence_count+1,last_seen_at=excluded.last_seen_at`)
-      .bind(id("err"),cleanText(error.message,1500),JSON.stringify({rolloutId,edge_update,processor_update}),nowIso(),nowIso()).run(); } catch (_) {}
+    if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET status='failed',core_status='blocked',details_json=?,finished_at=?,updated_at=? WHERE id=?",[
+      JSON.stringify({force,edge_update,processor_update,error:cleanText(error.message,1000)}),nowIso(),nowIso(),rolloutId
+    ]);
+    await safeRecordStagedDeployError(env,error,{rolloutId,edge_update,processor_update,trackingReady});
     throw error;
   }
 }
@@ -7640,7 +7780,8 @@ async function automaticUpdateTick(env, options = {}) {
       auto_update_last_source: source
     });
     try { await audit(env, null, "automatic_update_failed", { source, code: error?.code || "", message: error?.message || String(error) }); } catch (_) {}
-    throw error;
+    // Fail open: update errors are reported but never escape into webhook/Cron.
+    return { checked: true, deployed: false, failed: true, source, code: error?.code || "AUTO_UPDATE_FAILED", error: cleanText(error?.message || error, 1000) };
   }
 }
 
@@ -9667,19 +9808,26 @@ async function botAdminResellerOpsView(env, account) {
 
 async function botAdminErrorCenterView(env, account) {
   if(!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
-  const stats=await env.PASARGUARD_DB.prepare(`SELECT
-    (SELECT COUNT(*) FROM system_error_center WHERE status='open') AS open_errors,
-    (SELECT COALESCE(SUM(occurrence_count),0) FROM system_error_center WHERE status='open') AS occurrences,
-    (SELECT COUNT(*) FROM repair_runs WHERE status='running') AS running_repairs,
-    (SELECT COUNT(*) FROM release_rollouts WHERE status='failed') AS failed_rollouts`).first();
-  const errors=await env.PASARGUARD_DB.prepare("SELECT * FROM system_error_center WHERE status='open' ORDER BY last_seen_at DESC LIMIT 8").all();
-  const rollout=await env.PASARGUARD_DB.prepare("SELECT * FROM release_rollouts ORDER BY created_at DESC LIMIT 1").first();
+  try { await ensureDeploymentTrackingTables(env); } catch (error) { console.error("error center bootstrap skipped",error); }
+  try { await reconcileReleaseRollouts(env); } catch (_) {}
+  let stats={open_errors:0,occurrences:0,running_repairs:0,failed_rollouts:0},errors={results:[]},rollout=null,degraded="";
+  try {
+    stats=await env.PASARGUARD_DB.prepare(`SELECT
+      (SELECT COUNT(*) FROM system_error_center WHERE status='open') AS open_errors,
+      (SELECT COALESCE(SUM(occurrence_count),0) FROM system_error_center WHERE status='open') AS occurrences,
+      (SELECT COUNT(*) FROM repair_runs WHERE status='running') AS running_repairs,
+      (SELECT COUNT(*) FROM release_rollouts WHERE status='failed') AS failed_rollouts`).first();
+    errors=await env.PASARGUARD_DB.prepare("SELECT * FROM system_error_center WHERE status='open' ORDER BY last_seen_at DESC LIMIT 8").all();
+    rollout=await env.PASARGUARD_DB.prepare("SELECT * FROM release_rollouts ORDER BY created_at DESC LIMIT 1").first();
+  } catch (error) {
+    degraded="\n\n⚠️ بخش گزارش خطا موقتاً در حالت بازیابی است؛ این خطا عملکرد ربات را متوقف نمی‌کند.\n<code>"+botEscape(cleanText(error?.message||error,250))+"</code>";
+  }
   const lines=(errors.results||[]).map((x,i)=>(i+1)+". 🔴 <b>"+botEscape(x.error_code)+"</b> · "+botEscape(x.scope)+
     (x.bot_id?" · <code>"+botEscape(x.bot_id)+"</code>":"")+"\n   "+botEscape(cleanText(x.message,220))+"\n   تکرار: "+botMoney(x.occurrence_count)+" · "+botDate(x.last_seen_at)).join("\n\n")||"✅ خطای باز ثبت نشده است.";
   const rolloutText=rollout?"\n\n<b>آخرین انتشار مرحله‌ای</b>\nنسخه: <code>"+botEscape(rollout.version)+"</code> · وضعیت: <b>"+botEscape(rollout.status)+"</b>\nEdge: "+botEscape(rollout.edge_status||"—")+" · Processor: "+botEscape(rollout.processor_status||"—")+" · Core: "+botEscape(rollout.core_status||"—"):"";
   return {text:"🧯 <b>مرکز خطا و تعمیر خودکار</b>\n━━━━━━━━━━━━━━\n"+
     "خطاهای باز: <b>"+botMoney(stats?.open_errors)+"</b> · مجموع تکرار: <b>"+botMoney(stats?.occurrences)+"</b>\n"+
-    "تعمیر در حال اجرا: <b>"+botMoney(stats?.running_repairs)+"</b> · انتشار ناموفق: <b>"+botMoney(stats?.failed_rollouts)+"</b>\n\n"+lines+rolloutText,
+    "تعمیر در حال اجرا: <b>"+botMoney(stats?.running_repairs)+"</b> · انتشار ناموفق: <b>"+botMoney(stats?.failed_rollouts)+"</b>\n\n"+lines+rolloutText+degraded,
     reply_markup:{inline_keyboard:[
       [{text:"🧰 تعمیر همه اجزا",callback_data:"bot:admin:repair_all"}],
       [{text:"✅ بستن خطاهای فعلی",callback_data:"bot:admin:errors:resolve"}],
@@ -9689,16 +9837,21 @@ async function botAdminErrorCenterView(env, account) {
 
 async function runCentralRepairAll(env, account) {
   const runId=id("repair"),ts=nowIso(),result={menus:false,health:false,backups:false,reports:false,processor:false};
-  await env.PASARGUARD_DB.prepare("INSERT INTO repair_runs(id,scope,action,status,result_json,created_at) VALUES(?,'central','repair_all','running','{}',?)").bind(runId,ts).run();
-  try{await syncAllResellerBotMenus(env,false);result.menus=true;}catch(_){}
-  try{await runAllResellerHealthChecks(env,100);result.health=true;}catch(_){}
-  try{await createAllResellerBackups(env,100);result.backups=true;}catch(_){}
-  try{await processReportOutboxOnCore(env,300);result.reports=true;}catch(_){}
-  try{const p=await triggerProcessorBusinessJobs(env,"central_repair_all");result.processor=p?.success!==false;}catch(_){}
+  let tracking=false;
+  try {
+    await ensureDeploymentTrackingTables(env);
+    await env.PASARGUARD_DB.prepare("INSERT INTO repair_runs(id,scope,action,status,result_json,created_at) VALUES(?,'central','repair_all','running','{}',?)").bind(runId,ts).run();
+    tracking=true;
+  } catch(error){console.error("repair tracking unavailable",error);}
+  try{await syncAllResellerBotMenus(env,false);result.menus=true;}catch(error){console.error("repair menus",error);}
+  try{await runAllResellerHealthChecks(env,100);result.health=true;}catch(error){console.error("repair health",error);}
+  try{await createAllResellerBackups(env,100);result.backups=true;}catch(error){console.error("repair backups",error);}
+  try{await processReportOutboxOnCore(env,300);result.reports=true;}catch(error){console.error("repair reports",error);}
+  try{const p=await triggerProcessorBusinessJobs(env,"central_repair_all");result.processor=p?.success!==false;}catch(error){console.error("repair processor",error);}
   const status=Object.values(result).filter(Boolean).length>=3?"completed":"partial";
-  await env.PASARGUARD_DB.prepare("UPDATE repair_runs SET status=?,result_json=?,finished_at=? WHERE id=?").bind(status,JSON.stringify(result),nowIso(),runId).run();
-  await audit(env,account.user.id,"central_repair_all",{runId,status,result});
-  return {runId,status,...result};
+  if(tracking){try{await env.PASARGUARD_DB.prepare("UPDATE repair_runs SET status=?,result_json=?,finished_at=? WHERE id=?").bind(status,JSON.stringify(result),nowIso(),runId).run();}catch(_){}}
+  try{await audit(env,account.user.id,"central_repair_all",{runId,status,result});}catch(_){}
+  return {runId,status,tracking,...result};
 }
 
 function parseAdminTelegramIds(raw) {
@@ -12998,6 +13151,37 @@ async function telegramWebhook(request, env, ctx = null) {
   return json({ ok: true });
 }
 
+async function emergencyTelegramToken(env) {
+  if (env?.BOT_TOKEN) return String(env.BOT_TOKEN);
+  try {
+    const row = await env.PASARGUARD_DB.prepare("SELECT value FROM app_settings WHERE key='bot_token' LIMIT 1").first();
+    return String(row?.value || "");
+  } catch (_) { return ""; }
+}
+
+async function safeTelegramWebhook(request, env, ctx = null) {
+  const backup = request.clone();
+  try {
+    return await telegramWebhook(request, env, ctx);
+  } catch (error) {
+    console.error("telegram webhook recovered from fatal error", error);
+    let update = {};
+    try { update = await backup.json(); } catch (_) {}
+    const chatId = update?.callback_query?.message?.chat?.id || update?.message?.chat?.id;
+    if (chatId) {
+      try {
+        const token = await emergencyTelegramToken(env);
+        if (token) await telegramApiWithToken(token,"sendMessage",{
+          chat_id:chatId,
+          text:"⚠️ خطای موقت داخلی مهار شد. ربات از دسترس خارج نشده؛ چند لحظه دیگر دوباره تلاش کنید.\nکد: CORE_RECOVERY_MODE"
+        });
+      } catch (_) {}
+    }
+    // Telegram must receive 200 so one broken update cannot create a retry storm.
+    return json({ ok: true, recovered: true, version: APP_VERSION });
+  }
+}
+
 async function setupStatus(env) {
   const bindingDetected = !!env.PASARGUARD_DB;
   if (!bindingDetected) {
@@ -13842,7 +14026,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.3.2';
+const BLUEPANEL_CORE_VERSION = '3.3.3';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
@@ -13923,22 +14107,16 @@ let bluePanelNextRequestUpdateCheckAt = 0;
 const BLUEPANEL_REQUEST_UPDATE_INTERVAL_MS = 60000;
 
 function scheduleRequestTriggeredUpdate(env, ctx, path) {
-  if (!ctx || typeof ctx.waitUntil !== "function") return;
-  if (path === "/health" || path.startsWith("/__bluepanel/") || path === "/telegram/webhook" || path.startsWith("/sales-bot/")) return;
-  const now = Date.now();
-  if (now < bluePanelNextRequestUpdateCheckAt) return;
-  bluePanelNextRequestUpdateCheckAt = now + BLUEPANEL_REQUEST_UPDATE_INTERVAL_MS;
-  ctx.waitUntil(automaticUpdateTick(env, {
-    source: "request",
-    intervalSeconds: Math.ceil(BLUEPANEL_REQUEST_UPDATE_INTERVAL_MS / 1000)
-  }).catch(error => console.error("request auto-update error", error)));
+  // Recovery rule: never run deployment logic from a normal user request.
+  // Updates run only from the explicit ZIP uploader or the isolated Cron task.
+  return;
 }
 
 export default {
   async fetch(request,env,ctx){
     const url=new URL(request.url),path=url.pathname.replace(/\/+$/,'')||'/';
     try {
-      scheduleLiveUsageBootstrap(env,ctx);
+      if(path!=='/telegram/webhook') scheduleLiveUsageBootstrap(env,ctx);
       scheduleRequestTriggeredUpdate(env,ctx,path);
       if(request.method==='OPTIONS') return new Response(null,{status:204,headers:{'access-control-allow-origin':'*','access-control-allow-methods':'GET,POST,OPTIONS','access-control-allow-headers':'content-type,x-telegram-init-data,x-web-session,authorization,x-bluepanel-public-origin'}});
       if(path==='/__bluepanel/internal/d1'&&request.method==='POST') return bluePanelCoreD1Rpc(request,env);
@@ -13949,7 +14127,7 @@ export default {
       if(['/payments/blupal/return','/return'].includes(path)&&request.method==='GET'){await ensureDb(env);const s=await getSettings(env);return new Response(centralBlupalReturnPage(s,url.origin,url),{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}});}
       if(path==='/payments/plisio/return'&&request.method==='GET'){await ensureDb(env);const s=await getSettings(env);return new Response(centralPlisioReturnPage(s,url.origin,url),{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}});}
       if(path==='/auth/control/magic'&&request.method==='GET') return Response.redirect(url.origin+'/control',302);
-      if(path==='/telegram/webhook'&&request.method==='POST') return telegramWebhook(request,env,ctx);
+      if(path==='/telegram/webhook'&&request.method==='POST') return safeTelegramWebhook(request,env,ctx);
       if(path==='/payments/blupal/webhook'&&request.method==='POST') return blupalWebhook(request,env,ctx);
       if(path==='/payments/plisio/callback'&&request.method==='POST') return plisioCallback(request,env);
       if(path==='/payments/cubepay/callback'&&['GET','POST'].includes(request.method)) return cubepayCallback(request,env);
@@ -13958,5 +14136,5 @@ export default {
       return new Response('Not found',{status:404});
     } catch(error){console.error('core fetch error',error);return bluePanelCoreJson({success:false,ok:false,role:'bluepanel-core',version:APP_VERSION,error:String(error?.message||error),code:'CORE_RUNTIME_ERROR'},500);}
   },
-  async scheduled(controller,env,ctx){scheduleLiveUsageBootstrap(env,ctx,true);ctx.waitUntil((async()=>{try{await ensureDb(env);await env.PASARGUARD_DB.prepare('DELETE FROM web_sessions WHERE expires_at<=?').bind(nowIso()).run();await env.PASARGUARD_DB.prepare('DELETE FROM web_login_codes WHERE expires_at<=? OR (consumed_at IS NOT NULL AND consumed_at<=?)').bind(nowIso(),new Date(Date.now()-3600000).toISOString()).run();await notifyVersionActivation(env);try{await processReportOutboxOnCore(env,300)}catch(error){console.error('core report flush before jobs error',error)}try{await syncPasarguardManagersForAllUsers(env,250)}catch(_){}if(!liveUsageNamespaceAvailable(env))await syncUsage(env,100);await reconcileAllAgencyBalanceStates(env,250);await processCentralTrialExpirations(env,100);const s=await getSettings(env);if(plisioRateMode(s)==='auto'&&String(s.plisio_fx_api_key||'').trim()){try{await refreshCentralPlisioFxRate(env)}catch(error){console.error('fx refresh error',error)}}if(s.payment_poll_enabled==='true'&&s.blupal_api_key)await pollPendingPayments(env,30);if(s.auto_delete_pending_invoices==='true')await cleanupStalePendingInvoices(env,{settings:s,limit:200});await automaticUpdateTick(env,{source:'cron'});await automaticPythonHelperTick(env,{source:'cron'});const processorResult=await triggerProcessorBusinessJobs(env,'core_cron_fallback');if(processorResult?.success===false)console.error('processor fallback error',processorResult.error);try{await processReportOutboxOnCore(env,300)}catch(error){console.error('core report flush after jobs error',error)}await env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_core_cron_at',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(nowIso(),nowIso()).run();}catch(error){console.error('core scheduled error',error)}})());}
+  async scheduled(controller,env,ctx){scheduleLiveUsageBootstrap(env,ctx,true);ctx.waitUntil((async()=>{try{await ensureDb(env);await env.PASARGUARD_DB.prepare('DELETE FROM web_sessions WHERE expires_at<=?').bind(nowIso()).run();await env.PASARGUARD_DB.prepare('DELETE FROM web_login_codes WHERE expires_at<=? OR (consumed_at IS NOT NULL AND consumed_at<=?)').bind(nowIso(),new Date(Date.now()-3600000).toISOString()).run();await notifyVersionActivation(env);try{await processReportOutboxOnCore(env,300)}catch(error){console.error('core report flush before jobs error',error)}try{await syncPasarguardManagersForAllUsers(env,250)}catch(_){}if(!liveUsageNamespaceAvailable(env))await syncUsage(env,100);await reconcileAllAgencyBalanceStates(env,250);await processCentralTrialExpirations(env,100);const s=await getSettings(env);if(plisioRateMode(s)==='auto'&&String(s.plisio_fx_api_key||'').trim()){try{await refreshCentralPlisioFxRate(env)}catch(error){console.error('fx refresh error',error)}}if(s.payment_poll_enabled==='true'&&s.blupal_api_key)await pollPendingPayments(env,30);if(s.auto_delete_pending_invoices==='true')await cleanupStalePendingInvoices(env,{settings:s,limit:200});try{await automaticUpdateTick(env,{source:'cron'})}catch(error){console.error('isolated auto update error',error)}await automaticPythonHelperTick(env,{source:'cron'});const processorResult=await triggerProcessorBusinessJobs(env,'core_cron_fallback');if(processorResult?.success===false)console.error('processor fallback error',processorResult.error);try{await processReportOutboxOnCore(env,300)}catch(error){console.error('core report flush after jobs error',error)}await env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_core_cron_at',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(nowIso(),nowIso()).run();}catch(error){console.error('core scheduled error',error)}})());}
 };
