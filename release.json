@@ -1,7 +1,7 @@
 {
-  "version": "3.3.5",
-  "release_id": "3.3.5-20260715-d1-reseller-growth-normalization-recovery",
-  "architecture": "fully-split-three-worker-normalized-growth-settings-d1-recovery",
+  "version": "3.3.6",
+  "release_id": "3.3.6-20260715-processor-auto-repair-runtime-isolation",
+  "architecture": "fully-split-three-worker-processor-self-healing-runtime",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -32,57 +32,48 @@
     ]
   },
   "features": [
-    "moves 13 BluePanel 3.3 growth and automation settings from reseller_bots into reseller_growth_settings",
-    "prevents any new ALTER TABLE operation for the 13 settings that caused sqlite_altertab_reseller_bots column-limit failures",
-    "self-heals databases left with one or more partially added 3.3 columns and copies those values into the normalized table",
-    "keeps the original reseller_bots table at the stable 3.2 column layout for fresh installations",
-    "hydrates growth settings transparently in Core, Edge and Processor so previous feature behavior remains available",
-    "updates toggles, low-balance thresholds, reseller tiers, auto-renew and service-health jobs to use the normalized table",
-    "splits snapshot restore between legacy reseller settings and normalized growth settings",
-    "retains emergency fail-open Telegram webhook behavior and all previous 3.2/3.3 fixes",
+    "repairs Processor from the central bot by testing the current runtime, deploying processor/worker.js from GitHub when needed and retrying the Service Binding",
+    "prevents D1 telemetry writes from converting a successful Processor request into a false failure",
+    "isolates every Processor business job so one optional task cannot stop all scheduled processing",
+    "returns exact Processor repair error, action, version and deployment state in the Telegram repair result",
+    "marks repair status completed only when all five repair groups, including Processor, actually succeed",
+    "keeps normalized reseller_growth_settings and all previous D1 recovery protections",
     "README files are excluded"
   ],
   "deployment": {
-    "emergency_recovery": "deploy core/worker.js once to the existing Core Worker because the currently running recovery Core cannot complete a ZIP rollout while schema bootstrap is failing; after the bot returns, upload this full ZIP through the central bot",
-    "automatic_provisioning": "supported from the central bot ZIP uploader after Core recovery",
+    "automatic_provisioning": "upload the ZIP through the central bot; no manual D1 action is required",
+    "processor_repair_flow": "current runtime test -> automatic Processor deploy -> source verification -> repeated runtime test -> business job execution",
     "required_binding_name": "LIVE_USAGE_COORDINATOR",
     "required_class_name": "LiveUsageCoordinator",
     "migration_tag": "v3.1.9-live-usage (unchanged)",
-    "db_schema_revision": "3.3.5",
+    "db_schema_revision": "3.3.5 (unchanged; no new schema migration)",
     "cron": "existing schedules may remain"
   },
   "validation": {
-    "node_syntax_core": "passed",
-    "node_syntax_edge": "passed",
-    "node_syntax_processor": "passed",
-    "module_import_core": "passed",
-    "module_import_edge": "passed",
-    "module_import_processor": "passed",
-    "fresh_schema_execution": "passed",
-    "fresh_reseller_bots_column_count": 98,
-    "normalized_growth_table_column_count": 16,
-    "partial_3_3_migration_simulation_100_columns": "passed",
-    "legacy_growth_value_copy": "passed",
-    "legacy_required_reseller_columns_present": "passed",
+    "node_syntax_core": "pending",
+    "node_syntax_edge": "pending",
+    "node_syntax_processor": "pending",
+    "processor_telemetry_fail_open": "passed by static assertion",
+    "processor_step_isolation": "passed by static assertion",
+    "repair_completed_requires_processor": "passed by static assertion",
     "release_manifest_hashes": "recalculated",
-    "zip_integrity": "passed after packaging",
+    "zip_integrity": "pending",
     "live_cloudflare_deployment": "not run without production credentials"
   },
   "limitations": [
-    "the first recovery step still requires deploying the Core file once because the currently running Core is already trapped in schema recovery mode",
     "production Cloudflare, Telegram and PasarGuard calls were not executed without account credentials",
-    "legacy partial growth columns already added to reseller_bots are left in place but are no longer read or written"
+    "automatic Processor repair still requires the PROCESSOR_WORKER Service Binding and stored Cloudflare/GitHub deployment settings"
   ],
   "sha256": {
-    "core": "497f00902d670a17067291f4ec376eec9bf0c08dcdf6c5049128248d3c5daa9b",
-    "edge": "95a4e94c3b4bd605280780a335ca4c896488fc2ac9e83547954049d7b50fd2ce",
-    "processor": "c82471f0700928eb712d49f1a0701b63d3d686ed7ad084c3c4824a6f7d9547e3",
+    "core": "b7ff6d93461037039f8a77ba7f5fb4029168170cf02de7878066863b3754f1eb",
+    "edge": "de94d4dc8680480e44efd128d2decc949551d34cdb3058bfc013c57289d5c61f",
+    "processor": "25e9e3fe0752f61b347df835a8ef731356810aac194fb718dd6fa8f29b711ddb",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "hashes": {
-    "core/worker.js": "497f00902d670a17067291f4ec376eec9bf0c08dcdf6c5049128248d3c5daa9b",
-    "edge/worker.js": "95a4e94c3b4bd605280780a335ca4c896488fc2ac9e83547954049d7b50fd2ce",
-    "processor/worker.js": "c82471f0700928eb712d49f1a0701b63d3d686ed7ad084c3c4824a6f7d9547e3",
+    "core/worker.js": "b7ff6d93461037039f8a77ba7f5fb4029168170cf02de7878066863b3754f1eb",
+    "edge/worker.js": "de94d4dc8680480e44efd128d2decc949551d34cdb3058bfc013c57289d5c61f",
+    "processor/worker.js": "25e9e3fe0752f61b347df835a8ef731356810aac194fb718dd6fa8f29b711ddb",
     "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   }
 }

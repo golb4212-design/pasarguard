@@ -1,11 +1,11 @@
 /* BLUEPANEL_PROCESSOR_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.5
+ * Version: 3.3.6
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = "3.3.5";
+const APP_VERSION = "3.3.6";
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
@@ -1996,7 +1996,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_PROCESSOR_VERSION='3.3.5';
+const BLUEPANEL_PROCESSOR_VERSION='3.3.6';
 let processorSchemaPromise=null;
 function processorJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 
@@ -2251,35 +2251,45 @@ async function processorLocalHealth(env){let db=false,error='';try{await ensureP
 async function processorProbePeer(binding,url,expectedRole,name){const started=Date.now();if(!binding||typeof binding.fetch!=='function')return{binding_detected:false,healthy:false,reachable:false,latency_ms:0,error:name+' متصل نیست'};try{const timeout=new Promise((_,reject)=>setTimeout(()=>reject(new Error('مهلت پاسخ تمام شد')),2500));const response=await Promise.race([binding.fetch(new Request(url,{headers:{'x-bluepanel-service-hop':'processor-public-health','accept':'application/json'}})),timeout]);const raw=await response.text();let data={};try{data=raw?JSON.parse(raw):{}}catch(_){return{binding_detected:true,healthy:false,reachable:true,http_status:response.status,latency_ms:Date.now()-started,error:'پاسخ JSON نیست'}}const healthy=response.ok&&data.role===expectedRole&&data.database_query_ok!==false;return{binding_detected:true,healthy,reachable:true,http_status:response.status,latency_ms:Date.now()-started,response_role:data.role||'',response_version:data.version||'',error:healthy?'':(data.error||'پاسخ ناسالم')}}catch(e){return{binding_detected:true,healthy:false,reachable:false,latency_ms:Date.now()-started,error:String(e?.message||e)}}}
 async function processorHealth(env){const local=await processorLocalHealth(env);const [coreProbe,edgeProbe]=await Promise.all([processorProbePeer(env.CORE_WORKER,'https://bluepanel-core.internal/__bluepanel/service/core-local-health','bluepanel-core','CORE_WORKER'),processorProbePeer(env.EDGE_WORKER,'https://bluepanel-edge.internal/__bluepanel/service/edge-local-health','bluepanel-edge','EDGE_WORKER')]);const coreOk=coreProbe.healthy===true,edgeOk=edgeProbe.healthy===true;return{...local,ok:local.database_query_ok&&coreOk&&edgeOk,cluster_ready:local.database_query_ok&&coreOk&&edgeOk,core_ok:coreOk,edge_ok:edgeOk,core_probe:coreProbe,edge_probe:edgeProbe,verification_mode:'direct_outbound_no_cycle',error:local.error||coreProbe.error||edgeProbe.error||''}}
 async function runProcessorBusinessJobs(runtime, options = {}){
-  const started=Date.now(),startedAt=nowIso();
-  const topicSync=await syncConfiguredReportTopics(runtime,25);
-  const outboxBefore=await processReportOutbox(runtime,200);
-  if (options.skipUsage !== true) await syncDownlineUsage(runtime,null,100);
-  await processSalesServiceNotifications(runtime,30);
-  await processResellerSalesAutomation(runtime,120);
-  await processSalesTicketAutoClose(runtime,100);
-  await processScheduledSalesCampaigns(runtime,5);
-  await processResellerDailyReports(runtime,50);
-  await processCentralComprehensiveReport(runtime);
-  await processResellerAutoBackups(runtime,50);
-  await processResellerScheduledHealth(runtime,30);
-  await processResellerLicenseNotifications(runtime,100);
-  const autoRenew=await processAutoRenewals(runtime,30);
-  const lowBalance=await processRepresentativeLowBalance(runtime,60);
-  const tiers=await processResellerTiers(runtime,100);
-  const serviceHealth=await processServiceHealthAndFailover(runtime,40);
-  await pollPendingSalesBlupalPayments(runtime,60);
-  const outboxAfter=await processReportOutbox(runtime,200);
+  const started=Date.now(),startedAt=nowIso(),errors=[];
+  const safeStep=async(name,fn,fallback={})=>{
+    try{return await fn();}
+    catch(error){
+      const message=cleanText(error?.message||error,800);
+      errors.push({step:name,error:message});
+      try{await recordSystemError(runtime,"processor_job",null,"PROCESSOR_STEP_"+String(name).toUpperCase().replace(/[^A-Z0-9]+/g,"_"),message,{step:name});}catch(_){}
+      return {...fallback,failed:true,error:message};
+    }
+  };
+  const topicSync=await safeStep("topic_sync",()=>syncConfiguredReportTopics(runtime,25),{checked:0});
+  const outboxBefore=await safeStep("outbox_before",()=>processReportOutbox(runtime,200),{checked:0,delivered:0,failed:1});
+  if (options.skipUsage !== true) await safeStep("usage",()=>syncDownlineUsage(runtime,null,100));
+  await safeStep("notifications",()=>processSalesServiceNotifications(runtime,30));
+  await safeStep("sales_automation",()=>processResellerSalesAutomation(runtime,120));
+  await safeStep("ticket_autoclose",()=>processSalesTicketAutoClose(runtime,100));
+  await safeStep("campaigns",()=>processScheduledSalesCampaigns(runtime,5));
+  await safeStep("daily_reports",()=>processResellerDailyReports(runtime,50));
+  await safeStep("central_report",()=>processCentralComprehensiveReport(runtime));
+  await safeStep("backups",()=>processResellerAutoBackups(runtime,50));
+  await safeStep("reseller_health",()=>processResellerScheduledHealth(runtime,30));
+  await safeStep("license_notifications",()=>processResellerLicenseNotifications(runtime,100));
+  const autoRenew=await safeStep("auto_renew",()=>processAutoRenewals(runtime,30),{checked:0,renewed:0,failed:1});
+  const lowBalance=await safeStep("low_balance",()=>processRepresentativeLowBalance(runtime,60),{checked:0,notified:0,failed:1});
+  const tiers=await safeStep("reseller_tiers",()=>processResellerTiers(runtime,100),{checked:0,changed:0,failed:1});
+  const serviceHealth=await safeStep("service_health",()=>processServiceHealthAndFailover(runtime,40),{checked:0,healthy:0,failed:1,failovers:0});
+  await safeStep("payment_poll",()=>pollPendingSalesBlupalPayments(runtime,60));
+  const outboxAfter=await safeStep("outbox_after",()=>processReportOutbox(runtime,200),{checked:0,delivered:0,failed:1});
   const result={
-    started_at:startedAt,duration_ms:Date.now()-started,topic_sync:topicSync,
+    started_at:startedAt,duration_ms:Date.now()-started,partial:errors.length>0,error_count:errors.length,errors,topic_sync:topicSync,
     auto_renew:autoRenew,low_balance:lowBalance,reseller_tiers:tiers,service_health:serviceHealth,
     outbox:{checked:Number(outboxBefore?.checked||0)+Number(outboxAfter?.checked||0),delivered:Number(outboxBefore?.delivered||0)+Number(outboxAfter?.delivered||0),failed:Number(outboxBefore?.failed||0)+Number(outboxAfter?.failed||0)}
   };
   const ts=nowIso();
-  await runtime.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_processor_business_run_at',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(ts,ts).run();
-  await runtime.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_report_processor_result',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(JSON.stringify(result),ts).run();
+  try{await runtime.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_processor_business_run_at',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(ts,ts).run();}catch(_){}
+  try{await runtime.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_report_processor_result',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(JSON.stringify(result),ts).run();}catch(_){}
   return result;
 }
+
 export default {
  async fetch(request,env,ctx){const path=new URL(request.url).pathname.replace(/\/+$/,'')||'/';try{if(path==='/__bluepanel/service/queue'&&processorInternal(request)&&request.method==='POST')return processorQueue(request,env);if(path==='/__bluepanel/service/process'&&processorInternal(request)&&request.method==='POST'){const runtime=bluePanelRuntimeEnv(env,'bluepanel-processor');const queue=await processorRunQueue(env,150);const skipUsage=String(request.headers.get('x-bluepanel-live-usage-active')||'')==='true';const business=await runProcessorBusinessJobs(runtime,{skipUsage});return processorJson({success:true,queue,business})}if((path==='/__bluepanel/service/processor-local-health'||path==='/__bluepanel/service/processor-health')&&processorInternal(request)){const h=await processorLocalHealth(env);return processorJson(h,h.ok?200:503,{'x-bluepanel-role':'bluepanel-processor','x-bluepanel-version':APP_VERSION})}if(path==='/health'){const h=await processorHealth(env);return processorJson(h,h.ok?200:503)}if(path==='/'&&request.method==='GET'){const h=await processorHealth(env);return new Response('<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{background:#07111f;color:#fff;font-family:Tahoma;padding:30px}.c{max-width:680px;margin:auto;background:#112944;padding:24px;border-radius:24px}.ok{color:#35d59a}.bad{color:#ff667b}</style><div class="c"><h1>BluePanel Processor</h1><p class="'+(h.ok?'ok':'bad')+'">'+(h.ok?'اتصال کامل برقرار است':'اتصال کامل نیست')+'</p><pre>'+JSON.stringify(h,null,2)+'</pre></div></html>',{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}})}return processorJson({success:false,error:'Not found'},404)}catch(error){console.error('processor fetch error',error);return processorJson({success:false,ok:false,role:'bluepanel-processor',version:APP_VERSION,error:String(error?.message||error),code:'PROCESSOR_RUNTIME_ERROR'},500)}},
  async scheduled(controller,env,ctx){ctx.waitUntil((async()=>{try{const runtime=bluePanelRuntimeEnv(env,'bluepanel-processor');await processorRunQueue(env,200);await runProcessorBusinessJobs(runtime);await env.PROCESSOR_DB.prepare("DELETE FROM processor_jobs WHERE status='delivered' AND updated_at<?").bind(new Date(Date.now()-86400000).toISOString()).run()}catch(error){console.error('processor scheduled error',error)}})())}

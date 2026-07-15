@@ -1,15 +1,25 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.5
+ * Version: 3.3.6
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.3.5";
+const APP_VERSION = "3.3.6";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.6": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🧰", text: "ترمیم واقعی Processor با اجرای مجدد، Deploy خودکار و بررسی چندمرحله‌ای Runtime" },
+      { emoji: "🧾", text: "جلوگیری از نمایش خطای کاذب Processor هنگام شکست ثبت تله‌متری در D1" },
+      { emoji: "🩺", text: "نمایش علت دقیق شکست Processor در نتیجه تعمیر خودکار و اصلاح وضعیت completed/partial" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "⚙️", text: "پایداری بیشتر پردازش‌های زمان‌بندی‌شده و جلوگیری از توقف کل Processor با خطای یک وظیفه" }
+    ])
+  }),
   "3.3.5": Object.freeze({
     central: Object.freeze([
       { emoji: "🧯", text: "رفع کامل خطای D1 too many columns با انتقال تنظیمات رشد از جدول اصلی نمایندگان به جدول جداگانه" },
@@ -7274,23 +7284,34 @@ async function triggerProcessorBusinessJobs(env, source = "core") {
   }
   const started = Date.now();
   try {
-    const response = await env.PROCESSOR_WORKER.fetch(new Request("https://bluepanel-processor.internal/__bluepanel/service/process", {
+    const response = await env.PROCESSOR_WORKER.fetch(new Request("https://bluepanel-processor.internal/__bluepanel/service/process?_bp_repair=" + Date.now(), {
       method: "POST",
-      headers: { "content-type": "application/json", "x-bluepanel-service-hop": "core-to-processor", "x-bluepanel-process-source": cleanText(source, 80), "x-bluepanel-live-usage-active": liveUsageNamespaceAvailable(env) ? "true" : "false" },
+      headers: { "content-type": "application/json", "cache-control": "no-cache", "x-bluepanel-service-hop": "core-to-processor", "x-bluepanel-process-source": cleanText(source, 80), "x-bluepanel-live-usage-active": liveUsageNamespaceAvailable(env) ? "true" : "false" },
       body: "{}"
     }));
-    const data = await response.json().catch(() => ({}));
+    const raw = await response.text();
+    let data = {};
+    try { data = raw ? JSON.parse(raw) : {}; } catch (_) {
+      data = { error: "پاسخ Processor JSON نیست", response_preview: raw.slice(0, 300) };
+    }
     const ts = nowIso();
-    await env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_processor_trigger_at',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at")
-      .bind(ts, ts).run();
+    // Telemetry must never turn a successful Processor response into a failure.
+    try {
+      await env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_processor_trigger_at',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at")
+        .bind(ts, ts).run();
+    } catch (telemetryError) { console.error("processor trigger telemetry unavailable", telemetryError); }
     if (!response.ok || data?.success === false) {
       const error = cleanText(data?.error || ("Processor HTTP " + response.status), 500);
-      await env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_processor_trigger_error',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at")
-        .bind(error, ts).run();
-      return { success: false, error, http_status: response.status, duration_ms: Date.now() - started };
+      try {
+        await env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_processor_trigger_error',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at")
+          .bind(error, ts).run();
+      } catch (_) {}
+      return { success: false, error, code: data?.code || "PROCESSOR_REQUEST_FAILED", http_status: response.status, duration_ms: Date.now() - started, diagnostics: data };
     }
-    await env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_processor_trigger_error','',?) ON CONFLICT(key) DO UPDATE SET value='',updated_at=excluded.updated_at")
-      .bind(ts).run();
+    try {
+      await env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_processor_trigger_error','',?) ON CONFLICT(key) DO UPDATE SET value='',updated_at=excluded.updated_at")
+        .bind(ts).run();
+    } catch (_) {}
     return { success: true, ...data, duration_ms: Date.now() - started };
   } catch (error) {
     const ts = nowIso();
@@ -7299,7 +7320,7 @@ async function triggerProcessorBusinessJobs(env, source = "core") {
       await env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_processor_trigger_error',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at")
         .bind(message, ts).run();
     } catch (_) {}
-    return { success: false, error: message, duration_ms: Date.now() - started };
+    return { success: false, error: message, code: "PROCESSOR_BINDING_CALL_FAILED", duration_ms: Date.now() - started };
   }
 }
 
@@ -7480,6 +7501,49 @@ async function deployProcessorWorkerFromGithub(env, force = false, targetVersion
   const sourceVerification = await verifyCloudflareWorkerContent(settings, scriptName, deployedVersion, "BLUEPANEL_PROCESSOR_WORKER", 6);
   await setSettings(env, { processor_worker_script_name: scriptName, processor_worker_last_sha: codeSha, processor_worker_last_version: deployedVersion, processor_worker_last_deployed_at: nowIso(), processor_worker_last_error: "", github_processor_worker_file: file });
   return { deployed: true, verified: true, source_verification: sourceVerification, sha: codeSha, script_name: scriptName, version: deployedVersion };
+}
+
+async function repairProcessorRuntime(env) {
+  const attempts = [];
+  let lastError = "";
+  const testRuntime = async (stage) => {
+    let health = null;
+    try { health = await inspectProcessorServiceBinding(env); }
+    catch (error) { health = { connected: false, error: cleanText(error?.message || error, 500) }; }
+    const run = await triggerProcessorBusinessJobs(env, "central_repair_" + stage);
+    const success = run?.success === true;
+    lastError = success ? "" : cleanText(run?.error || health?.error || "Processor پاسخ سالم نداد", 700);
+    attempts.push({ stage, success, health_status: health?.status || "", health_version: health?.version || health?.probe?.response_version || "", error: lastError, http_status: run?.http_status || null });
+    return { success, health, run };
+  };
+
+  const current = await testRuntime("existing");
+  if (current.success) return { success: true, action: "existing_runtime", deployed: false, version: current.health?.version || "", attempts, run: current.run };
+
+  let deployment = null;
+  try {
+    deployment = await deployProcessorWorkerFromGithub(env, true, APP_VERSION);
+    if (deployment?.skipped) {
+      lastError = cleanText(deployment.hint || deployment.reason || "استقرار Processor انجام نشد", 700);
+      attempts.push({ stage: "deploy", success: false, skipped: true, reason: deployment.reason || "", error: lastError });
+      return { success: false, action: "deploy_skipped", deployed: false, error: lastError, deployment, attempts };
+    }
+    attempts.push({ stage: "deploy", success: deployment?.verified === true || deployment?.deployed === true, version: deployment?.version || "", script_name: deployment?.script_name || "" });
+  } catch (error) {
+    lastError = cleanText(error?.message || error, 700);
+    attempts.push({ stage: "deploy", success: false, error: lastError });
+    return { success: false, action: "deploy_failed", deployed: false, error: lastError, attempts };
+  }
+
+  for (let i = 0; i < 8; i++) {
+    if (i > 0) await new Promise(resolve => setTimeout(resolve, 900 + Math.min(i, 4) * 300));
+    const checked = await testRuntime("after_deploy_" + (i + 1));
+    if (checked.success) {
+      try { await persistProcessorServiceState(env, checked.health, { enable: true }); } catch (_) {}
+      return { success: true, action: "deployed_and_restarted", deployed: true, version: deployment?.version || checked.health?.version || APP_VERSION, deployment, attempts, run: checked.run };
+    }
+  }
+  return { success: false, action: "runtime_not_ready", deployed: true, version: deployment?.version || APP_VERSION, error: lastError || "کد Processor نصب شد اما Runtime هنوز پاسخ سالم نداد", deployment, attempts };
 }
 
 async function checkUpdate(env) {
@@ -9895,7 +9959,7 @@ async function botAdminErrorCenterView(env, account) {
 }
 
 async function runCentralRepairAll(env, account) {
-  const runId=id("repair"),ts=nowIso(),result={menus:false,health:false,backups:false,reports:false,processor:false};
+  const runId=id("repair"),ts=nowIso(),result={menus:false,health:false,backups:false,reports:false,processor:false,processor_error:"",processor_action:"",processor_version:"",processor_deployed:false};
   let tracking=false;
   try {
     await ensureDeploymentTrackingTables(env);
@@ -9906,8 +9970,16 @@ async function runCentralRepairAll(env, account) {
   try{await runAllResellerHealthChecks(env,100);result.health=true;}catch(error){console.error("repair health",error);}
   try{await createAllResellerBackups(env,100);result.backups=true;}catch(error){console.error("repair backups",error);}
   try{await processReportOutboxOnCore(env,300);result.reports=true;}catch(error){console.error("repair reports",error);}
-  try{const p=await triggerProcessorBusinessJobs(env,"central_repair_all");result.processor=p?.success!==false;}catch(error){console.error("repair processor",error);}
-  const status=Object.values(result).filter(Boolean).length>=3?"completed":"partial";
+  try{
+    const repaired=await repairProcessorRuntime(env);
+    result.processor=repaired?.success===true;
+    result.processor_error=result.processor?"":cleanText(repaired?.error||"Processor ترمیم نشد",700);
+    result.processor_action=cleanText(repaired?.action||"",120);
+    result.processor_version=cleanText(repaired?.version||"",80);
+    result.processor_deployed=repaired?.deployed===true;
+    result.processor_attempts=repaired?.attempts||[];
+  }catch(error){result.processor_error=cleanText(error?.message||error,700);console.error("repair processor",error);}
+  const status=result.menus&&result.health&&result.backups&&result.reports&&result.processor?"completed":"partial";
   if(tracking){try{await env.PASARGUARD_DB.prepare("UPDATE repair_runs SET status=?,result_json=?,finished_at=? WHERE id=?").bind(status,JSON.stringify(result),nowIso(),runId).run();}catch(_){}}
   try{await audit(env,account.user.id,"central_repair_all",{runId,status,result});}catch(_){}
   return {runId,status,tracking,...result};
@@ -11579,7 +11651,7 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
   if (data === "bot:admin:repair_all") {
     if(!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
     const result=await runCentralRepairAll(env,account);
-    await botPrompt(env,chatId,"🧰 <b>تعمیر خودکار پایان یافت</b>\nوضعیت: <b>"+botEscape(result.status)+"</b>\nمنوها: "+(result.menus?"✅":"❌")+" · سلامت: "+(result.health?"✅":"❌")+" · بکاپ: "+(result.backups?"✅":"❌")+" · گزارش: "+(result.reports?"✅":"❌")+" · Processor: "+(result.processor?"✅":"❌"),[[{text:"↩️ مرکز خطا",callback_data:"bot:admin:errors"}]]);
+    await botPrompt(env,chatId,"🧰 <b>تعمیر خودکار پایان یافت</b>\nوضعیت: <b>"+botEscape(result.status)+"</b>\nمنوها: "+(result.menus?"✅":"❌")+" · سلامت: "+(result.health?"✅":"❌")+" · بکاپ: "+(result.backups?"✅":"❌")+" · گزارش: "+(result.reports?"✅":"❌")+" · Processor: "+(result.processor?"✅":"❌")+(result.processor_version?"\nنسخه Processor: <code>"+botEscape(result.processor_version)+"</code>":"")+(result.processor_deployed?" · Deploy خودکار: ✅":"")+(result.processor_error?"\n⚠️ علت: <code>"+botEscape(result.processor_error)+"</code>":""),[[{text:"↩️ مرکز خطا",callback_data:"bot:admin:errors"}]]);
     return;
   }
   if (data === "bot:admin:reseller_backup_all") {
@@ -14086,7 +14158,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.3.5';
+const BLUEPANEL_CORE_VERSION = '3.3.6';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
