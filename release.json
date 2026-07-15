@@ -1,7 +1,7 @@
 {
-  "version": "3.3.2",
-  "release_id": "3.3.2-20260715-release-rollouts-emergency-bootstrap-fix",
-  "architecture": "fully-split-three-worker-growth-suite-rollout-bootstrap-self-healing",
+  "version": "3.3.4",
+  "release_id": "3.3.4-20260715-emergency-webhook-runtime-recovery-fail-open-rollout",
+  "architecture": "fully-split-three-worker-growth-suite-emergency-fail-open-runtime",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -9,8 +9,8 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "roles": {
-    "core": "central bot, D1 authority, payment callbacks, report outbox and Durable Object live usage engine",
-    "edge": "reseller bots, customer miniapps and imported-subscription lifecycle",
+    "core": "central bot, D1 authority, payment callbacks, report outbox, safe update controller and Durable Object live usage engine",
+    "edge": "reseller bots, customer miniapps and imported-subscription lifecycle with fail-open Telegram webhook acknowledgement",
     "processor": "optional advanced schedules, backups, campaigns and background reports"
   },
   "bindings": {
@@ -18,7 +18,7 @@
       "PASARGUARD_DB",
       "EDGE_WORKER",
       "PROCESSOR_WORKER (optional)",
-      "LIVE_USAGE_COORDINATOR -> class LiveUsageCoordinator (required for cron-free live usage)"
+      "LIVE_USAGE_COORDINATOR -> class LiveUsageCoordinator"
     ],
     "edge": [
       "EDGE_DB",
@@ -32,49 +32,58 @@
     ]
   },
   "features": [
-    "creates release_rollouts and system_error_center immediately before the first staged-deployment write",
-    "the emergency bootstrap does not trust the cached schemaReady flag or an older db_schema_revision marker",
-    "prevents D1_ERROR no such table release_rollouts from aborting GitHub-to-Cloudflare deployment",
-    "retains the full 3.3.1 schema revision guard and all 3.3 growth, loyalty, health and automation features",
+    "Telegram central webhook always acknowledges with HTTP 200 after containing an internal failure, preventing retry storms and total bot lockup",
+    "reseller Telegram webhooks also fail open with HTTP 200 when Core or remote D1 is temporarily unavailable",
+    "normal user requests never trigger GitHub or Cloudflare deployment checks",
+    "Cron update errors are isolated from the rest of scheduled maintenance jobs",
+    "release_rollouts, system_error_center and repair_runs are optional observability tables and cannot block deployment or bot runtime",
+    "staged deployment continues to preserve Core when Edge or Processor does not deploy successfully",
+    "error-center and repair-all screens operate in degraded mode instead of crashing when tracking tables are unavailable",
+    "database schema revision remains 3.3.3 because this rescue release adds no schema change, avoiding a heavy migration on the recovery request",
+    "retains all 3.3 growth, loyalty, service-health, D1 self-healing and previous 3.2 fixes",
     "README files are excluded"
   ],
   "deployment": {
+    "emergency_recovery": "paste or upload core/worker.js to the existing Core Worker and deploy once; then upload this ZIP through the restored central bot",
+    "automatic_provisioning": "supported from the central bot ZIP uploader after Core recovery",
     "required_binding_name": "LIVE_USAGE_COORDINATOR",
     "required_class_name": "LiveUsageCoordinator",
-    "migration_tag": "v3.1.9-live-usage (unchanged; no new Durable Object migration)",
-    "automatic_provisioning": "supported after the one-time legacy D1 bootstrap or a manual Core deployment",
+    "migration_tag": "v3.1.9-live-usage (unchanged)",
     "manual_config_file": "core/wrangler.live-usage.example.toml",
-    "activation": "for an already-failing 3.3.0 runtime, create release_rollouts once in D1 or manually deploy the new Core, then deploy all three workers",
-    "cron": "the existing 10-minute central cron can remain; it is not used for live usage while the Durable Object binding is active"
+    "cron": "existing central cron may remain; update failures are isolated and live usage stays on Durable Object when configured"
   },
   "validation": {
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "db_schema_revision": "3.3.2",
-    "deployment_tracking_bootstrap_precedes_rollout_insert": "passed",
-    "fresh_sqlite_release_rollouts_insert": "passed",
-    "idempotent_tracking_bootstrap": "passed",
+    "module_import_core": "passed",
+    "module_import_edge": "passed",
+    "module_import_processor": "passed",
+    "central_webhook_missing_d1_returns_200": "passed",
+    "reseller_webhook_missing_core_binding_returns_200": "passed",
+    "request_triggered_update_disabled": "passed",
+    "rollout_tracking_fail_open": "passed",
+    "db_schema_revision": "3.3.3",
     "release_manifest_hashes": "recalculated",
     "zip_integrity": "passed",
-    "live_d1_migration": "not run without production binding"
+    "live_cloudflare_deployment": "not run without production credentials"
   },
+  "limitations": [
+    "a Worker whose D1 or Service Binding was manually removed still requires that binding to be restored in Cloudflare settings",
+    "the emergency HTTP 200 response prevents Telegram retry storms but cannot complete a business operation while its required dependency is unavailable",
+    "representative low-balance automation does not charge a bank card without a payment mandate",
+    "automatic failover must be explicitly enabled by the reseller"
+  ],
   "sha256": {
-    "core": "607af15fe3f84825b83ff6a6eb92851e24211644ae0b3943a887d32f90744b2a",
-    "edge": "bf062f2dff75a23574ecd4c1ee484e011a4b8acee8b4aa49ed35bbe0aa07c50a",
-    "processor": "193250896fce1bfd03eaed2460844c907b744e380b43f4676cdac051b1460683",
+    "core": "f9104066bea5ab39c2ce15d737015bf53a264ac8faead849db53cfee54044c64",
+    "edge": "7bdfedb2b268dc9b56fa294e9b11efc295989d8d2c0050d00fa9d30b08d15d53",
+    "processor": "6a3236011a2bfb429d13578ac0493e0b1e2434929e17d271a0a3837840b7362d",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "hashes": {
-    "core/worker.js": "607af15fe3f84825b83ff6a6eb92851e24211644ae0b3943a887d32f90744b2a",
-    "edge/worker.js": "bf062f2dff75a23574ecd4c1ee484e011a4b8acee8b4aa49ed35bbe0aa07c50a",
-    "processor/worker.js": "193250896fce1bfd03eaed2460844c907b744e380b43f4676cdac051b1460683",
+    "core/worker.js": "f9104066bea5ab39c2ce15d737015bf53a264ac8faead849db53cfee54044c64",
+    "edge/worker.js": "7bdfedb2b268dc9b56fa294e9b11efc295989d8d2c0050d00fa9d30b08d15d53",
+    "processor/worker.js": "6a3236011a2bfb429d13578ac0493e0b1e2434929e17d271a0a3837840b7362d",
     "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
-  },
-  "limitations": [
-    "a currently deployed 3.3.0 Core fails before it can deploy a patched Core if release_rollouts is absent; run the included one-time SQL in D1 or manually deploy core/worker.js once",
-    "representative low-balance automation does not charge a bank card without a payment mandate",
-    "QR subscription import is optional and sends the selected QR image to the external qrserver decoder endpoint",
-    "automatic failover must be explicitly enabled by the reseller"
-  ]
+  }
 }
