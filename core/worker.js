@@ -1,15 +1,26 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.2.7
+ * Version: 3.2.8
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.2.7";
+const APP_VERSION = "3.2.8";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.2.8": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🌍", text: "حذف مرحله انتخاب لوکیشن وقتی فقط یک لوکیشن دارای پلن فعال وجود دارد" },
+      { emoji: "🧹", text: "رفع تکرار عنوان محصول و حجم در نمایش پلن‌های فروش" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "⚡", text: "انتخاب خودکار تنها لوکیشن و ورود مستقیم به دسته‌بندی یا پلن‌ها" },
+      { emoji: "📦", text: "نمایش تمیز پلن با حجم در ابتدا، مدت در میانه و مبلغ در انتها" },
+      { emoji: "🔁", text: "حذف ردیف تکراری یک پلن در نتیجه نمایش فروشگاه" }
+    ])
+  }),
   "3.2.6": Object.freeze({
     central: Object.freeze([
       { emoji: "✍️", text: "افزودن انتخاب نام اشتراک توسط کاربر پیش از پرداخت در ربات‌های نماینده" },
@@ -13406,7 +13417,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.2.7';
+const BLUEPANEL_CORE_VERSION = '3.2.8';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {

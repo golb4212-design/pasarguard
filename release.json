@@ -1,7 +1,7 @@
 {
-  "version": "3.2.7",
-  "release_id": "3.2.7-20260715-manual-telegram-profile-fields-final",
-  "architecture": "fully-split-three-worker-manual-telegram-profile-fields-final",
+  "version": "3.2.8",
+  "release_id": "3.2.8-20260715-single-location-and-product-duplicate-fix",
+  "architecture": "fully-split-three-worker-single-location-product-display-fixed",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -32,12 +32,14 @@
     ]
   },
   "features": [
-    "disables every automatic Telegram full-description update for central and reseller bots",
-    "disables every automatic Telegram short-description/Bio update for central and reseller bots",
-    "webhook repair, version synchronization and menu synchronization no longer overwrite bot profile text",
-    "bot owners configure both Telegram profile fields manually",
-    "existing manually configured profile values are not cleared by this update",
-    "all 3.2.6 subscription-name and earlier billing/payment fixes are preserved",
+    "automatically selects the only active sales location and skips the location-selection screen",
+    "hides change-location and back-to-locations buttons when only one active location exists",
+    "adjusts purchase step numbering from three steps to two steps for a single-location storefront",
+    "removes duplicated product title and normalized volume from plan buttons and selected-plan details",
+    "removes the duplicate sale:plans route so returning to products no longer restarts or repeats the purchase flow",
+    "deduplicates identical plan result rows by plan id before rendering",
+    "keeps volume at the beginning and amount at the end of each plan button",
+    "manual Telegram profile fields and all previous usage/payment fixes remain preserved",
     "README files are excluded"
   ],
   "deployment": {
@@ -53,21 +55,26 @@
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
+    "single_location_auto_skip": "passed by static route and session propagation checks",
+    "single_location_buttons_hidden": "passed",
+    "plan_title_volume_deduplication": "passed",
+    "duplicate_plan_id_filter": "passed",
     "setMyDescription_calls": "zero",
     "setMyShortDescription_calls": "zero",
     "release_manifest_hashes": "recalculated",
-    "zip_integrity": "passed"
+    "zip_integrity": "passed",
+    "single_sale_plans_route": "passed; exactly one session-aware handler remains"
   },
   "sha256": {
-    "core": "49fc833e89315dafaf14a922fe84e98f62a763614015bd05fd2a57112bf421d8",
-    "edge": "9a4ec110a4bb2191c887fe3f671ebfc30abfbefe9ca3715871c3e8efe7d6801c",
-    "processor": "79515507eac4de5abc138ac2658331f63b650339f04aa17f3d55f35c74a3f441",
+    "core": "7771e8948c113e952889b021456b913a5231785499132e4eb8e9a647d6fa32bd",
+    "edge": "5751a462d51ea97264773f8d3ac82f903384f8036407b034d5c59f050bbec520",
+    "processor": "4e1b2c38c1fd21847ef894ae76fd0ff50b8468ad6eeb79f2b7cfdb84e3f760e0",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "hashes": {
-    "core/worker.js": "49fc833e89315dafaf14a922fe84e98f62a763614015bd05fd2a57112bf421d8",
-    "edge/worker.js": "9a4ec110a4bb2191c887fe3f671ebfc30abfbefe9ca3715871c3e8efe7d6801c",
-    "processor/worker.js": "79515507eac4de5abc138ac2658331f63b650339f04aa17f3d55f35c74a3f441",
+    "core/worker.js": "7771e8948c113e952889b021456b913a5231785499132e4eb8e9a647d6fa32bd",
+    "edge/worker.js": "5751a462d51ea97264773f8d3ac82f903384f8036407b034d5c59f050bbec520",
+    "processor/worker.js": "4e1b2c38c1fd21847ef894ae76fd0ff50b8468ad6eeb79f2b7cfdb84e3f760e0",
     "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   }
 }
