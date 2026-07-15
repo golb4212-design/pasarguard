@@ -1,7 +1,7 @@
 {
-  "version": "3.2.11",
-  "release_id": "3.2.11-20260715-pasarguard-signed-subscription-token-fix",
-  "architecture": "fully-split-three-worker-subscription-alt-https-port-fixed",
+  "version": "3.2.13",
+  "release_id": "3.2.13-20260715-edge-first-deploy-and-import-runtime-fix",
+  "architecture": "fully-split-three-worker-edge-first-verified-deployment",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -32,10 +32,11 @@
     ]
   },
   "features": [
-    "accepts current PasarGuard signed subscription tokens containing dot-separated URL-safe segments",
-    "keeps strict HTTPS, allowed-port and representative-panel host validation",
-    "rejects slashes, query injection and non-URL-safe token characters after decoding",
-    "all previous single-location, product display, live usage and wallet collection fixes remain included",
+    "deploys and verifies the reseller Edge worker before replacing Core during automatic updates",
+    "prevents ZIP updates from leaving reseller bots on an older Edge runtime",
+    "verifies the active Edge version through the service binding after Cloudflare deployment",
+    "keeps the active subscription ownership import fix from 3.2.12",
+    "adds an import runtime version marker for diagnostics",
     "README files are excluded"
   ],
   "deployment": {
@@ -51,23 +52,22 @@
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "screenshot_token_with_dot": "passed",
-    "underscore_hyphen_token": "passed",
-    "slash_and_query_injection_rejection": "passed",
+    "stale_inactive_link_error_string": "absent",
+    "edge_first_cluster_deploy": "passed by static flow inspection",
+    "edge_version_verification": "service-binding probe enabled",
     "release_manifest_hashes": "recalculated",
-    "zip_integrity": "passed",
-    "live_panel_import": "not run without production credentials"
+    "zip_integrity": "passed"
   },
   "sha256": {
-    "core": "8b1b188e561c843591da0bec4dd8496adb106e2762cceed5e2b6b976ae9bcfe8",
-    "edge": "3b901725f51efa0450862011f62e3e680608355054f3665df5de38dbd473fff5",
-    "processor": "4d1dac09cfdb430f892cbe2030c06c8e4b2cf3ffbed432057fb3303a06bc78eb",
+    "core": "027960a53c31223894cb87a08a3662e0a4ddedf4b37a58b5cab12099e00c7e22",
+    "edge": "0eb18f2c842d25ca1e8a39abd431926921d4d881bacfae733c5c666bdc97a864",
+    "processor": "775a4525503358b736fbe1a7a221d04065cd7ad19362311125d88a249a1858a0",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "hashes": {
-    "core/worker.js": "8b1b188e561c843591da0bec4dd8496adb106e2762cceed5e2b6b976ae9bcfe8",
-    "edge/worker.js": "3b901725f51efa0450862011f62e3e680608355054f3665df5de38dbd473fff5",
-    "processor/worker.js": "4d1dac09cfdb430f892cbe2030c06c8e4b2cf3ffbed432057fb3303a06bc78eb",
+    "core/worker.js": "027960a53c31223894cb87a08a3662e0a4ddedf4b37a58b5cab12099e00c7e22",
+    "edge/worker.js": "0eb18f2c842d25ca1e8a39abd431926921d4d881bacfae733c5c666bdc97a864",
+    "processor/worker.js": "775a4525503358b736fbe1a7a221d04065cd7ad19362311125d88a249a1858a0",
     "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   }
 }

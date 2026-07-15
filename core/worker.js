@@ -1,11 +1,11 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.2.11
+ * Version: 3.2.13
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.2.11";
+const APP_VERSION = "3.2.13";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -6569,7 +6569,7 @@ async function deployUploadedGithubVersion(env, chatId, version) {
       await telegramApi(env, "sendMessage", {
         chat_id: chatId,
         text: "🚀 <b>استقرار خودکار نسخه " + botEscape(version) + " انجام شد</b>\n\nCore: " + (lastResult.core_deployed ? "✅" : "ℹ️") +
-          "\nEdge: " + (lastResult.edge_update?.deployed ? "✅" : (lastResult.edge_update?.error ? "❌" : "ℹ️")) +
+          "\nEdge: " + (lastResult.edge_update?.verified ? "✅ نسخه تأیید شد" : (lastResult.edge_update?.deployed ? "⚠️ Deploy بدون تأیید" : (lastResult.edge_update?.error ? "❌" : "ℹ️"))) +
           "\nProcessor: " + (lastResult.processor_update?.deployed ? "✅" : (lastResult.processor_update?.error ? "❌" : "ℹ️")),
         parse_mode: "HTML"
       });
@@ -7035,6 +7035,24 @@ async function verifyEdgeCoreRequest(request, env) {
   return json({ success: true, role: "bluepanel-core", version: APP_VERSION, core_url: new URL(request.url).origin, edge_url: edgeUrl });
 }
 
+async function verifyEdgeDeploymentVersion(env, expectedVersion, attempts = 6) {
+  let last = null;
+  for (let i = 0; i < Math.max(1, attempts); i++) {
+    if (i > 0) await new Promise(resolve => setTimeout(resolve, 900));
+    try {
+      last = await inspectEdgeServiceBinding(env);
+      const activeVersion = String(last?.version || last?.probe?.response_version || "");
+      if (last?.connected === true && activeVersion === String(expectedVersion || "")) {
+        return { verified: true, version: activeVersion, diagnostics: last };
+      }
+    } catch (error) {
+      last = { error: cleanText(error?.message || error, 500) };
+    }
+  }
+  const activeVersion = String(last?.version || last?.probe?.response_version || "unknown");
+  throw new Error("Worker دوم Deploy شد اما نسخه فعال تأیید نشد؛ نسخه مورد انتظار " + expectedVersion + " و نسخه پاسخ‌گو " + activeVersion + " است");
+}
+
 async function deployEdgeWorkerFromGithub(env, force = false, targetVersion = "") {
   const settings = await getSettings(env);
   if (!hasEdgeServiceBinding(env)) return { skipped: true, reason: "edge_service_binding_missing" };
@@ -7064,8 +7082,9 @@ async function deployEdgeWorkerFromGithub(env, force = false, targetVersion = ""
   const response = await fetch(apiBase + "?bindings_inherit=strict", { method: "PUT", headers: { authorization: "Bearer " + settings.cf_api_token }, body: form });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.success === false) throw new Error(data?.errors?.[0]?.message || "Cloudflare Edge deploy failed");
-  await setSettings(env, { edge_worker_script_name: scriptName, edge_worker_last_sha: codeSha, edge_worker_last_version: deployedVersion, edge_worker_last_deployed_at: nowIso(), edge_worker_last_error: "", github_edge_worker_file: file });
-  return { deployed: true, sha: codeSha, script_name: scriptName, version: deployedVersion };
+  const verification = await verifyEdgeDeploymentVersion(env, deployedVersion);
+  await setSettings(env, { edge_worker_script_name: scriptName, edge_worker_last_sha: codeSha, edge_worker_last_version: verification.version, edge_worker_last_deployed_at: nowIso(), edge_worker_last_error: "", github_edge_worker_file: file });
+  return { deployed: true, verified: true, sha: codeSha, script_name: scriptName, version: verification.version };
 }
 
 async function deployProcessorWorkerFromGithub(env, force = false, targetVersion = "") {
@@ -7192,25 +7211,29 @@ async function deploySelfFromGithub(env, force = false, prechecked = null) {
 
 async function deployClusterFromGithub(env, force = false, prechecked = null) {
   const check = prechecked || await checkUpdate(env);
-  let core = { ...check, deployed: false };
-  if (check.available || force) core = await deploySelfFromGithub(env, force, check);
   const shouldSync = force || check.available || check.cluster_sync_required;
   let edge_update = { skipped: true, reason: "no_cluster_update_required" };
   let processor_update = { skipped: true, reason: "no_cluster_update_required" };
+
+  // Deploy the dependent workers before replacing Core. Updating Core first can end the
+  // current request while Edge is still old, leaving reseller bots on stale code.
   if (shouldSync) {
     try {
-      edge_update = await deployEdgeWorkerFromGithub(env, force, check.latest || APP_VERSION);
+      edge_update = await deployEdgeWorkerFromGithub(env, true, check.latest || APP_VERSION);
     } catch (error) {
       await setSettings(env, { edge_worker_last_error: cleanText(error?.message || error, 800) });
-      edge_update = { deployed: false, error: error?.message || String(error) };
+      edge_update = { deployed: false, verified: false, error: error?.message || String(error) };
     }
     try {
-      processor_update = await deployProcessorWorkerFromGithub(env, force, check.latest || APP_VERSION);
+      processor_update = await deployProcessorWorkerFromGithub(env, true, check.latest || APP_VERSION);
     } catch (error) {
       await setSettings(env, { processor_worker_last_error: cleanText(error?.message || error, 800) });
       processor_update = { deployed: false, error: error?.message || String(error) };
     }
   }
+
+  let core = { ...check, deployed: false };
+  if (check.available || force) core = await deploySelfFromGithub(env, force, check);
   const deployed = Boolean(core.deployed || edge_update?.deployed || processor_update?.deployed);
   return { ...check, ...core, deployed, core_deployed: Boolean(core.deployed), edge_update, processor_update };
 }
@@ -13433,7 +13456,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.2.11';
+const BLUEPANEL_CORE_VERSION = '3.2.13';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {

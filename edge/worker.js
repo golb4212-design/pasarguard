@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.2.11
+ * Version: 3.2.13
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = "3.2.11";
+const APP_VERSION = "3.2.13";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -2209,13 +2209,27 @@ async function importSalesServiceBySubscriptionLink(env, bot, customer, rawLink)
   }
   const snapshot = salesRemoteSnapshot(remote, publicResult.info);
   const settings = await getSettings(env);
-  let canonicalUrl = snapshot.subscriptionUrl || publicResult.parsed.subscriptionUrl;
-  if (canonicalUrl && canonicalUrl.startsWith("/")) canonicalUrl = pasarguardBaseUrl(settings) + canonicalUrl;
-  const canonicalParsed = parseSalesSubscriptionLink(canonicalUrl, settings);
-  if (canonicalParsed.tokenNormalized !== publicResult.parsed.tokenNormalized) {
-    throw new Error("این لینک دیگر لینک فعال سرویس نیست؛ لینک جدید را از فروشنده دریافت کنید");
+  const remoteNested = remote && typeof remote.data === "object" && remote.data ? remote.data : {};
+  const authenticatedUsername = cleanText(remoteNested.username || remote.username, 128).toLowerCase();
+  if (authenticatedUsername && authenticatedUsername !== normalizedUsername) {
+    throw new Error("مالکیت لینک اشتراک با حساب پنل این نماینده مطابقت ندارد");
   }
-  canonicalUrl = canonicalParsed.subscriptionUrl;
+
+  // A successful public /info response already proves that the submitted token is active.
+  // PasarGuard may return a different canonical/signed subscription_url for the same user,
+  // so raw token equality must not be used as an ownership check.
+  let canonicalParsed = publicResult.parsed;
+  let apiCanonicalUrl = snapshot.subscriptionUrl;
+  if (apiCanonicalUrl && apiCanonicalUrl.startsWith("/")) apiCanonicalUrl = pasarguardBaseUrl(settings) + apiCanonicalUrl;
+  if (apiCanonicalUrl) {
+    try {
+      const apiParsed = parseSalesSubscriptionLink(apiCanonicalUrl, settings);
+      if (apiParsed.tokenNormalized === publicResult.parsed.tokenNormalized) canonicalParsed = apiParsed;
+    } catch (_) {
+      // Keep the submitted URL because its /info endpoint was verified successfully.
+    }
+  }
+  const canonicalUrl = canonicalParsed.subscriptionUrl;
   const panelScope = canonicalParsed.host;
 
   const priorClaim = await env.PASARGUARD_DB.prepare(
@@ -2258,7 +2272,7 @@ async function importSalesServiceBySubscriptionLink(env, bot, customer, rawLink)
     return {
       id: existing.id, remote_username: remoteUsername, subscription_url: canonicalUrl, imported: false, alreadyLinked: true,
       remote_status: snapshot.status, remote_data_limit: snapshot.dataLimit, remote_used_traffic: snapshot.usedTraffic,
-      remote_expire: snapshot.expire, remote_online_at: snapshot.onlineAt, remote_last_synced_at: snapshot.syncedAt
+      remote_expire: snapshot.expire, remote_online_at: snapshot.onlineAt, remote_last_synced_at: snapshot.syncedAt, import_runtime_version: APP_VERSION
     };
   }
 
@@ -2288,7 +2302,7 @@ async function importSalesServiceBySubscriptionLink(env, bot, customer, rawLink)
     return {
       id: orderId, remote_username: remoteUsername, subscription_url: canonicalUrl, imported: false, alreadyLinked: true,
       remote_status: snapshot.status, remote_data_limit: snapshot.dataLimit, remote_used_traffic: snapshot.usedTraffic,
-      remote_expire: snapshot.expire, remote_online_at: snapshot.onlineAt, remote_last_synced_at: snapshot.syncedAt
+      remote_expire: snapshot.expire, remote_online_at: snapshot.onlineAt, remote_last_synced_at: snapshot.syncedAt, import_runtime_version: APP_VERSION
     };
   }
 
@@ -2320,7 +2334,7 @@ async function importSalesServiceBySubscriptionLink(env, bot, customer, rawLink)
   return {
     id: orderId, remote_username: remoteUsername, subscription_url: canonicalUrl, imported: true, alreadyLinked: false,
     remote_status: snapshot.status, remote_data_limit: snapshot.dataLimit, remote_used_traffic: snapshot.usedTraffic,
-    remote_expire: snapshot.expire, remote_online_at: snapshot.onlineAt, remote_last_synced_at: snapshot.syncedAt
+    remote_expire: snapshot.expire, remote_online_at: snapshot.onlineAt, remote_last_synced_at: snapshot.syncedAt, import_runtime_version: APP_VERSION
   };
 }
 
@@ -10582,7 +10596,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_EDGE_VERSION='3.2.11';
+const BLUEPANEL_EDGE_VERSION='3.2.13';
 function bluePanelEdgeJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function bluePanelEdgeInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
 function bluePanelEdgeRuntimeBinding(env,name){const value=env?.[name];return{name,exact_key_present:Object.prototype.hasOwnProperty.call(env||{},name),value_present:value!==undefined&&value!==null,fetch_callable:Boolean(value&&typeof value.fetch==='function'),constructor_name:value?.constructor?.name||''}}
