@@ -1,0 +1,10 @@
+# Merge these entries into the central Worker's wrangler.toml.
+# Existing D1 and service bindings must remain unchanged.
+
+[[durable_objects.bindings]]
+name = "LIVE_USAGE_COORDINATOR"
+class_name = "LiveUsageCoordinator"
+
+[[migrations]]
+tag = "v3.1.9-live-usage"
+new_sqlite_classes = ["LiveUsageCoordinator"]

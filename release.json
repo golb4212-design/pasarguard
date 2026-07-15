@@ -1,32 +1,29 @@
 {
-  "version": "3.1.8",
-  "release_id": "3.1.8-20260715-subscription-import-central-cron-topics",
-  "architecture": "fully-split-three-worker-central-cron-compatible",
+  "version": "3.1.9",
+  "release_id": "3.1.9-20260715-durable-live-usage-final-fix",
+  "architecture": "fully-split-three-worker-durable-live-usage",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
-    "processor": "processor/worker.js"
-  },
-  "sha256": {
-    "core": "f71823942b43a2133916b6d89865a8a49423d7e1e0cb0682576c68d821162fc8",
-    "edge": "d0ad4199431f77af6bf286ebf3f98f461172fdb3e9b55e1f2d547c26f522923e",
-    "processor": "79c5fab882abc50a57bfe2f6a6f6955a2551c27239bb9a5a7e568686f9daf6ae"
+    "processor": "processor/worker.js",
+    "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "roles": {
-    "core": "central bot, D1 schema authority, direct report outbox retry/topic repair, central wallet and callbacks",
-    "edge": "reseller bots, customer miniapps, old subscription import and service lifecycle",
-    "processor": "optional advanced schedules, report retries, topic repair, backups and background jobs"
+    "core": "central bot, D1 authority, payment callbacks, report outbox and Durable Object live usage engine",
+    "edge": "reseller bots, customer miniapps and imported-subscription lifecycle",
+    "processor": "optional advanced schedules, backups, campaigns and background reports"
   },
   "bindings": {
     "core": [
       "PASARGUARD_DB",
       "EDGE_WORKER",
-      "PROCESSOR_WORKER (optional for advanced scheduled jobs)"
+      "PROCESSOR_WORKER (optional)",
+      "LIVE_USAGE_COORDINATOR -> class LiveUsageCoordinator (required for cron-free live usage)"
     ],
     "edge": [
       "EDGE_DB",
       "CORE_WORKER",
-      "PROCESSOR_WORKER (optional because CORE fallback is supported)"
+      "PROCESSOR_WORKER (optional)"
     ],
     "processor": [
       "PROCESSOR_DB",
@@ -35,26 +32,43 @@
     ]
   },
   "features": [
-    "customers can attach an existing PasarGuard service by submitting its current HTTPS subscription link in the reseller bot or miniapp",
-    "the public subscription info endpoint resolves the username and the reseller PasarGuard API verifies the service belongs to that reseller",
-    "imported services support status, renewal, volume increase, current subscription link and link revocation through the reseller bot",
-    "the same remote service cannot be claimed by another Telegram account or reseller bot",
-    "service imports are routed to a dedicated report topic",
-    "pending report delivery and deleted-topic repair run directly from the central Worker cron",
-    "only the central Worker needs a cron trigger for report delivery; a separate processor cron is no longer required for the report outbox",
-    "processor service binding remains optional for advanced scheduled jobs such as daily summaries, campaigns, backups and notifications",
-    "report flush in reseller groups falls back to the central Worker when PROCESSOR_WORKER is unavailable",
-    "test_all_topics command validates every configured topic and sends one test message to each",
-    "CubePay, Plisio, automatic USD rates and PasarGuard 5.1 API key compatibility are preserved",
+    "representative usage is calculated autonomously by Durable Object alarms without user activity or cron triggers",
+    "default live cycle is 15 seconds and is configurable from 8 to 300 seconds",
+    "the coordinator processes central PasarGuard agencies and downline reseller bots in fair updated_at batches",
+    "central billing_events and downline reseller_usage_events guard against duplicate deductions",
+    "concurrent live, manual and fallback syncs cannot charge the same downline usage delta twice",
+    "zero-balance agency suspension and automatic reactivation reconciliation run after every live cycle",
+    "live engine starts automatically on the first central Worker request and keeps rescheduling itself",
+    "the central Worker can auto-provision the Durable Object binding when Cloudflare deployment credentials are stored",
+    "admin status/start/run/stop/provision control is available at /api/admin/usage/live",
+    "central health reports whether LIVE_USAGE_COORDINATOR is bound",
+    "the existing central cron remains only as a fallback when the Durable Object binding is absent and for non-live maintenance jobs",
+    "subscription import, CubePay, Plisio, automatic USD rates and report topics are preserved",
     "README files are excluded"
   ],
+  "deployment": {
+    "required_binding_name": "LIVE_USAGE_COORDINATOR",
+    "required_class_name": "LiveUsageCoordinator",
+    "migration_tag": "v3.1.9-live-usage",
+    "automatic_provisioning": "supported when cf_account_id, cf_api_token and cf_worker_name are already saved and the token can update Workers scripts",
+    "manual_config_file": "core/wrangler.live-usage.example.toml",
+    "activation": "after deployment open /health once or send any message to the central bot; after binding deployment the next request starts the alarm loop",
+    "cron": "the existing 10-minute central cron can remain; it is not used for live usage while the Durable Object binding is active"
+  },
   "validation": {
-    "javascript_syntax": "passed for core, edge and processor",
-    "central_cron_report_fallback": "core scheduled handler flushes pending report_outbox before and after optional processor jobs",
-    "topic_self_repair": "missing or invalid message_thread_id is recreated on demand and the message is retried once",
-    "service_import_route": "old subscription import is visible in reseller bot and miniapp and records a dedicated service_imports report",
-    "duplicate_claim_protection": "preserved from v3.1.7",
-    "live_pasarguard_import": "not run; no active customer subscription link was supplied",
-    "live_telegram_topics": "not run; no production bot tokens/group IDs were supplied"
+    "node_syntax_core": "passed",
+    "node_syntax_edge": "passed",
+    "node_syntax_processor": "passed",
+    "module_exports": "passed: default and LiveUsageCoordinator",
+    "durable_object_alarm_initialization_mock": "passed",
+    "duplicate_downline_billing_guard": "implemented with INSERT OR IGNORE transaction gate",
+    "archive_structure": "passed: core, edge, processor, version, release manifest and Durable Object config; no README",
+    "live_cloudflare_pasarguard_test": "not run because live deployment credentials and production panel access were not available"
+  },
+  "sha256": {
+    "core": "1fc9ad58fbf0de20f2e8d0d5d0e0e09922953038d6007f73dc018829a5cfbb87",
+    "edge": "47ab1e62177723c774404d1bfd9b90a6a5504f7eafed0f5a829108e4f40b3e6b",
+    "processor": "cc6d7605950d88ce9ffdab37dd2cf12e846e52e3d4cee7946355dea0d6080f72",
+    "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   }
 }

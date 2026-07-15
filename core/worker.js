@@ -1,11 +1,11 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.1.8
+ * Version: 3.1.9
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.1.8";
+const APP_VERSION = "3.1.9";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -20,14 +20,16 @@ const RELEASE_NOTES = Object.freeze({
     { emoji: "⚡", text: "ساخت سریع‌تر فاکتور Plisio با نرخ کش‌شده و انتقال ثبت وضعیت و گزارش به پس‌زمینه" },
     { emoji: "💳", text: "افزودن CubePay کارت‌به‌کارت با Callback و تایید نهایی API برای مرکز و نمایندگان" },
     { emoji: "🔗", text: "اتصال سرویس‌های قدیمی با لینک اشتراک و انتقال مدیریت آن‌ها به ربات نماینده" },
-    { emoji: "🧵", text: "پردازش و ترمیم Topicهای گزارش فقط با Cron ورکر مرکزی و بدون نیاز به Cron جداگانه" }
+    { emoji: "🧵", text: "پردازش و ترمیم Topicهای گزارش فقط با Cron ورکر مرکزی و بدون نیاز به Cron جداگانه" },
+    { emoji: "📡", text: "بازگشت محاسبه Live مصرف نمایندگان با Durable Object Alarm و بدون وابستگی به Cron یا فعالیت کاربر" }
   ]),
   reseller: Object.freeze([
     { emoji: "📦", text: "تجمیع درخواست‌های اولیه پنل فروش و مدیریت در یک Batch دیتابیس" },
     { emoji: "🤖", text: "حذف همگام‌سازی سنگین BotFather از مسیر پاسخ کاربران" },
     { emoji: "⚡", text: "افزایش سرعت پاسخ ربات‌های نماینده و بازشدن پنل‌ها" },
     { emoji: "🔗", text: "ثبت سرویس قبلی با لینک اشتراک و فعال‌شدن استعلام، تمدید، افزایش حجم و دریافت لینک" },
-    { emoji: "🧵", text: "ارسال رویدادها به Topic تخصصی و بازیابی خودکار Topic حذف‌شده یا خراب" }
+    { emoji: "🧵", text: "ارسال رویدادها به Topic تخصصی و بازیابی خودکار Topic حذف‌شده یا خراب" },
+    { emoji: "⚡", text: "محاسبه و کسر خودکار مصرف در پس‌زمینه حتی بدون بازشدن ربات یا مینی‌اپ" }
   ])
 });
 
@@ -87,6 +89,11 @@ const RESELLER_REPORT_TOPICS = Object.freeze([
 const GIB = 1024 * 1024 * 1024;
 
 const LIVE_USAGE_MIN_INTERVAL_SECONDS = 8;
+const LIVE_USAGE_DEFAULT_INTERVAL_SECONDS = 15;
+const LIVE_USAGE_DEFAULT_CENTRAL_BATCH = 20;
+const LIVE_USAGE_DEFAULT_DOWNLINE_BATCH = 2;
+const LIVE_USAGE_DEFAULT_SERVICE_BATCH = 24;
+const LIVE_USAGE_COORDINATOR_NAME = "bluepanel-live-usage-v1";
 
 const RESELLER_LICENSE_DAYS = 30;
 
@@ -326,6 +333,10 @@ const DEFAULT_SETTINGS = {
   auto_delete_pending_invoices: "true",
   pending_invoice_ttl_hours: "24",
   usage_sync_enabled: "true",
+  live_usage_interval_seconds: "15",
+  live_usage_central_batch: "20",
+  live_usage_downline_batch: "2",
+  live_usage_service_batch: "24",
   auto_update: "true",
   auto_update_interval_seconds: "5",
   auto_update_last_check_epoch: "0",
@@ -5384,7 +5395,7 @@ async function saveAdminSettings(request, env) {
     "reseller_store_bot_setup_fee", "reseller_store_bot_license_renewal_fee", "reseller_master_bot_setup_fee", "reseller_master_bot_license_renewal_fee", "master_min_markup_toman",
     "agency_sales_enabled", "reseller_bot_sales_enabled", "central_recharge_bonus_percent", "central_trial_enabled", "central_trial_data_limit_bytes", "central_trial_duration_hours", "min_recharge", "support_username",
     "blupal_base_url", "blupal_api_key", "blupal_card_number", "blupal_webhook_token", "cubepay_enabled", "cubepay_api_token", "plisio_enabled", "plisio_api_key", "plisio_source_currency", "plisio_toman_per_source_unit", "plisio_rate_mode", "plisio_fx_api_key", "plisio_fx_item", "plisio_fx_unit", "plisio_fx_refresh_minutes", "plisio_fx_max_stale_minutes", "plisio_fx_markup_percent", "plisio_allowed_currencies", "plisio_expire_minutes", "plisio_test_currency", "payment_poll_enabled",
-    "auto_delete_pending_invoices", "pending_invoice_ttl_hours", "usage_sync_enabled", "auto_update", "auto_update_interval_seconds", "bot_token", "admin_ids",
+    "auto_delete_pending_invoices", "pending_invoice_ttl_hours", "usage_sync_enabled", "live_usage_interval_seconds", "live_usage_central_batch", "live_usage_downline_batch", "live_usage_service_batch", "auto_update", "auto_update_interval_seconds", "bot_token", "admin_ids",
     "auth_max_age_seconds", "allow_dev_auth", "dev_telegram_id", "app_encryption_key", "app_url",
     "telegram_webhook_secret", "pasarguard_panel_url", "pasarguard_access_token",
     "pasarguard_admin_username", "pasarguard_admin_password", "pasarguard_reseller_role_id",
@@ -5403,7 +5414,7 @@ async function saveAdminSettings(request, env) {
   if (values.github_worker_file !== undefined) values.github_worker_file = "core/worker.js";
   values.github_edge_worker_file = "edge/worker.js";
   values.github_processor_worker_file = "processor/worker.js";
-  for (const key of ["price_per_gb", "setup_fee", "reseller_bot_setup_fee", "reseller_bot_license_renewal_fee", "reseller_store_bot_setup_fee", "reseller_store_bot_license_renewal_fee", "reseller_master_bot_setup_fee", "reseller_master_bot_license_renewal_fee", "master_min_markup_toman", "central_recharge_bonus_percent", "min_recharge", "auth_max_age_seconds", "pasarguard_admin_data_limit_bytes", "auto_update_interval_seconds", "pending_invoice_ttl_hours"]) {
+  for (const key of ["price_per_gb", "setup_fee", "reseller_bot_setup_fee", "reseller_bot_license_renewal_fee", "reseller_store_bot_setup_fee", "reseller_store_bot_license_renewal_fee", "reseller_master_bot_setup_fee", "reseller_master_bot_license_renewal_fee", "master_min_markup_toman", "central_recharge_bonus_percent", "min_recharge", "auth_max_age_seconds", "pasarguard_admin_data_limit_bytes", "auto_update_interval_seconds", "pending_invoice_ttl_hours", "live_usage_interval_seconds", "live_usage_central_batch", "live_usage_downline_batch", "live_usage_service_batch"]) {
     if (values[key] !== undefined) values[key] = String(clampInt(values[key], 0, 1000000000000));
   }
   if (values.reseller_store_bot_setup_fee !== undefined) values.reseller_bot_setup_fee = values.reseller_store_bot_setup_fee;
@@ -5413,6 +5424,10 @@ async function saveAdminSettings(request, env) {
   if (values.central_recharge_bonus_percent !== undefined) values.central_recharge_bonus_percent = String(Math.max(0, Math.min(100, Number(values.central_recharge_bonus_percent || 0))));
   if (values.central_trial_data_limit_bytes !== undefined) values.central_trial_data_limit_bytes = String(clampInt(values.central_trial_data_limit_bytes || GIB, 1024 * 1024, 1024 * GIB));
   if (values.central_trial_duration_hours !== undefined) values.central_trial_duration_hours = String(clampInt(values.central_trial_duration_hours || 24, 1, 720));
+  if (values.live_usage_interval_seconds !== undefined) values.live_usage_interval_seconds = String(clampInt(values.live_usage_interval_seconds || LIVE_USAGE_DEFAULT_INTERVAL_SECONDS, LIVE_USAGE_MIN_INTERVAL_SECONDS, 300));
+  if (values.live_usage_central_batch !== undefined) values.live_usage_central_batch = String(clampInt(values.live_usage_central_batch || LIVE_USAGE_DEFAULT_CENTRAL_BATCH, 1, 100));
+  if (values.live_usage_downline_batch !== undefined) values.live_usage_downline_batch = String(clampInt(values.live_usage_downline_batch || LIVE_USAGE_DEFAULT_DOWNLINE_BATCH, 1, 20));
+  if (values.live_usage_service_batch !== undefined) values.live_usage_service_batch = String(clampInt(values.live_usage_service_batch || LIVE_USAGE_DEFAULT_SERVICE_BATCH, 5, 120));
   if (values.blupal_card_number !== undefined) values.blupal_card_number = values.blupal_card_number.replace(/\D/g, "");
   if (values.blupal_base_url !== undefined) {
     try { values.blupal_base_url = normalizeBlupalBaseUrl(values.blupal_base_url); }
@@ -6736,7 +6751,7 @@ async function triggerProcessorBusinessJobs(env, source = "core") {
   try {
     const response = await env.PROCESSOR_WORKER.fetch(new Request("https://bluepanel-processor.internal/__bluepanel/service/process", {
       method: "POST",
-      headers: { "content-type": "application/json", "x-bluepanel-service-hop": "core-to-processor", "x-bluepanel-process-source": cleanText(source, 80) },
+      headers: { "content-type": "application/json", "x-bluepanel-service-hop": "core-to-processor", "x-bluepanel-process-source": cleanText(source, 80), "x-bluepanel-live-usage-active": liveUsageNamespaceAvailable(env) ? "true" : "false" },
       body: "{}"
     }));
     const data = await response.json().catch(() => ({}));
@@ -6930,12 +6945,14 @@ async function deploySelfFromGithub(env, force = false, prechecked = null) {
 
   const apiBase = "https://api.cloudflare.com/client/v4/accounts/" + settings.cf_account_id + "/workers/scripts/" + encodeURIComponent(settings.cf_worker_name);
   let keepBindings = [];
+  let currentWorkerSettings = {};
   try {
     const settingsResponse = await fetch(apiBase + "/settings", {
       headers: { authorization: "Bearer " + settings.cf_api_token }
     });
     const current = await settingsResponse.json();
-    keepBindings = Array.from(new Set((current?.result?.bindings || []).map(x => x.type).filter(Boolean)));
+    currentWorkerSettings = current?.result || {};
+    keepBindings = Array.from(new Set((currentWorkerSettings.bindings || []).map(x => x.type).filter(Boolean)));
   } catch (_) {}
 
   const metadata = {
@@ -8063,62 +8080,94 @@ async function billDownlineResellerBot(env, childBot, options = {}) {
   const parent = await getResellerBotById(env, childBot.parent_bot_id);
   if (!parent) throw new Error("ربات مستر بالادست پیدا نشد");
   if (options.sync !== false) await syncDownlineRemoteServices(env, childBot, options.limit || 120);
+
   const currentUsage = await downlineUsageTotal(env, childBot.id);
   const previousUsage = Math.max(0, Number(childBot.upstream_last_usage_bytes || 0));
   let delta = currentUsage - previousUsage;
   if (delta < 0) delta = currentUsage;
+
   const price = Math.max(centralMinimumDownlinePrice(settings), Number(childBot.upstream_price_per_gb || 0));
-  const calc = resellerUsageAmount(delta, price, childBot.upstream_billing_remainder || 0);
+  const previousRemainder = Math.max(0, Number(childBot.upstream_billing_remainder || 0));
+  const calc = resellerUsageAmount(delta, price, previousRemainder);
   const centralCalc = resellerUsageAmount(delta, Math.max(0, Number(settings.price_per_gb || 0)), 0);
   const newlyDue = calc.amount;
-  const dueBeforeCollection = Math.max(0, Number(childBot.upstream_unpaid_toman || 0)) + newlyDue;
+  const previousUnpaid = Math.max(0, Number(childBot.upstream_unpaid_toman || 0));
+  const dueBeforeCollection = previousUnpaid + newlyDue;
   const childUser = await env.PASARGUARD_DB.prepare("SELECT * FROM users WHERE id=?").bind(childBot.user_id).first();
-  const available = Math.max(0, Number(childUser?.wallet_balance || 0));
+  if (!childUser) throw new Error("حساب مالک ربات نماینده پیدا نشد");
+  const available = Math.max(0, Number(childUser.wallet_balance || 0));
   const collected = Math.min(available, dueBeforeCollection);
   const unpaid = Math.max(0, dueBeforeCollection - collected);
   const ts = nowIso();
   const status = unpaid > 0 ? "suspended_balance" : (childBot.status === "suspended_balance" ? "active" : childBot.status);
+  const statusChanged = status !== childBot.status;
+  const financialChange = delta > 0 || newlyDue > 0 || collected > 0 || unpaid !== previousUnpaid || statusChanged;
+
+  if (!financialChange) {
+    await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET updated_at=? WHERE id=?").bind(ts, childBot.id).run();
+    return { processed: true, usage: currentUsage, delta: 0, charged: 0, collected: 0, unpaid, price_per_gb: price, status, duplicate: false };
+  }
+
+  // The event row is the transaction guard. Every financial mutation below is
+  // conditional on that INSERT changing one row, preventing concurrent live,
+  // manual, or fallback syncs from charging the same usage delta twice.
+  const eventKey = [
+    "downline", childBot.id, previousUsage, currentUsage, previousRemainder,
+    previousUnpaid, available, price, newlyDue, collected
+  ].join(":");
   const statements = [
+    env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO reseller_usage_events(
+      event_key,bot_id,parent_bot_id,owner_user_id,usage_from,usage_to,charged_amount,collected_amount,unpaid_after,
+      central_cost_amount,master_profit_amount,price_per_gb,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .bind(eventKey,childBot.id,parent.id,childBot.user_id,previousUsage,currentUsage,newlyDue,collected,unpaid,
+        centralCalc.amount,Math.max(0,newlyDue-centralCalc.amount),price,ts),
     env.PASARGUARD_DB.prepare(`UPDATE reseller_bots SET upstream_price_per_gb=?,upstream_last_usage_bytes=?,upstream_billing_remainder=?,
-      upstream_unpaid_toman=?,upstream_total_charged=upstream_total_charged+?,upstream_total_profit=upstream_total_profit+?,status=?,updated_at=? WHERE id=?`)
+      upstream_unpaid_toman=?,upstream_total_charged=upstream_total_charged+?,upstream_total_profit=upstream_total_profit+?,status=?,updated_at=?
+      WHERE id=? AND changes()=1`)
       .bind(price,currentUsage,calc.remainder,unpaid,newlyDue,Math.max(0,newlyDue-centralCalc.amount),status,ts,childBot.id)
   ];
   if (collected > 0) {
     statements.push(
-      env.PASARGUARD_DB.prepare("UPDATE users SET wallet_balance=wallet_balance-?,updated_at=? WHERE id=?").bind(collected,ts,childBot.user_id),
-      env.PASARGUARD_DB.prepare("UPDATE users SET wallet_balance=wallet_balance+?,updated_at=? WHERE id=?").bind(collected,ts,parent.user_id),
+      env.PASARGUARD_DB.prepare("UPDATE users SET wallet_balance=wallet_balance-?,updated_at=? WHERE id=? AND changes()=1")
+        .bind(collected,ts,childBot.user_id),
+      env.PASARGUARD_DB.prepare("UPDATE users SET wallet_balance=wallet_balance+?,updated_at=? WHERE id=? AND changes()=1")
+        .bind(collected,ts,parent.user_id),
       env.PASARGUARD_DB.prepare(`INSERT INTO wallet_ledger(id,user_id,type,amount,balance_after,ref_type,ref_id,description,created_at)
-        SELECT ?,id,'downline_usage',-?,wallet_balance,'reseller_bot',?,'هزینه مصرف ربات زیرمجموعه',? FROM users WHERE id=?`)
+        SELECT ?,id,'downline_usage',-?,wallet_balance,'reseller_bot',?,'هزینه مصرف ربات زیرمجموعه',? FROM users WHERE id=? AND changes()=1`)
         .bind(id("led"),collected,childBot.id,ts,childBot.user_id),
       env.PASARGUARD_DB.prepare(`INSERT INTO wallet_ledger(id,user_id,type,amount,balance_after,ref_type,ref_id,description,created_at)
-        SELECT ?,id,'downline_usage_income',?,wallet_balance,'reseller_bot',?,'درآمد مصرف نماینده زیرمجموعه',? FROM users WHERE id=?`)
+        SELECT ?,id,'downline_usage_income',?,wallet_balance,'reseller_bot',?,'درآمد مصرف نماینده زیرمجموعه',? FROM users WHERE id=? AND changes()=1`)
         .bind(id("led"),collected,childBot.id,ts,parent.user_id)
     );
   }
-  if (delta > 0 || newlyDue > 0) {
-    const eventKey = "downline:" + childBot.id + ":" + String(currentUsage);
-    statements.push(env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO reseller_usage_events(
-      event_key,bot_id,parent_bot_id,owner_user_id,usage_from,usage_to,charged_amount,collected_amount,unpaid_after,
-      central_cost_amount,master_profit_amount,price_per_gb,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-      .bind(eventKey,childBot.id,parent.id,childBot.user_id,previousUsage,currentUsage,newlyDue,collected,unpaid,
-        centralCalc.amount,Math.max(0,newlyDue-centralCalc.amount),price,ts));
-  }
-  await env.PASARGUARD_DB.batch(statements);
-  return { processed: true, usage: currentUsage, delta, charged: newlyDue, collected, unpaid, price_per_gb: price, status };
+  const results = await env.PASARGUARD_DB.batch(statements);
+  const inserted = Number(results?.[0]?.meta?.changes || 0) > 0;
+  return {
+    processed: true,
+    usage: currentUsage,
+    delta: inserted ? delta : 0,
+    charged: inserted ? newlyDue : 0,
+    collected: inserted ? collected : 0,
+    unpaid: inserted ? unpaid : previousUnpaid,
+    price_per_gb: price,
+    status: inserted ? status : childBot.status,
+    duplicate: !inserted
+  };
 }
 
-async function syncDownlineUsage(env, parentBotId = null, limit = 100) {
+async function syncDownlineUsage(env, parentBotId = null, limit = 100, options = {}) {
   const sql = parentBotId
     ? "SELECT id FROM reseller_bots WHERE parent_bot_id=? ORDER BY updated_at LIMIT ?"
     : "SELECT id FROM reseller_bots WHERE parent_bot_id IS NOT NULL ORDER BY updated_at LIMIT ?";
   const query = env.PASARGUARD_DB.prepare(sql);
   const rows = parentBotId ? await query.bind(parentBotId,limit).all() : await query.bind(limit).all();
+  const serviceLimit = clampInt(options.serviceLimit || 120, 5, 120);
   let processed=0,charged=0,collected=0,failed=0;
   for (const row of rows.results || []) {
     try {
       const bot = await getResellerBotById(env,row.id);
       if (!bot) continue;
-      const result = await billDownlineResellerBot(env,bot,{sync:true,limit:120});
+      const result = await billDownlineResellerBot(env,bot,{sync:options.sync !== false,limit:serviceLimit});
       processed++;charged+=Number(result.charged||0);collected+=Number(result.collected||0);
     } catch (error) {
       failed++;
@@ -12497,9 +12546,10 @@ async function installApp(request, env) {
 async function centralAdminBootstrap(request, env) {
   const auth = await requireAuth(request, env, true);
   if (auth.response) return auth.response;
-  const [liveEdge, liveProcessor] = await Promise.all([
+  const [liveEdge, liveProcessor, liveUsage] = await Promise.all([
     inspectEdgeServiceBinding(env),
-    inspectProcessorServiceBinding(env)
+    inspectProcessorServiceBinding(env),
+    callLiveUsageCoordinator(env, "status").catch(error => ({ success:false, available:liveUsageNamespaceAvailable(env), error:String(error?.message || error) }))
   ]);
   if (liveEdge.binding_detected) {
     try { await persistEdgeServiceState(env, liveEdge, liveEdge.connected ? { enable: true } : {}); } catch (_) {}
@@ -12570,6 +12620,7 @@ async function centralAdminBootstrap(request, env) {
     links: { customer_app: origin + "/app", advanced_control: origin + "/control-advanced", central_bot: settings.central_bot_username ? "https://t.me/" + String(settings.central_bot_username).replace(/^@/, "") : "" },
     edge: { enabled: liveEdge.connected === true && settings.edge_worker_manual_disabled !== "true", binding_detected: liveEdge.binding_detected === true, core_binding_detected: liveEdge.core_binding_detected === true, processor_binding_detected: liveEdge.processor_binding_detected === true, core_ok: liveEdge.core_ok === true, processor_ok: liveEdge.processor_ok === true, database_query_ok: liveEdge.database_query_ok !== false, mode: "service_binding", status: settings.edge_worker_manual_disabled === "true" ? "disabled" : (liveEdge.status || "disconnected"), script_name: liveEdge.script_name || settings.edge_worker_script_name || "", last_check_at: liveEdge.diagnostics?.checked_at || settings.edge_worker_last_check_at || "", last_error: settings.edge_worker_manual_disabled === "true" ? "تقسیم بار از پنل غیرفعال شده است" : (liveEdge.error || settings.edge_worker_last_error || ""), version: liveEdge.version || settings.edge_worker_last_version || "", pending_jobs: Number(liveEdge.pending_jobs || 0), last_deployed_at: settings.edge_worker_last_deployed_at || "", probe: liveEdge.probe || null, core_probe: liveEdge.core_probe || liveEdge.diagnostics?.edge_to_core || null, processor_probe: liveEdge.processor_probe || liveEdge.diagnostics?.edge_to_processor || null, runtime_bindings: liveEdge.runtime_bindings || liveEdge.diagnostics?.runtime_bindings || null, diagnostics: liveEdge.diagnostics || null },
     processor: { enabled: liveProcessor.connected === true && settings.processor_worker_manual_disabled !== "true", binding_detected: liveProcessor.binding_detected === true, core_binding_detected: liveProcessor.core_binding_detected === true, edge_binding_detected: liveProcessor.edge_binding_detected === true, core_ok: liveProcessor.core_ok === true, edge_ok: liveProcessor.edge_ok === true, database_query_ok: liveProcessor.database_query_ok !== false, mode: "service_binding", status: settings.processor_worker_manual_disabled === "true" ? "disabled" : (liveProcessor.status || "disconnected"), script_name: liveProcessor.script_name || settings.processor_worker_script_name || "", last_check_at: liveProcessor.diagnostics?.checked_at || settings.processor_worker_last_check_at || "", last_error: settings.processor_worker_manual_disabled === "true" ? "پردازش Worker سوم از پنل غیرفعال شده است" : (liveProcessor.error || settings.processor_worker_last_error || ""), version: liveProcessor.version || settings.processor_worker_last_version || "", pending_jobs: Number(liveProcessor.pending_jobs || 0), processed_jobs: Number(liveProcessor.processed_jobs || 0), last_deployed_at: settings.processor_worker_last_deployed_at || "", probe: liveProcessor.probe || null, core_probe: liveProcessor.core_probe || liveProcessor.diagnostics?.processor_to_core || null, edge_probe: liveProcessor.edge_probe || liveProcessor.diagnostics?.processor_to_edge || null, runtime_bindings: liveProcessor.runtime_bindings || liveProcessor.diagnostics?.runtime_bindings || null, diagnostics: liveProcessor.diagnostics || null },
+    live_usage: liveUsage,
     health: {
       database: true,
       central_bot: Boolean(settings.bot_token),
@@ -12579,6 +12630,10 @@ async function centralAdminBootstrap(request, env) {
       python_helper: Boolean(env.PY_HELPER && typeof env.PY_HELPER.fetch === "function"),
       edge_worker: liveEdge.connected === true && settings.edge_worker_manual_disabled !== "true",
       processor_worker: liveProcessor.connected === true && settings.processor_worker_manual_disabled !== "true",
+      live_usage: liveUsage?.running === true && liveUsage?.success !== false,
+      live_usage_binding: liveUsageNamespaceAvailable(env),
+      live_usage_last_at: liveUsage?.finished_at || liveUsage?.failed_at || "",
+      live_usage_last_error: liveUsage?.error || "",
       last_cron_at: settings.last_cron_at || "",
       update_status: settings.auto_update_last_status || "never",
       reseller_healthy_count: Number(resellerHealth?.healthy_count || 0),
@@ -12872,6 +12927,7 @@ async function routeApiUnsafe(request, env, path, ctx = null) {
   if (path === "/api/trial" && request.method === "POST") return createCentralTrial(request, env);
   if (path === "/api/admin/settings" && request.method === "POST") return saveAdminSettings(request, env);
   if (path === "/api/admin/usage/sync" && request.method === "POST") return adminSyncUsage(request, env);
+  if (path === "/api/admin/usage/live" && ["GET","POST"].includes(request.method)) return adminLiveUsageControl(request, env);
   if (path === "/api/admin/payments/sync" && request.method === "POST") return adminPaymentSync(request, env);
   if (path === "/api/admin/payments/cleanup" && request.method === "POST") return adminPaymentCleanup(request, env);
   if (path === "/api/admin/payments/blupal/webhook-url" && request.method === "GET") return getBlupalWebhookUrl(request, env);
@@ -12892,7 +12948,276 @@ async function routeApiUnsafe(request, env, path, ctx = null) {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.1.8';
+
+const LIVE_USAGE_MIGRATION_TAG = "v3.1.9-live-usage";
+let liveUsageProvisionNextAt = 0;
+
+function normalizeDurableObjectBinding(binding) {
+  if (!binding || binding.type !== "durable_object_namespace" || !binding.name) return null;
+  const normalized = { type: "durable_object_namespace", name: binding.name };
+  if (binding.class_name) normalized.class_name = binding.class_name;
+  if (binding.script_name) normalized.script_name = binding.script_name;
+  if (binding.environment) normalized.environment = binding.environment;
+  if (binding.namespace_id) normalized.namespace_id = binding.namespace_id;
+  return normalized;
+}
+
+async function provisionLiveUsageDurableObject(env, options = {}) {
+  await ensureDb(env);
+  const settings = await getSettings(env);
+  if (!settings.cf_account_id || !settings.cf_api_token || !settings.cf_worker_name) {
+    return { success:false, skipped:true, reason:"cloudflare_credentials_required" };
+  }
+  if (!options.force && Date.now() < liveUsageProvisionNextAt) {
+    return { success:false, skipped:true, reason:"provision_throttled" };
+  }
+  liveUsageProvisionNextAt = Date.now() + 10 * 60 * 1000;
+  const bundle = await readCurrentWorkerBundle(settings);
+  const currentBindings = Array.isArray(bundle.current.bindings) ? bundle.current.bindings : [];
+  const existing = currentBindings.find(binding => binding?.type === "durable_object_namespace" && binding?.name === "LIVE_USAGE_COORDINATOR");
+  const currentTag = cleanText(bundle.current.migration_tag || "", 100);
+  if (existing && currentTag) {
+    await setSettings(env, {
+      live_usage_provision_status: "configured",
+      live_usage_provision_error: "",
+      live_usage_provisioned_at: nowIso()
+    });
+    return { success:true, configured:true, changed:false, migration_tag:currentTag };
+  }
+
+  const durableBindings = currentBindings.map(normalizeDurableObjectBinding).filter(Boolean)
+    .filter(binding => binding.name !== "LIVE_USAGE_COORDINATOR");
+  durableBindings.push({
+    type: "durable_object_namespace",
+    name: "LIVE_USAGE_COORDINATOR",
+    class_name: "LiveUsageCoordinator"
+  });
+  const keepBindings = Array.from(new Set(currentBindings.map(binding => binding?.type).filter(type => type && type !== "durable_object_namespace")));
+  const mainModule = bundle.current.main_module || bundle.current.entry_point || bundle.modules[0].filename;
+  const migrations = !currentTag
+    ? { new_tag: LIVE_USAGE_MIGRATION_TAG, new_sqlite_classes: ["LiveUsageCoordinator"] }
+    : (currentTag === LIVE_USAGE_MIGRATION_TAG
+      ? null
+      : { old_tag: currentTag, new_tag: LIVE_USAGE_MIGRATION_TAG, new_sqlite_classes: ["LiveUsageCoordinator"] });
+  const metadata = {
+    main_module: mainModule,
+    compatibility_date: bundle.current.compatibility_date || "2026-06-01",
+    compatibility_flags: Array.isArray(bundle.current.compatibility_flags) ? bundle.current.compatibility_flags : [],
+    keep_bindings: keepBindings,
+    bindings: durableBindings,
+    ...(migrations ? { migrations } : {}),
+    annotations: {
+      "workers/message": "Enable BluePanel live usage Durable Object",
+      "workers/tag": "bluepanel-live-usage-v319"
+    }
+  };
+  const form = new FormData();
+  form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
+  for (const module of bundle.modules) form.append(module.field, module.file, module.filename);
+  const response = await fetch(bundle.base + "?bindings_inherit=strict", {
+    method: "PUT",
+    headers: { authorization: "Bearer " + settings.cf_api_token },
+    body: form
+  });
+  let data = {};
+  try { data = await response.json(); } catch (_) {}
+  if (!response.ok || data?.success === false) {
+    const message = cleanText(data?.errors?.[0]?.message || data?.messages?.[0]?.message || ("Cloudflare HTTP " + response.status), 900);
+    await setSettings(env, { live_usage_provision_status:"failed", live_usage_provision_error:message, live_usage_provisioned_at:nowIso() });
+    throw new Error("ساخت Durable Object مصرف زنده ناموفق بود: " + message);
+  }
+  await setSettings(env, {
+    live_usage_provision_status: "deployed",
+    live_usage_provision_error: "",
+    live_usage_provisioned_at: nowIso()
+  });
+  return { success:true, configured:true, changed:true, migration_tag:LIVE_USAGE_MIGRATION_TAG, reload_required:true };
+}
+
+function liveUsageRuntimeConfig(settings = {}) {
+  return {
+    enabled: String(settings.usage_sync_enabled || "true") === "true",
+    intervalSeconds: clampInt(settings.live_usage_interval_seconds || LIVE_USAGE_DEFAULT_INTERVAL_SECONDS, LIVE_USAGE_MIN_INTERVAL_SECONDS, 300),
+    centralBatch: clampInt(settings.live_usage_central_batch || LIVE_USAGE_DEFAULT_CENTRAL_BATCH, 1, 100),
+    downlineBatch: clampInt(settings.live_usage_downline_batch || LIVE_USAGE_DEFAULT_DOWNLINE_BATCH, 1, 20),
+    serviceBatch: clampInt(settings.live_usage_service_batch || LIVE_USAGE_DEFAULT_SERVICE_BATCH, 5, 120)
+  };
+}
+
+function liveUsageNamespaceAvailable(env) {
+  return Boolean(env?.LIVE_USAGE_COORDINATOR && typeof env.LIVE_USAGE_COORDINATOR.idFromName === "function" && typeof env.LIVE_USAGE_COORDINATOR.get === "function");
+}
+
+function liveUsageCoordinatorStub(env) {
+  if (!liveUsageNamespaceAvailable(env)) return null;
+  const objectId = env.LIVE_USAGE_COORDINATOR.idFromName(LIVE_USAGE_COORDINATOR_NAME);
+  return env.LIVE_USAGE_COORDINATOR.get(objectId);
+}
+
+async function callLiveUsageCoordinator(env, action = "start") {
+  const stub = liveUsageCoordinatorStub(env);
+  if (!stub) return { success: false, available: false, error: "Binding LIVE_USAGE_COORDINATOR تنظیم نشده است" };
+  const response = await stub.fetch("https://live-usage.internal/" + encodeURIComponent(action), {
+    method: action === "status" ? "GET" : "POST",
+    headers: { "x-bluepanel-live-usage": "core" }
+  });
+  let data = {};
+  try { data = await response.json(); } catch (_) {}
+  return { available: true, http_status: response.status, ...data };
+}
+
+let liveUsageBootstrapNextAt = 0;
+function scheduleLiveUsageBootstrap(env, ctx, force = false) {
+  if (!ctx || typeof ctx.waitUntil !== "function") return;
+  const now = Date.now();
+  if (!force && now < liveUsageBootstrapNextAt) return;
+  liveUsageBootstrapNextAt = now + 60000;
+  if (liveUsageNamespaceAvailable(env)) {
+    ctx.waitUntil(callLiveUsageCoordinator(env, "start").catch(error => console.error("live usage bootstrap error", error)));
+    return;
+  }
+  ctx.waitUntil(provisionLiveUsageDurableObject(env).catch(async error => {
+    console.error("live usage auto-provision error", error);
+    try { await audit(env, null, "live_usage_auto_provision_failed", { message:String(error?.message || error) }); } catch (_) {}
+  }));
+}
+
+async function adminLiveUsageControl(request, env) {
+  const auth = await requireAuth(request, env, true);
+  if (auth.response) return auth.response;
+  let action = request.method === "GET" ? "status" : "start";
+  if (request.method !== "GET") {
+    const body = await parseBody(request).catch(() => ({}));
+    action = ["start", "run", "stop", "status", "provision"].includes(String(body.action || "")) ? String(body.action) : "start";
+  }
+  const result = action === "provision"
+    ? await provisionLiveUsageDurableObject(env, { force:true })
+    : await callLiveUsageCoordinator(env, action);
+  await audit(env, auth.user.id, "live_usage_control", { action, result: { success: result.success, available: result.available, error: result.error || "" } });
+  return json({ success: result.success !== false, result }, result.available === false ? 503 : 200);
+}
+
+export class LiveUsageCoordinator {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    this.state.blockConcurrencyWhile(async () => {
+      const alarm = await this.state.storage.getAlarm();
+      if (alarm === null) await this.state.storage.setAlarm(Date.now() + 1000);
+    });
+  }
+
+  response(data, status = 200) {
+    return new Response(JSON.stringify(data), { status, headers: JSON_HEADERS });
+  }
+
+  async status() {
+    const status = (await this.state.storage.get("status")) || {};
+    const alarm = await this.state.storage.getAlarm();
+    return { success: true, running: alarm !== null, next_alarm_at: alarm ? new Date(alarm).toISOString() : null, ...status };
+  }
+
+  async fetch(request) {
+    const path = new URL(request.url).pathname;
+    if (path === "/status") return this.response(await this.status());
+    if (path === "/stop") {
+      await this.state.storage.deleteAlarm();
+      await this.state.storage.put("status", { enabled: false, stopped_at: nowIso(), reason: "manual" });
+      return this.response({ success: true, stopped: true });
+    }
+    if (path === "/run") {
+      const result = await this.runCycle("manual");
+      return this.response({ success: true, result, ...(await this.status()) });
+    }
+    const current = await this.state.storage.getAlarm();
+    if (current === null || current > Date.now() + 30000) await this.state.storage.setAlarm(Date.now() + 500);
+    return this.response({ success: true, started: true, ...(await this.status()) });
+  }
+
+  async runCycle(source = "alarm") {
+    const startedAt = nowIso();
+    const startedMs = Date.now();
+    const existingLock = await this.state.storage.get("cycle_lock");
+    if (existingLock && startedMs - Number(existingLock.started_ms || 0) < 5 * 60 * 1000) {
+      return { enabled: true, source, skipped: true, reason: "cycle_already_running", started_at: startedAt };
+    }
+    await this.state.storage.put("cycle_lock", { started_ms: startedMs, source });
+    let config = {
+      enabled: true,
+      intervalSeconds: LIVE_USAGE_DEFAULT_INTERVAL_SECONDS,
+      centralBatch: LIVE_USAGE_DEFAULT_CENTRAL_BATCH,
+      downlineBatch: LIVE_USAGE_DEFAULT_DOWNLINE_BATCH,
+      serviceBatch: LIVE_USAGE_DEFAULT_SERVICE_BATCH
+    };
+    try {
+      await ensureDb(this.env);
+      const settings = await getSettings(this.env);
+      config = liveUsageRuntimeConfig(settings);
+      if (!config.enabled) {
+        const result = { enabled: false, source, started_at: startedAt, finished_at: nowIso(), duration_ms: Date.now() - startedMs };
+        await this.state.storage.put("status", result);
+        return result;
+      }
+      const central = await syncUsage(this.env, config.centralBatch);
+      const downline = await syncDownlineUsage(this.env, null, config.downlineBatch, { sync: true, serviceLimit: config.serviceBatch });
+      const balance = await reconcileAllAgencyBalanceStates(this.env, Math.max(50, config.centralBatch * 3));
+      const result = {
+        enabled: true,
+        source,
+        started_at: startedAt,
+        finished_at: nowIso(),
+        duration_ms: Date.now() - startedMs,
+        config,
+        central,
+        downline,
+        balance
+      };
+      await this.state.storage.put("status", result);
+      try {
+        await this.env.PASARGUARD_DB.prepare(
+          "INSERT INTO app_settings(key,value,updated_at) VALUES('last_live_usage_at',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at"
+        ).bind(result.finished_at, result.finished_at).run();
+        await this.env.PASARGUARD_DB.prepare(
+          "INSERT INTO app_settings(key,value,updated_at) VALUES('last_live_usage_result',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at"
+        ).bind(JSON.stringify({ central, downline, duration_ms: result.duration_ms }), result.finished_at).run();
+      } catch (_) {}
+      if (Number(central?.charged || 0) > 0 || Number(downline?.charged || 0) > 0 || Number(downline?.collected || 0) > 0) {
+        try {
+          await queueReportEvent(this.env, null, "payments", "محاسبه خودکار مصرف نمایندگان",
+            "📡 <b>محاسبه Live مصرف انجام شد</b>\n" +
+            "پنل‌های مرکزی: " + Number(central?.processed || 0).toLocaleString("fa-IR") + "\n" +
+            "کسر مرکزی: " + Number(central?.charged || 0).toLocaleString("fa-IR") + " تومان\n" +
+            "ربات‌های زیرمجموعه: " + Number(downline?.processed || 0).toLocaleString("fa-IR") + "\n" +
+            "صورتحساب زیرمجموعه: " + Number(downline?.charged || 0).toLocaleString("fa-IR") + " تومان\n" +
+            "وصول‌شده: " + Number(downline?.collected || 0).toLocaleString("fa-IR") + " تومان",
+            "live_usage:" + result.finished_at.slice(0, 16));
+        } catch (_) {}
+      }
+      return result;
+    } catch (error) {
+      const result = { enabled: true, source, started_at: startedAt, failed_at: nowIso(), duration_ms: Date.now() - startedMs, error: String(error?.message || error), config };
+      await this.state.storage.put("status", result);
+      try { await audit(this.env, null, "live_usage_cycle_failed", result); } catch (_) {}
+      return result;
+    } finally {
+      await this.state.storage.delete("cycle_lock");
+    }
+  }
+
+  async alarm() {
+    let intervalSeconds = LIVE_USAGE_DEFAULT_INTERVAL_SECONDS;
+    try {
+      const result = await this.runCycle("alarm");
+      intervalSeconds = clampInt(result?.config?.intervalSeconds || LIVE_USAGE_DEFAULT_INTERVAL_SECONDS, LIVE_USAGE_MIN_INTERVAL_SECONDS, 300);
+      if (result?.enabled === false) intervalSeconds = 60;
+    } finally {
+      await this.state.storage.setAlarm(Date.now() + intervalSeconds * 1000);
+    }
+  }
+}
+
+
+const BLUEPANEL_CORE_VERSION = '3.1.9';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
@@ -12937,6 +13262,7 @@ async function bluePanelCoreLocalHealth(env) {
   catch (healthError) { error = String(healthError?.message || healthError); }
   const edgeBinding = serviceBindingRuntimeInfo(env, 'EDGE_WORKER');
   const processorBinding = serviceBindingRuntimeInfo(env, 'PROCESSOR_WORKER');
+  const liveUsageBinding = { configured: liveUsageNamespaceAvailable(env), binding: 'LIVE_USAGE_COORDINATOR', class_name: 'LiveUsageCoordinator' };
   return {
     ok: databaseQueryOk,
     cluster_ready: databaseQueryOk && edgeBinding.fetch_callable && processorBinding.fetch_callable,
@@ -12944,7 +13270,8 @@ async function bluePanelCoreLocalHealth(env) {
     split_runtime: true, bundle: 'core', verification_mode: 'cycle_safe_local',
     edge_binding_detected: edgeBinding.fetch_callable,
     processor_binding_detected: processorBinding.fetch_callable,
-    runtime_bindings: { EDGE_WORKER: edgeBinding, PROCESSOR_WORKER: processorBinding },
+    runtime_bindings: { EDGE_WORKER: edgeBinding, PROCESSOR_WORKER: processorBinding, LIVE_USAGE_COORDINATOR: liveUsageBinding },
+    live_usage_binding_detected: liveUsageBinding.configured,
     error
   };
 }
@@ -12986,6 +13313,7 @@ export default {
   async fetch(request,env,ctx){
     const url=new URL(request.url),path=url.pathname.replace(/\/+$/,'')||'/';
     try {
+      scheduleLiveUsageBootstrap(env,ctx);
       scheduleRequestTriggeredUpdate(env,ctx,path);
       if(request.method==='OPTIONS') return new Response(null,{status:204,headers:{'access-control-allow-origin':'*','access-control-allow-methods':'GET,POST,OPTIONS','access-control-allow-headers':'content-type,x-telegram-init-data,x-web-session,authorization,x-bluepanel-public-origin'}});
       if(path==='/__bluepanel/internal/d1'&&request.method==='POST') return bluePanelCoreD1Rpc(request,env);
@@ -13005,5 +13333,5 @@ export default {
       return new Response('Not found',{status:404});
     } catch(error){console.error('core fetch error',error);return bluePanelCoreJson({success:false,ok:false,role:'bluepanel-core',version:APP_VERSION,error:String(error?.message||error),code:'CORE_RUNTIME_ERROR'},500);}
   },
-  async scheduled(controller,env,ctx){ctx.waitUntil((async()=>{try{await ensureDb(env);await env.PASARGUARD_DB.prepare('DELETE FROM web_sessions WHERE expires_at<=?').bind(nowIso()).run();await env.PASARGUARD_DB.prepare('DELETE FROM web_login_codes WHERE expires_at<=? OR (consumed_at IS NOT NULL AND consumed_at<=?)').bind(nowIso(),new Date(Date.now()-3600000).toISOString()).run();await notifyVersionActivation(env);try{await processReportOutboxOnCore(env,300)}catch(error){console.error('core report flush before jobs error',error)}try{await syncPasarguardManagersForAllUsers(env,250)}catch(_){}await syncUsage(env,100);await reconcileAllAgencyBalanceStates(env,250);await processCentralTrialExpirations(env,100);const s=await getSettings(env);if(plisioRateMode(s)==='auto'&&String(s.plisio_fx_api_key||'').trim()){try{await refreshCentralPlisioFxRate(env)}catch(error){console.error('fx refresh error',error)}}if(s.payment_poll_enabled==='true'&&s.blupal_api_key)await pollPendingPayments(env,30);if(s.auto_delete_pending_invoices==='true')await cleanupStalePendingInvoices(env,{settings:s,limit:200});await automaticUpdateTick(env,{source:'cron'});await automaticPythonHelperTick(env,{source:'cron'});const processorResult=await triggerProcessorBusinessJobs(env,'core_cron_fallback');if(processorResult?.success===false)console.error('processor fallback error',processorResult.error);try{await processReportOutboxOnCore(env,300)}catch(error){console.error('core report flush after jobs error',error)}await env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_core_cron_at',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(nowIso(),nowIso()).run();}catch(error){console.error('core scheduled error',error)}})());}
+  async scheduled(controller,env,ctx){scheduleLiveUsageBootstrap(env,ctx,true);ctx.waitUntil((async()=>{try{await ensureDb(env);await env.PASARGUARD_DB.prepare('DELETE FROM web_sessions WHERE expires_at<=?').bind(nowIso()).run();await env.PASARGUARD_DB.prepare('DELETE FROM web_login_codes WHERE expires_at<=? OR (consumed_at IS NOT NULL AND consumed_at<=?)').bind(nowIso(),new Date(Date.now()-3600000).toISOString()).run();await notifyVersionActivation(env);try{await processReportOutboxOnCore(env,300)}catch(error){console.error('core report flush before jobs error',error)}try{await syncPasarguardManagersForAllUsers(env,250)}catch(_){}if(!liveUsageNamespaceAvailable(env))await syncUsage(env,100);await reconcileAllAgencyBalanceStates(env,250);await processCentralTrialExpirations(env,100);const s=await getSettings(env);if(plisioRateMode(s)==='auto'&&String(s.plisio_fx_api_key||'').trim()){try{await refreshCentralPlisioFxRate(env)}catch(error){console.error('fx refresh error',error)}}if(s.payment_poll_enabled==='true'&&s.blupal_api_key)await pollPendingPayments(env,30);if(s.auto_delete_pending_invoices==='true')await cleanupStalePendingInvoices(env,{settings:s,limit:200});await automaticUpdateTick(env,{source:'cron'});await automaticPythonHelperTick(env,{source:'cron'});const processorResult=await triggerProcessorBusinessJobs(env,'core_cron_fallback');if(processorResult?.success===false)console.error('processor fallback error',processorResult.error);try{await processReportOutboxOnCore(env,300)}catch(error){console.error('core report flush after jobs error',error)}await env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_core_cron_at',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(nowIso(),nowIso()).run();}catch(error){console.error('core scheduled error',error)}})());}
 };
