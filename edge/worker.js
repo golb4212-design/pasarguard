@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.2
+ * Version: 3.3.4
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = "3.3.2";
+const APP_VERSION = "3.3.4";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -10958,7 +10958,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_EDGE_VERSION='3.3.2';
+const BLUEPANEL_EDGE_VERSION='3.3.4';
 function bluePanelEdgeJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function bluePanelEdgeInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
 function bluePanelEdgeRuntimeBinding(env,name){const value=env?.[name];return{name,exact_key_present:Object.prototype.hasOwnProperty.call(env||{},name),value_present:value!==undefined&&value!==null,fetch_callable:Boolean(value&&typeof value.fetch==='function'),constructor_name:value?.constructor?.name||''}}
@@ -10968,6 +10968,15 @@ async function bluePanelEdgeDeepHealth(env){const local=await bluePanelEdgeLocal
 async function bluePanelEdgeForwardCore(request,env){if(!env.CORE_WORKER||typeof env.CORE_WORKER.fetch!=='function')return bluePanelEdgeJson({success:false,error:'CORE_WORKER متصل نیست',code:'CORE_BINDING_MISSING'},503);const source=new URL(request.url),target='https://bluepanel-core.internal'+source.pathname+source.search,base=new Request(target,request),headers=new Headers(base.headers);headers.set('x-bluepanel-service-hop','edge-to-core');headers.set('x-bluepanel-public-origin',request.headers.get('x-bluepanel-public-origin')||source.origin);const r=await env.CORE_WORKER.fetch(new Request(base,{headers,redirect:'manual'}));return new Response(r.body,{status:r.status,statusText:r.statusText,headers:r.headers})}
 async function bluePanelQueueResellerWebhook(request,env){if(!env.PROCESSOR_WORKER||typeof env.PROCESSOR_WORKER.fetch!=='function')return null;const source=new URL(request.url),body=await request.clone().text(),headers={};for(const [k,v] of request.headers)if(!['host','content-length'].includes(k.toLowerCase()))headers[k]=v;const r=await env.PROCESSOR_WORKER.fetch(new Request('https://bluepanel-processor.internal/__bluepanel/service/queue',{method:'POST',headers:{'content-type':'application/json','x-bluepanel-service-hop':'edge-to-processor'},body:JSON.stringify({method:request.method,path_query:source.pathname+source.search,headers,body_text:body,public_origin:request.headers.get('x-bluepanel-public-origin')||source.origin})}));if(!r.ok)return null;return new Response(JSON.stringify({ok:true,queued:true}),{status:200,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-bluepanel-queued':'processor'}})}
 function bluePanelStaticHeaders(type='text/html; charset=utf-8'){return{'content-type':type,'cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'same-origin','permissions-policy':'camera=(),microphone=(),geolocation=()'}}
+async function bluePanelSafeResellerWebhook(request,runtime,botId,ctx){
+  try{return await resellerSalesWebhook(request,runtime,botId,ctx)}
+  catch(error){
+    console.error('reseller webhook recovered from fatal error',error);
+    // Always acknowledge Telegram. A failing update must not create a retry storm
+    // or make every following message look as if the bot is offline.
+    return bluePanelEdgeJson({ok:true,recovered:true,role:'bluepanel-edge',version:APP_VERSION,code:'RESELLER_WEBHOOK_RECOVERY'},200)
+  }
+}
 export default {
  async fetch(request,env,ctx){const runtime=bluePanelRuntimeEnv(env,'bluepanel-edge'),url=new URL(request.url),path=url.pathname.replace(/\/+$/,'')||'/';try{
   if(request.method==='OPTIONS')return new Response(null,{status:204,headers:{'access-control-allow-origin':'*','access-control-allow-methods':'GET,POST,OPTIONS','access-control-allow-headers':'content-type,x-telegram-init-data,x-web-session,authorization,x-bluepanel-public-origin'}});
@@ -10981,7 +10990,7 @@ export default {
   if(['/control','/admin','/panel','/dashboard'].includes(path)&&request.method==='GET')return new Response(CENTRAL_CONTROL_HTML.replaceAll('__APP_VERSION__',APP_VERSION),{headers:bluePanelStaticHeaders()});
   if(path==='/control-advanced'&&request.method==='GET')return new Response(MINI_APP_HTML.replaceAll('__APP_VERSION__',APP_VERSION).replaceAll('__CONTROL_MODE__','true'),{headers:bluePanelStaticHeaders()});
   if(['/', '/app','/miniapp'].includes(path)&&request.method==='GET')return new Response(MINI_APP_HTML.replaceAll('__APP_VERSION__',APP_VERSION).replaceAll('__CONTROL_MODE__','false'),{headers:bluePanelStaticHeaders()});
-  const wh=path.match(/^\/sales-bot\/([^/]+)\/webhook$/);if(wh&&request.method==='POST')return resellerSalesWebhook(request,runtime,decodeURIComponent(wh[1]),ctx);
+  const wh=path.match(/^\/sales-bot\/([^/]+)\/webhook$/);if(wh&&request.method==='POST')return bluePanelSafeResellerWebhook(request,runtime,decodeURIComponent(wh[1]),ctx);
   const pwh=path.match(/^\/sales-payments\/([^/]+)\/blupal\/webhook$/);if(pwh&&request.method==='POST')return resellerBlupalWebhook(request,runtime,ctx,decodeURIComponent(pwh[1]));
   const ccback=path.match(/^\/sales-payments\/([^/]+)\/cubepay\/callback$/);if(ccback&&['GET','POST'].includes(request.method))return resellerCubepayCallback(request,runtime,decodeURIComponent(ccback[1]));
   const pcback=path.match(/^\/sales-payments\/([^/]+)\/plisio\/callback$/);if(pcback&&request.method==='POST')return resellerPlisioCallback(request,runtime,decodeURIComponent(pcback[1]));
