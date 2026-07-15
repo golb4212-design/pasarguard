@@ -1,7 +1,7 @@
 {
-  "version": "3.2.9",
-  "release_id": "3.2.9-20260715-duration-bidi-order-fix",
-  "architecture": "fully-split-three-worker-duration-bidi-order-fixed",
+  "version": "3.2.10",
+  "release_id": "3.2.10-20260715-subscription-alt-https-port-fix",
+  "architecture": "fully-split-three-worker-subscription-alt-https-port-fixed",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -32,9 +32,10 @@
     ]
   },
   "features": [
-    "fixes Telegram RTL rendering so one-month duration is displayed as ۱ ماهه instead of ماهه ۱",
-    "uses an isolated left-to-right duration segment while keeping the overall Persian purchase row right-to-left",
-    "single-location skipping and product deduplication from 3.2.8 remain preserved",
+    "accepts valid PasarGuard subscription links served on HTTPS alternate ports such as 2053",
+    "keeps hostname ownership validation and rejects unknown or non-HTTPS subscription endpoints",
+    "configured PasarGuard panel/subscription ports are automatically allowed",
+    "single-location, product deduplication and RTL duration fixes remain preserved",
     "README files are excluded"
   ],
   "deployment": {
@@ -50,20 +51,21 @@
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "duration_bidi_segment": "passed; duration uses LRI/PDI isolate",
+    "sample_subscription_port_2053": "passed",
+    "unknown_subscription_port_rejection": "passed",
     "release_manifest_hashes": "recalculated",
     "zip_integrity": "passed"
   },
   "sha256": {
-    "core": "990732a88be323d4205278f697c01c7cc963b97e4257daeefeca7e9cff8eb4ba",
-    "edge": "4dbb64dcc5aced23a35c3093a9ddb9a709bc29fa773c7e474537913d5b4ae8bc",
-    "processor": "d5b00e102523752e7b9f003639baa513ad4b44a792c040ef37eff82a8d2339af",
+    "core": "e79b51c493c03f8c9a84bc65f621fa0cf12e74f78ec26f8e6634e4c90778e018",
+    "edge": "cbe44f5b6020a28b246a9fe895b7917700a7c2b7481558d593ed1963487d7bee",
+    "processor": "1a4017b65bfd34f668b44bfed08f6dac381995fa3c63cf3d6c9660e7e8c0977e",
     "durable_object_config": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   },
   "hashes": {
-    "core/worker.js": "990732a88be323d4205278f697c01c7cc963b97e4257daeefeca7e9cff8eb4ba",
-    "edge/worker.js": "4dbb64dcc5aced23a35c3093a9ddb9a709bc29fa773c7e474537913d5b4ae8bc",
-    "processor/worker.js": "d5b00e102523752e7b9f003639baa513ad4b44a792c040ef37eff82a8d2339af",
+    "core/worker.js": "e79b51c493c03f8c9a84bc65f621fa0cf12e74f78ec26f8e6634e4c90778e018",
+    "edge/worker.js": "cbe44f5b6020a28b246a9fe895b7917700a7c2b7481558d593ed1963487d7bee",
+    "processor/worker.js": "1a4017b65bfd34f668b44bfed08f6dac381995fa3c63cf3d6c9660e7e8c0977e",
     "core/wrangler.live-usage.example.toml": "7769077cd139c31a82e9039fe2cd18a5a1a4a260c23676083394e0df6ffd18ac"
   }
 }

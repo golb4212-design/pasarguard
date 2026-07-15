@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.2.9
+ * Version: 3.2.10
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = "3.2.9";
+const APP_VERSION = "3.2.10";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -2099,6 +2099,20 @@ function salesSubscriptionAllowedHosts(settings) {
   return hosts;
 }
 
+function salesSubscriptionAllowedPorts(settings) {
+  // HTTPS alternate ports supported by Cloudflare and commonly used by PasarGuard deployments.
+  const ports = new Set(["", "443", "2053", "2083", "2087", "2096", "8443"]);
+  for (const raw of [settings?.pasarguard_panel_url, settings?.pasarguard_sub_domain]) {
+    const value = String(raw || "").trim();
+    if (!value) continue;
+    try {
+      const parsed = new URL(value.includes("://") ? value : ("https://" + value));
+      ports.add(parsed.port || "443");
+    } catch (_) {}
+  }
+  return ports;
+}
+
 function parseSalesSubscriptionLink(rawLink, settings) {
   let value = cleanText(rawLink, 2000).trim();
   value = value.replace(/^<|>$/g, "").trim();
@@ -2107,7 +2121,11 @@ function parseSalesSubscriptionLink(rawLink, settings) {
   try { url = new URL(value); } catch (_) { throw new Error("فرمت لینک اشتراک معتبر نیست"); }
   if (url.protocol !== "https:") throw new Error("لینک اشتراک باید با https شروع شود");
   if (url.username || url.password) throw new Error("لینک اشتراک دارای اطلاعات ورود نامعتبر است");
-  if (url.port && url.port !== "443") throw new Error("پورت لینک اشتراک مجاز نیست");
+  const allowedPorts = salesSubscriptionAllowedPorts(settings);
+  const effectivePort = url.port || "443";
+  if (!allowedPorts.has(effectivePort)) {
+    throw new Error("پورت لینک اشتراک با تنظیمات پنل این نماینده مطابقت ندارد");
+  }
   const allowedHosts = salesSubscriptionAllowedHosts(settings);
   if (!allowedHosts.size || !allowedHosts.has(url.hostname.toLowerCase())) {
     throw new Error("دامنه لینک اشتراک متعلق به پنل متصل این نماینده نیست");
@@ -10564,7 +10582,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_EDGE_VERSION='3.2.9';
+const BLUEPANEL_EDGE_VERSION='3.2.10';
 function bluePanelEdgeJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function bluePanelEdgeInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
 function bluePanelEdgeRuntimeBinding(env,name){const value=env?.[name];return{name,exact_key_present:Object.prototype.hasOwnProperty.call(env||{},name),value_present:value!==undefined&&value!==null,fetch_callable:Boolean(value&&typeof value.fetch==='function'),constructor_name:value?.constructor?.name||''}}

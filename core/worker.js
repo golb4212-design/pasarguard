@@ -1,15 +1,23 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.2.9
+ * Version: 3.2.10
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = "3.2.9";
+const APP_VERSION = "3.2.10";
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.2.10": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🔗", text: "پذیرش لینک‌های اشتراک HTTPS روی پورت‌های استاندارد جایگزین مانند 2053" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "✅", text: "رفع خطای اشتباه «پورت لینک اشتراک مجاز نیست» برای لینک‌های معتبر پنل" }
+    ])
+  }),
   "3.2.9": Object.freeze({
     central: Object.freeze([
       { emoji: "↔️", text: "اصلاح ترتیب نمایش مدت در دکمه‌های تلگرام و جلوگیری از نمایش «ماهه ۱»" }
@@ -13425,7 +13433,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.2.9';
+const BLUEPANEL_CORE_VERSION = '3.2.10';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
