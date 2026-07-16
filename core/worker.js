@@ -1,15 +1,26 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.23
+ * Version: 3.3.24
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.23';
+const APP_VERSION = '3.3.24';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.24": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🔐", text: "جداسازی هویت مدیریتی PasarGuard از بک‌اند سرویس مرزبان مشترک" },
+      { emoji: "🧩", text: "رفع خطای نبود شناسه مدیر هنگام تغییر نوع ربات بعد از فعال‌سازی مرزبان" },
+      { emoji: "🛠", text: "بازیابی خودکار شناسه مدیر پنل برای رکوردهای قدیمی یا ناقص" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "✅", text: "ورود پنل مدیریت با نام کاربری و رمز صحیح PasarGuard در حالت مرزبان مشترک" },
+      { emoji: "🔄", text: "تغییر نوع ربات بدون حذف کاربران، تنظیمات یا اتصال مرزبان" }
+    ])
+  }),
   "3.3.23": Object.freeze({
     central: Object.freeze([
       { emoji: "📡", text: "تنظیم خودکار Proxies و Inbounds مرزبان با واردکردن نام کاربری یک اشتراک نمونه موجود" },
@@ -420,7 +431,7 @@ let errorCenterSchemaPromise = null;
 
 // Persistent schema marker: avoids replaying the full D1 migration sweep whenever
 // Cloudflare starts a fresh isolate after an idle period.
-const DB_SCHEMA_REVISION = "3.3.23";
+const DB_SCHEMA_REVISION = "3.3.24";
 
 let settingsCache = null;
 
@@ -3801,6 +3812,50 @@ async function pasargadSetManagerRole(env, remoteId, roleKind, suppliedSettings 
   const roleId = await resolvePasarguardRoleId(env, settings, roleKind);
   await pasarguardRequest(env, "PUT", "/api/admin/by-id/" + encodeURIComponent(remoteId), { role_id: roleId });
   return roleId;
+}
+
+async function recoverAgencyRemoteManagerIdentity(env, agency, user) {
+  if (!agency || !user) return agency;
+  if (agency.remote_manager_id) return agency;
+  const matches = await pasarguardFindManagersByTelegramId(env, user.telegram_id);
+  const expected = String(agency.panel_username || "").trim().toLowerCase();
+  let candidate = matches.find(item => String(item?.username || "").trim().toLowerCase() === expected);
+  if (!candidate && matches.length === 1) candidate = matches[0];
+  const remoteId = candidate?.id ?? candidate?.data?.id;
+  if (remoteId === undefined || remoteId === null) return agency;
+
+  const remoteKey = String(remoteId);
+  const candidateUsername = cleanText(candidate?.username || agency.panel_username || "", 64);
+  const duplicate = await env.PASARGUARD_DB.prepare(
+    "SELECT id,user_id,panel_username,remote_manager_id FROM agencies WHERE remote_manager_id=? AND id<>? LIMIT 1"
+  ).bind(remoteKey, agency.id).first();
+  if (duplicate && Number(duplicate.user_id) !== Number(user.id)) {
+    const error = new Error("شناسه مدیر PasarGuard به حساب دیگری متصل است و بازیابی خودکار متوقف شد");
+    error.code = "PASARGUARD_MANAGER_LINK_CONFLICT";
+    throw error;
+  }
+
+  if (duplicate && Number(duplicate.user_id) === Number(user.id)) {
+    await env.PASARGUARD_DB.prepare(
+      "UPDATE reseller_bots SET agency_id=?,updated_at=? WHERE agency_id=? AND user_id=?"
+    ).bind(duplicate.id, nowIso(), agency.id, user.id).run();
+    await audit(env, user.id, "reseller_bot_agency_identity_relinked", {
+      fromAgencyId: agency.id, toAgencyId: duplicate.id, remoteManagerId: remoteKey
+    });
+    return { ...agency, id: duplicate.id, remote_manager_id: remoteKey, panel_username: duplicate.panel_username || candidateUsername };
+  }
+
+  await env.PASARGUARD_DB.prepare(`
+    UPDATE agencies
+    SET remote_manager_id=?,
+        panel_username=CASE WHEN ?<>'' THEN ? ELSE panel_username END,
+        runtime_version=?,update_applied_at=?,updated_at=?
+    WHERE id=? AND user_id=? AND remote_manager_id IS NULL
+  `).bind(remoteKey, candidateUsername, candidateUsername, APP_VERSION, nowIso(), nowIso(), agency.id, user.id).run();
+  await audit(env, user.id, "pasarguard_manager_identity_recovered", {
+    agencyId: agency.id, remoteManagerId: remoteKey, panelUsername: candidateUsername
+  });
+  return { ...agency, remote_manager_id: remoteKey, panel_username: candidateUsername || agency.panel_username };
 }
 
 async function applyBotLicenseRoleToAgency(env, agency, licenseType, actorUserId = null) {
@@ -9213,9 +9268,14 @@ async function changeResellerBotLicenseType(env, account, bot, requestedType) {
     }
   }
 
-  const agency = await env.PASARGUARD_DB.prepare("SELECT id,remote_manager_id FROM agencies WHERE id=? AND user_id=?")
+  let agency = await env.PASARGUARD_DB.prepare("SELECT id,remote_manager_id,panel_username,title,status FROM agencies WHERE id=? AND user_id=?")
     .bind(bot.agency_id, account.user.id).first();
-  if (!agency?.remote_manager_id) throw new Error("شناسه مدیر پنل PasarGuard برای تغییر نوع ربات در دسترس نیست");
+  if (!agency) throw new Error("پنل مدیریتی PasarGuard این ربات در دیتابیس پیدا نشد");
+  if (!agency.remote_manager_id) {
+    try { agency = await recoverAgencyRemoteManagerIdentity(env, agency, account.user); }
+    catch (error) { throw new Error("بازیابی شناسه مدیر PasarGuard ناموفق بود: " + error.message); }
+  }
+  if (!agency?.remote_manager_id) throw new Error("شناسه مدیر پنل PasarGuard پیدا نشد؛ از بخش پنل‌های من یک‌بار همگام‌سازی پنل را اجرا کنید");
 
   const fee = resellerBotTypeChangeFee(settings, currentType, targetType);
   const changedAt = nowIso();
@@ -9455,9 +9515,16 @@ async function resolveResellerServiceAgency(env, bot) {
   const settings = await getSettings(env);
   if (sharedMarzbanEnabled(settings, env)) {
     const cfg = sharedMarzbanConfig(settings, env);
-    return { ...bot, agency_id:"shared-marzban", agency_title:"مرزبان مشترک مرکزی",
-      panel_username:"", panel_password_enc:null, agency_status:cfg.enabled?"active":"disabled",
-      remote_manager_id:null, service_provider:"marzban", independent_panel_access:false };
+    // Marzban is only the shared service backend. Keep the PasarGuard agency
+    // identity on the bot for owner authentication, role changes and recovery.
+    return { ...bot,
+      service_provider:"marzban",
+      service_agency_id:"shared-marzban",
+      service_agency_title:"مرزبان مشترک مرکزی",
+      service_agency_status:cfg.enabled?"active":"disabled",
+      service_panel_username:"",
+      service_remote_manager_id:null,
+      independent_panel_access:resellerHasIndependentPanel(bot) };
   }
   if (!bot.parent_bot_id) return { ...bot, service_provider:"pasarguard" };
   const parent = await env.PASARGUARD_DB.prepare(`
@@ -9533,7 +9600,7 @@ async function getResellerBotForUser(env, userId) {
   let bot = await env.PASARGUARD_DB.prepare("SELECT * FROM reseller_bots WHERE user_id=? LIMIT 1").bind(userId).first();
   bot = await hydrateResellerBotRelations(env, bot);
   const resolved = await resolveResellerServiceAgency(env, bot);
-  if (resolved) resolved.independent_panel_access = resolved.service_provider !== "marzban" && resellerHasIndependentPanel(resolved);
+  if (resolved) resolved.independent_panel_access = resellerHasIndependentPanel(resolved);
   return resolved;
 }
 
@@ -9541,7 +9608,7 @@ async function getResellerBotById(env, botId) {
   let bot = await env.PASARGUARD_DB.prepare("SELECT * FROM reseller_bots WHERE id=? LIMIT 1").bind(botId).first();
   bot = await hydrateResellerBotRelations(env, bot);
   const resolved = await resolveResellerServiceAgency(env, bot);
-  if (resolved) resolved.independent_panel_access = resolved.service_provider !== "marzban" && resellerHasIndependentPanel(resolved);
+  if (resolved) resolved.independent_panel_access = resellerHasIndependentPanel(resolved);
   return resolved;
 }
 
@@ -13430,6 +13497,9 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
     return;
   }
   if (data.startsWith("bot:sales:type:apply:")) {
+    try {
+      if (messageId) await telegramApi(env, "editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] } });
+    } catch (_) {}
     const bot = await getResellerBotForUser(env, account.user.id);
     if (!bot) throw new Error("ربات نماینده پیدا نشد");
     const targetRaw = String(data.split(":").pop() || "").trim().toLowerCase();

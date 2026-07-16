@@ -1,11 +1,11 @@
 /* BLUEPANEL_PROCESSOR_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.23
+ * Version: 3.3.24
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = '3.3.23';
+const APP_VERSION = '3.3.24';
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
@@ -647,9 +647,16 @@ async function resolveResellerServiceAgency(env, bot) {
   const settings = await getSettings(env);
   if (sharedMarzbanEnabled(settings, env)) {
     const cfg = sharedMarzbanConfig(settings, env);
-    return { ...bot, agency_id:"shared-marzban", agency_title:"مرزبان مشترک مرکزی",
-      panel_username:"", panel_password_enc:null, agency_status:cfg.enabled?"active":"disabled",
-      remote_manager_id:null, service_provider:"marzban", independent_panel_access:false };
+    // Marzban is only the shared service backend. Keep the PasarGuard agency
+    // identity on the bot for owner authentication, role changes and recovery.
+    return { ...bot,
+      service_provider:"marzban",
+      service_agency_id:"shared-marzban",
+      service_agency_title:"مرزبان مشترک مرکزی",
+      service_agency_status:cfg.enabled?"active":"disabled",
+      service_panel_username:"",
+      service_remote_manager_id:null,
+      independent_panel_access:resellerHasIndependentPanel(bot) };
   }
   if (!bot.parent_bot_id) return { ...bot, service_provider:"pasarguard" };
   const parent = await env.PASARGUARD_DB.prepare(`
@@ -711,7 +718,7 @@ async function getResellerBotById(env, botId) {
   let bot = await env.PASARGUARD_DB.prepare("SELECT * FROM reseller_bots WHERE id=? LIMIT 1").bind(botId).first();
   bot = await hydrateResellerBotRelations(env, bot);
   const resolved = await resolveResellerServiceAgency(env, bot);
-  if (resolved) resolved.independent_panel_access = resolved.service_provider !== "marzban" && resellerHasIndependentPanel(resolved);
+  if (resolved) resolved.independent_panel_access = resellerHasIndependentPanel(resolved);
   return resolved;
 }
 

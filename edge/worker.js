@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.23
+ * Version: 3.3.24
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = '3.3.23';
+const APP_VERSION = '3.3.24';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -665,6 +665,55 @@ async function verifyPasarguardWebCredentials(env, username, password) {
     console.error("pasarguard profile fetch error", error);
   }
   return { token: String(data.access_token), profile, settings };
+}
+
+function pasarguardProfileIdentity(rawProfile) {
+  let profile = rawProfile && typeof rawProfile === "object" ? rawProfile : {};
+  for (const key of ["admin", "user", "profile", "data", "result"]) {
+    if (profile && profile[key] && typeof profile[key] === "object" && !Array.isArray(profile[key])) {
+      const nested = profile[key];
+      if (nested.id != null || nested.username != null || nested.telegram_id != null) {
+        profile = nested;
+        break;
+      }
+    }
+  }
+  return {
+    raw: profile,
+    id: profile?.id ?? profile?.admin_id ?? profile?.manager_id ?? null,
+    username: cleanText(profile?.username || profile?.login || profile?.panel_username || "", 80),
+    telegram_id: profile?.telegram_id ?? profile?.telegramId ?? null
+  };
+}
+
+async function repairResellerManagementIdentity(env, bot, owner, identity, suppliedUsername) {
+  if (!bot?.agency_id || String(bot.agency_id) === "shared-marzban") return bot;
+  const remoteId = identity?.id != null ? String(identity.id) : "";
+  const profileUsername = cleanText(identity?.username || suppliedUsername || "", 80);
+  const storedRemote = bot.remote_manager_id != null ? String(bot.remote_manager_id) : "";
+  const storedUsername = cleanText(bot.panel_username || "", 80);
+  const ownerTelegram = owner?.telegram_id != null ? String(owner.telegram_id) : "";
+  const profileTelegram = identity?.telegram_id != null ? String(identity.telegram_id) : "";
+  const sameOwnerTelegram = ownerTelegram && profileTelegram && ownerTelegram === profileTelegram;
+  const sameRemote = remoteId && storedRemote && remoteId === storedRemote;
+  const sameStoredUsername = storedUsername && profileUsername && storedUsername.toLowerCase() === profileUsername.toLowerCase();
+
+  if (!sameRemote && !sameStoredUsername && !sameOwnerTelegram) return bot;
+  // Never silently overwrite a populated manager id with another id. Recovery is
+  // intended for the null/legacy record produced by previous Marzban builds.
+  const nextRemote = storedRemote || remoteId || null;
+  const nextUsername = storedUsername || profileUsername || cleanText(suppliedUsername || "", 80);
+  if ((!storedRemote && nextRemote) || (!storedUsername && nextUsername)) {
+    await env.PASARGUARD_DB.prepare(`
+      UPDATE agencies
+      SET remote_manager_id=COALESCE(remote_manager_id,?),
+          panel_username=CASE WHEN TRIM(COALESCE(panel_username,''))='' THEN ? ELSE panel_username END,
+          runtime_version=?,update_applied_at=?,updated_at=?
+      WHERE id=? AND user_id=?
+    `).bind(nextRemote, nextUsername, APP_VERSION, nowIso(), nowIso(), bot.agency_id, owner.id).run();
+    return { ...bot, remote_manager_id: nextRemote, panel_username: nextUsername };
+  }
+  return bot;
 }
 
 async function findSalesWebCustomer(env, botId, identifier) {
@@ -1439,9 +1488,16 @@ async function resolveResellerServiceAgency(env, bot) {
   const settings = await getSettings(env);
   if (sharedMarzbanEnabled(settings, env)) {
     const cfg = sharedMarzbanConfig(settings, env);
-    return { ...bot, agency_id:"shared-marzban", agency_title:"مرزبان مشترک مرکزی",
-      panel_username:"", panel_password_enc:null, agency_status:cfg.enabled?"active":"disabled",
-      remote_manager_id:null, service_provider:"marzban", independent_panel_access:false };
+    // Marzban is only the shared service backend. Keep the PasarGuard agency
+    // identity on the bot for owner authentication, role changes and recovery.
+    return { ...bot,
+      service_provider:"marzban",
+      service_agency_id:"shared-marzban",
+      service_agency_title:"مرزبان مشترک مرکزی",
+      service_agency_status:cfg.enabled?"active":"disabled",
+      service_panel_username:"",
+      service_remote_manager_id:null,
+      independent_panel_access:resellerHasIndependentPanel(bot) };
   }
   if (!bot.parent_bot_id) return { ...bot, service_provider:"pasarguard" };
   const parent = await env.PASARGUARD_DB.prepare(`
@@ -1624,7 +1680,7 @@ async function getResellerBotForUser(env, userId) {
   let bot = await env.PASARGUARD_DB.prepare("SELECT * FROM reseller_bots WHERE user_id=? LIMIT 1").bind(userId).first();
   bot = await hydrateResellerBotRelations(env, bot);
   const resolved = await resolveResellerServiceAgency(env, bot);
-  if (resolved) resolved.independent_panel_access = resolved.service_provider !== "marzban" && resellerHasIndependentPanel(resolved);
+  if (resolved) resolved.independent_panel_access = resellerHasIndependentPanel(resolved);
   return resolved;
 }
 
@@ -1632,7 +1688,7 @@ async function getResellerBotById(env, botId) {
   let bot = await env.PASARGUARD_DB.prepare("SELECT * FROM reseller_bots WHERE id=? LIMIT 1").bind(botId).first();
   bot = await hydrateResellerBotRelations(env, bot);
   const resolved = await resolveResellerServiceAgency(env, bot);
-  if (resolved) resolved.independent_panel_access = resolved.service_provider !== "marzban" && resellerHasIndependentPanel(resolved);
+  if (resolved) resolved.independent_panel_access = resellerHasIndependentPanel(resolved);
   return resolved;
 }
 
@@ -10642,7 +10698,7 @@ function resellerAdminOriginAllowed(request) {
 async function resellerAdminWebLogin(request, env, botId) {
   await ensureDb(env);
   if (!resellerAdminOriginAllowed(request)) return fail("درخواست نامعتبر است", 403, "BAD_ORIGIN");
-  const bot = await getResellerBotById(env, botId);
+  let bot = await getResellerBotById(env, botId);
   if (!bot) return fail("ربات نماینده پیدا نشد", 404, "BOT_NOT_FOUND");
   const body = await parseBody(request);
   const username = cleanText(body.username, 80);
@@ -10657,10 +10713,15 @@ async function resellerAdminWebLogin(request, env, botId) {
     let verified;
     try { verified = await verifyPasarguardWebCredentials(env, username, password); }
     catch (error) { return fail(error.message || "نام کاربری یا رمز پنل صحیح نیست", 401, "INVALID_CREDENTIALS"); }
-    const profile = verified.profile && typeof verified.profile === "object" ? verified.profile : {};
-    const sameUsername = String(username).toLowerCase() === String(bot.panel_username || "").toLowerCase();
-    const sameRemoteId = profile.id != null && bot.remote_manager_id != null && String(profile.id) === String(bot.remote_manager_id);
-    if (!sameUsername && !sameRemoteId) return fail("این حساب اجازه مدیریت این ربات را ندارد", 403, "BOT_ACCESS_DENIED");
+    const identity = pasarguardProfileIdentity(verified.profile);
+    bot = await repairResellerManagementIdentity(env, bot, owner, identity, username);
+    const suppliedUsername = String(username || "").trim().toLowerCase();
+    const storedUsername = String(bot.panel_username || "").trim().toLowerCase();
+    const profileUsername = String(identity.username || "").trim().toLowerCase();
+    const sameUsername = Boolean(storedUsername) && (suppliedUsername === storedUsername || profileUsername === storedUsername);
+    const sameRemoteId = identity.id != null && bot.remote_manager_id != null && String(identity.id) === String(bot.remote_manager_id);
+    const sameTelegramOwner = identity.telegram_id != null && owner.telegram_id != null && String(identity.telegram_id) === String(owner.telegram_id);
+    if (!sameUsername && !sameRemoteId && !sameTelegramOwner) return fail("این حساب اجازه مدیریت این ربات را ندارد", 403, "BOT_ACCESS_DENIED");
   }
   const session = await issueWebSession(request, env, "reseller_admin", { user_id: owner.id, bot_id: bot.id });
   try { await resellerAudit(env, bot, { user: owner, resellerActor: { role: "owner", telegram_id: owner.telegram_id, permissions: [] } }, "web_admin_login", { username, auth: bot.parent_bot_id ? "local" : "pasarguard" }); } catch (_) {}
