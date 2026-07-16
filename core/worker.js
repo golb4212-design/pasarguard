@@ -1,15 +1,26 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.24
+ * Version: 3.3.25
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.24';
+const APP_VERSION = '3.3.25';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.25": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🧩", text: "رفع خطای bytes is not defined در پنل مدیریت نماینده پس از ورود موفق" },
+      { emoji: "🧪", text: "تفکیک خطای احراز هویت از خطای بارگذاری رابط مدیریت" },
+      { emoji: "📏", text: "افزودن نمایش امن حجم مصرف، سقف و باقیمانده سرویس‌ها" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "✅", text: "ورود مدیریت نماینده دیگر به دلیل رندر سرویس‌ها به صفحه ورود برنمی‌گردد" },
+      { emoji: "📊", text: "نمایش مصرف سرویس‌های موجود بدون خطای JavaScript" }
+    ])
+  }),
   "3.3.24": Object.freeze({
     central: Object.freeze([
       { emoji: "🔐", text: "جداسازی هویت مدیریتی PasarGuard از بک‌اند سرویس مرزبان مشترک" },
@@ -431,7 +442,7 @@ let errorCenterSchemaPromise = null;
 
 // Persistent schema marker: avoids replaying the full D1 migration sweep whenever
 // Cloudflare starts a fresh isolate after an idle period.
-const DB_SCHEMA_REVISION = "3.3.24";
+const DB_SCHEMA_REVISION = "3.3.25";
 
 let settingsCache = null;
 

@@ -1,7 +1,7 @@
 {
-  "version": "3.3.24",
-  "release_id": "3.3.24-20260716-marzban-management-identity-separation",
-  "architecture": "fully-split-three-worker-shared-marzban-with-preserved-pasarguard-management-identity",
+  "version": "3.3.25",
+  "release_id": "3.3.25-20260716-reseller-control-bytes-render-login-fix",
+  "architecture": "fully-split-three-worker-shared-marzban-reseller-control-render-safe",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -14,18 +14,15 @@
     "processor": "scheduled shared Marzban usage polling, automatic debits, health, backups and background automation"
   },
   "features": [
-    "shared Marzban remains the service backend without overwriting the PasarGuard management agency id, username or remote manager id",
-    "reseller management login accepts the correct PasarGuard account while shared Marzban is enabled",
-    "bot license type changes continue to update the PasarGuard manager role in shared Marzban mode",
-    "legacy agencies with a missing remote_manager_id can be recovered from the Telegram-linked PasarGuard administrator",
-    "PasarGuard profile wrappers are normalized before identity comparison",
-    "the final type-change confirmation keyboard is removed immediately to reduce duplicate submissions",
-    "all shared Marzban ownership and per-reseller usage billing features remain included",
+    "fixes the reseller management runtime ReferenceError: bytes is not defined after successful login",
+    "adds a browser-side byte formatter for service usage, quota and remaining traffic",
+    "separates credential failures from post-login bootstrap or rendering failures",
+    "keeps shared Marzban, PasarGuard management identity and all per-reseller billing features unchanged",
     "README files are excluded"
   ],
   "deployment": {
     "automatic_provisioning": "upload the ZIP through the central bot",
-    "db_schema_revision": "3.3.24",
+    "db_schema_revision": "3.3.25",
     "marzban_url_input": "accepts https://host or https://host/dashboard and stores normalized API base",
     "manager_dashboard": "normalized API base + /dashboard/; visible only in central management interfaces",
     "template_input": "exact username of an existing Marzban account whose proxies/inbounds should be used as the service template",
@@ -33,28 +30,26 @@
   },
   "validation": {
     "worker_node_syntax": "passed for core, edge and processor",
-    "shared_marzban_identity_preservation": "passed in core, edge and processor; PasarGuard agency fields remained intact",
-    "reseller_login_identity_checks": "passed for valid direct login and legacy null-identity recovery",
-    "remote_manager_recovery": "passed for exact username match and same-owner duplicate relink",
-    "duplicate_type_change_button_removal": "present and syntax checked",
+    "embedded_browser_scripts": "all script blocks extracted and passed node --check",
+    "reseller_service_card_runtime": "service card rendered with zero, megabyte and gigabyte usage values without ReferenceError",
+    "login_error_isolation": "successful authentication is no longer caught as a credential error when bootstrap/render follows",
     "readme_excluded": true,
-    "live_pasarguard_login": "not run because production credentials were not provided",
-    "embedded_browser_scripts": "10 script blocks extracted and passed node --check"
+    "live_pasarguard_login": "not run because production credentials were not provided"
   },
   "limitations": [
-    "automatic remote manager recovery requires the PasarGuard manager Telegram ID to match the reseller owner or an exact stored panel username match",
-    "live validation requires production PasarGuard credentials and network access"
+    "live validation still requires production PasarGuard credentials and the deployed D1 data",
+    "the Edge worker must actually be deployed because this fix is in the reseller management web runtime"
   ],
   "sha256": {
-    "core/worker.js": "59d4d5f4df2e2ff27d8930aaa726d69f283f8917b5d83195b42242c006785fa9",
-    "edge/worker.js": "6c6f4a5383d8fbe0af3eb7eaebf8791a7e6ef13c2ca1a1cdf4c00a50b657bdae",
-    "processor/worker.js": "bab2c30bfa0f0c98db0da306d399cca0ed66220bcb7a8e8d7d3c699583b8fabe",
+    "core/worker.js": "bae4f4c6f80dc1e8ca1a0ab4b70a5bd749172f354c319dd6b834643dc9c28540",
+    "edge/worker.js": "236f8dff526956791c0579d454c3af6ea4e030eaba6c887aecdaf23a93bf5736",
+    "processor/worker.js": "27979896bb718b70b6ae93084991e6d79fe3c6a31ceca4a11fec08d325727be6",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "59d4d5f4df2e2ff27d8930aaa726d69f283f8917b5d83195b42242c006785fa9",
-    "edge/worker.js": "6c6f4a5383d8fbe0af3eb7eaebf8791a7e6ef13c2ca1a1cdf4c00a50b657bdae",
-    "processor/worker.js": "bab2c30bfa0f0c98db0da306d399cca0ed66220bcb7a8e8d7d3c699583b8fabe",
+    "core/worker.js": "bae4f4c6f80dc1e8ca1a0ab4b70a5bd749172f354c319dd6b834643dc9c28540",
+    "edge/worker.js": "236f8dff526956791c0579d454c3af6ea4e030eaba6c887aecdaf23a93bf5736",
+    "processor/worker.js": "27979896bb718b70b6ae93084991e6d79fe3c6a31ceca4a11fec08d325727be6",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }
