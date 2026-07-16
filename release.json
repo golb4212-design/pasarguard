@@ -1,7 +1,7 @@
 {
-  "version": "3.3.17",
-  "release_id": "3.3.17-20260716-default-all-active-pasarguard-groups",
-  "architecture": "fully-split-three-worker-default-active-groups-on-subscription-create",
+  "version": "3.3.18",
+  "release_id": "3.3.18-20260716-secure-reseller-bot-token-change",
+  "architecture": "fully-split-three-worker-secure-reseller-token-rotation",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -32,13 +32,13 @@
     ]
   },
   "features": [
-    "defaults new reseller-bot subscriptions to every active/assignable PasarGuard group when a location has no explicit group IDs",
-    "preserves manually configured location group IDs as an explicit override",
-    "uses GET /api/groups/simple for PasarGuard v5 operator compatibility and falls back to GET /api/groups for older panels",
-    "applies the same group default to free trial creation",
-    "caches group discovery for two minutes per agency to reduce PasarGuard subrequests",
-    "updates Telegram and reseller dashboard copy so empty or zero group selection clearly means all active groups",
-    "keeps all previous error-center, exact-commit update, billing, gifts, reports and live-usage features",
+    "allows a reseller bot owner to replace the BotFather token from the central bot or the reseller /manage interface",
+    "validates the new token with Telegram getMe and rejects the central bot token or a bot already assigned to another reseller",
+    "preserves the reseller bot database identity, customers, orders, plans, balances, services and all configuration",
+    "provisions the new Telegram bot with a fresh webhook secret before switching the D1 token record",
+    "invalidates the old webhook when the Telegram bot identity changes and clears decrypted token caches",
+    "reconfigures webhook, Mini App menu and runtime version after token rotation",
+    "keeps all previous active-group defaults, error-center migration, exact-commit update and billing features",
     "README files are excluded"
   ],
   "deployment": {
@@ -47,33 +47,39 @@
     "db_schema_revision": "3.3.16 (unchanged; no D1 schema migration required)",
     "error_center_schema": "partial unique index idx_error_center_open_key on scope,bot_id,error_code where status=open",
     "staged_compatibility": "Processor uses INSERT OR IGNORE plus conditional UPDATE until Core migration is guaranteed",
-    "default_group_assignment": "explicit location group IDs override; otherwise all active/assignable PasarGuard groups are attached"
+    "default_group_assignment": "explicit location group IDs override; otherwise all active/assignable PasarGuard groups are attached",
+    "reseller_token_rotation": "fresh webhook secret, Telegram validation, D1 identity switch, cache invalidation and old-webhook cleanup"
   },
   "validation": {
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "group_normalization": "passed",
-    "explicit_group_override": "passed",
-    "default_all_active_groups": "passed with mocked PasarGuard /api/groups/simple response",
-    "trial_default_groups": "passed by static path validation",
+    "token_change_central_flow": "static path validated",
+    "token_change_reseller_owner_flow": "static path validated",
+    "duplicate_bot_guard": "passed with mocked duplicate bot record",
+    "central_bot_guard": "passed with mocked central Telegram id",
+    "fresh_webhook_secret_switch": "implemented",
+    "old_webhook_cleanup": "implemented",
     "version_constants": "passed",
     "release_manifest_hashes": "recalculated",
-    "live_cloudflare_deployment": "not run without production credentials"
+    "live_cloudflare_deployment": "not run without production credentials",
+    "same_bot_token_rotation": "passed with mocked Telegram and D1",
+    "different_bot_token_rotation": "passed with old webhook cleanup assertion",
+    "token_cache_invalidation": "passed with mocked old cache entry"
   },
   "limitations": [
     "production Cloudflare, Telegram, GitHub and PasarGuard calls were not executed without account credentials"
   ],
   "sha256": {
-    "core": "7f76c5a41313d20d5393f0e811bb171f7a8e78987ec3e9283b365d4fbef5b4ac",
-    "edge": "463d0add87c11b3dfbbfc0217e82cd387ba71f63998216b9412ff4e258470c1b",
-    "processor": "a1878b4de9d98d608a73c603bdaf5142455ca12d60c16e9bbbefcd6a05e0bda5",
+    "core": "6504b8dd49fb446d3d81aa2706c7efb1226ca9004c092d6eb873d1b23229f20a",
+    "edge": "c620c6616e37048b0dadd46a1e3a8444ef2729c3b636bb6d9ea00108f46a35d7",
+    "processor": "9be1c47871137ce18cbcbc871a2e42d543da5235e311c08ef71c45ee4b373579",
     "durable_object_config": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "7f76c5a41313d20d5393f0e811bb171f7a8e78987ec3e9283b365d4fbef5b4ac",
-    "edge/worker.js": "463d0add87c11b3dfbbfc0217e82cd387ba71f63998216b9412ff4e258470c1b",
-    "processor/worker.js": "a1878b4de9d98d608a73c603bdaf5142455ca12d60c16e9bbbefcd6a05e0bda5",
+    "core/worker.js": "6504b8dd49fb446d3d81aa2706c7efb1226ca9004c092d6eb873d1b23229f20a",
+    "edge/worker.js": "c620c6616e37048b0dadd46a1e3a8444ef2729c3b636bb6d9ea00108f46a35d7",
+    "processor/worker.js": "9be1c47871137ce18cbcbc871a2e42d543da5235e311c08ef71c45ee4b373579",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }

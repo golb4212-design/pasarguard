@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.17
+ * Version: 3.3.18
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = '3.3.17';
+const APP_VERSION = '3.3.18';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -824,7 +824,7 @@ function resellerViewPermission(view) {
 
 function resellerCallbackPermission(data) {
   const value = String(data || "");
-  if (value.startsWith("owner:staff") || value.startsWith("owner:child") || value === "owner:children") return "owner";
+  if (value.startsWith("owner:staff") || value.startsWith("owner:child") || value === "owner:children" || value === "owner:token") return "owner";
   if (value.startsWith("owner:campaign") || value.startsWith("owner:broadcast")) return "campaigns";
   if (value.startsWith("owner:audit")) return "audit";
   if (value.startsWith("owner:executive")) return "reports";
@@ -855,7 +855,7 @@ function resellerCallbackPermission(data) {
 
 function resellerSessionPermission(state) {
   const value = String(state || "");
-  if (value.startsWith("owner_staff") || value.startsWith("owner_child")) return "owner";
+  if (value.startsWith("owner_staff") || value.startsWith("owner_child") || value === "owner_bot_token") return "owner";
   if (value.startsWith("owner_campaign") || value === "owner_broadcast") return "campaigns";
   if (value.startsWith("owner_ticket")) return "tickets";
   if (value.startsWith("owner_user")) return "users";
@@ -1874,6 +1874,86 @@ async function resellerBotToken(env, bot) {
   resellerTokenCache.set(cacheKey, { at: Date.now(), token });
   if (resellerTokenCache.size > 250) resellerTokenCache.delete(resellerTokenCache.keys().next().value);
   return token;
+}
+
+
+function clearResellerBotTokenCache(botId) {
+  const prefix = String(botId || "") + ":";
+  for (const key of Array.from(resellerTokenCache.keys())) {
+    if (String(key).startsWith(prefix)) resellerTokenCache.delete(key);
+  }
+}
+
+async function replaceResellerBotToken(env, bot, rawToken, options = {}) {
+  const token = String(rawToken || "").trim();
+  if (!/^\d{6,15}:[A-Za-z0-9_-]{20,}$/.test(token)) throw new Error("فرمت توکن BotFather معتبر نیست");
+  if (!bot?.id) throw new Error("ربات نماینده پیدا نشد");
+
+  const info = await telegramApiWithToken(token, "getMe", {});
+  const me = info?.result;
+  if (!me?.id || !me?.is_bot || !me?.username) throw new Error("توکن توسط تلگرام تأیید نشد");
+
+  const settings = await getSettings(env);
+  const centralTelegramId = String(settings.central_bot_telegram_id || String(settings.bot_token || "").split(":")[0] || "");
+  if (centralTelegramId && String(me.id) === centralTelegramId) throw new Error("توکن ربات مرکزی را نمی‌توان برای ربات نماینده ثبت کرد");
+
+  const duplicate = await env.PASARGUARD_DB.prepare(
+    "SELECT id,bot_username FROM reseller_bots WHERE bot_telegram_id=? AND id<>? LIMIT 1"
+  ).bind(String(me.id), String(bot.id)).first();
+  if (duplicate) throw new Error("این ربات قبلاً برای نماینده دیگری ثبت شده است");
+
+  let oldToken = "";
+  try { oldToken = await resellerBotToken(env, bot); } catch (_) {}
+  const oldTelegramId = String(bot.bot_telegram_id || "");
+  const encrypted = await encryptSecret(token, env);
+  const webhookSecret = randomHex(32);
+  const candidate = {
+    ...bot,
+    bot_token_enc: encrypted,
+    bot_telegram_id: String(me.id),
+    bot_username: cleanText(me.username, 100),
+    bot_name: cleanText(me.first_name || me.username, 120),
+    webhook_secret: webhookSecret,
+    bot_version: RESELLER_BOT_VERSION,
+    miniapp_enabled: 1
+  };
+
+  // The new bot receives a fresh secret before the database switch. Until the DB update,
+  // incoming updates from it are rejected and retried instead of being processed with the old token.
+  await configureResellerBot(env, candidate, options.origin || resellerBotOrigin(settings));
+
+  const ts = nowIso();
+  let result;
+  try {
+    result = await env.PASARGUARD_DB.prepare(`
+      UPDATE reseller_bots SET
+        bot_telegram_id=?,bot_username=?,bot_name=?,bot_token_enc=?,webhook_secret=?,
+        bot_version=?,miniapp_enabled=1,status=CASE WHEN status='error' THEN 'active' ELSE status END,updated_at=?
+      WHERE id=?
+    `).bind(
+      candidate.bot_telegram_id, candidate.bot_username, candidate.bot_name, encrypted, webhookSecret,
+      RESELLER_BOT_VERSION, ts, bot.id
+    ).run();
+  } catch (error) {
+    if (/UNIQUE|bot_telegram_id/i.test(String(error?.message || error))) throw new Error("این ربات هم‌زمان برای نماینده دیگری ثبت شده است");
+    throw error;
+  }
+  if (!Number(result?.meta?.changes || 0)) throw new Error("ذخیره توکن جدید انجام نشد");
+
+  clearResellerBotTokenCache(bot.id);
+  resellerTokenCache.set(String(bot.id) + ":" + encrypted, { at: Date.now(), token });
+
+  // A different old bot must not keep posting updates to the same reseller route.
+  if (oldToken && oldTelegramId && oldTelegramId !== String(me.id)) {
+    try { await telegramApiWithToken(oldToken, "deleteWebhook", { drop_pending_updates: false }); } catch (_) {}
+  }
+
+  return {
+    bot: { ...candidate, updated_at: ts },
+    old_telegram_id: oldTelegramId,
+    changed_bot: oldTelegramId !== String(me.id),
+    username: candidate.bot_username
+  };
 }
 
 async function resellerTelegramApi(env, bot, method, body) {
@@ -6192,7 +6272,7 @@ async function resellerOwnerChildDetailView(env, bot, account, childId) {
       [{text:"💰 تغییر نرخ هر گیگ",callback_data:"owner:child:price:"+child.id},{text:"🧮 همگام‌سازی مصرف",callback_data:"owner:child:bill:"+child.id}],
       [{text:"➕ انتقال ۱۰۰هزار",callback_data:"owner:child:credit:"+child.id},{text:"➖ بازگشت ۱۰۰هزار",callback_data:"owner:child:debit:"+child.id}],
       [{text:"🪪 تمدید یک‌ماهه",callback_data:"owner:child:renew:"+child.id},{text:child.status==='active'?"⏸ توقف ربات":"▶️ فعال‌سازی",callback_data:"owner:child:toggle:"+child.id}],
-      [{text:"🔑 تغییر رمز مدیریت",callback_data:"owner:child:password:"+child.id}],
+      [{text:"🔑 تغییر توکن ربات",callback_data:"owner:child:token:"+child.id},{text:"🔐 تغییر رمز مدیریت",callback_data:"owner:child:password:"+child.id}],
       [{text:"🖥 بازکردن داشبورد",url:managementUrl}],
       [{text:"↩️ نمایندگان من",callback_data:"owner:children"}]
     ]}};
@@ -6457,6 +6537,16 @@ async function resellerOwnerHandleCallback(env, bot, callback) {
     if(next==='active')resellerRequireActiveLicense(child);
     await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET status=?,updated_at=? WHERE id=?").bind(next,nowIso(),childId).run();
     return resellerOwnerSendOrEdit(env,bot,target,"child",{childId});
+  }
+  if (data.startsWith("owner:child:token:")) {
+    if (!resellerBotCanCreateDownline(bot)) throw new Error("دسترسی مستر لازم است");
+    const childId = data.slice("owner:child:token:".length);
+    const child = await env.PASARGUARD_DB.prepare("SELECT id,bot_username FROM reseller_bots WHERE id=? AND parent_bot_id=?")
+      .bind(childId, bot.id).first();
+    if (!child) throw new Error("نماینده زیرمجموعه پیدا نشد");
+    await salesSessionSet(env, bot.id, account.user.telegram_id, "owner_child_change_token", { childId: child.id });
+    return resellerOwnerPrompt(env, bot, chatId,
+      "🔑 توکن جدید ربات زیرمجموعه <b>@" + botEscape(child.bot_username || "-") + "</b> را ارسال کنید.\n\nاطلاعات فروش و کاربران نماینده حفظ می‌شود و پیام توکن پس از بررسی حذف خواهد شد.");
   }
   if (data.startsWith("owner:child:password:")) {
     const childId=data.slice("owner:child:password:".length);const child=await env.PASARGUARD_DB.prepare("SELECT id,control_username FROM reseller_bots WHERE id=? AND parent_bot_id=?").bind(childId,bot.id).first();if(!child)throw new Error("نماینده پیدا نشد");
@@ -6757,6 +6847,12 @@ async function resellerOwnerHandleCallback(env, bot, callback) {
     await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET status=?,updated_at=? WHERE id=? AND user_id=?").bind(next, nowIso(), bot.id, account.user.id).run();
     const fresh = await getResellerBotById(env, bot.id);
     return resellerOwnerSendOrEdit(env, fresh, target, "home");
+  }
+  if (data === "owner:token") {
+    resellerRequirePermission(account, "owner");
+    await salesSessionSet(env, bot.id, account.user.telegram_id, "owner_bot_token", {});
+    return resellerOwnerPrompt(env, bot, chatId,
+      "🔑 <b>تغییر توکن ربات</b>\n━━━━━━━━━━━━━━\nتوکن جدید BotFather را ارسال کنید.\n\n✅ همه کاربران، سفارش‌ها، پلن‌ها و تنظیمات حفظ می‌شوند.\n✅ Webhook و دکمه مینی‌اپ خودکار منتقل می‌شوند.\n⚠️ پیام توکن بعد از بررسی حذف می‌شود. اگر توکن متعلق به ربات دیگری است، بعد از تغییر آن ربات را Start کنید.");
   }
   if (data === "owner:card") {
     await salesSessionSet(env, bot.id, account.user.telegram_id, "owner_edit_card_holder", {});
@@ -7081,6 +7177,42 @@ async function resellerOwnerHandleSession(env, bot, account, message, session) {
     await resellerOwnerSendOrEdit(env, await getResellerBotById(env, bot.id), { account, chatId }, view);
     return true;
   };
+  if (session.state === "owner_bot_token") {
+    resellerRequirePermission(account, "owner");
+    try { await resellerTelegramApi(env, bot, "deleteMessage", { chat_id: chatId, message_id: message.message_id }); } catch (_) {}
+    try {
+      await resellerTelegramApi(env, bot, "sendMessage", {
+        chat_id: chatId,
+        text: "⏳ در حال بررسی توکن و انتقال امن Webhook و تنظیمات ربات…"
+      });
+    } catch (_) {}
+    const changed = await replaceResellerBotToken(env, bot, text);
+    await salesSessionClear(env, bot.id, account.user.telegram_id);
+    try {
+      await resellerAudit(env, changed.bot, account, "bot_token_changed", {
+        oldTelegramId: changed.old_telegram_id, newTelegramId: changed.bot.bot_telegram_id, username: changed.username
+      });
+    } catch (_) {}
+    const notice = "✅ <b>توکن ربات با موفقیت تغییر کرد</b>\n━━━━━━━━━━━━━━\nربات فعال: <b>@" + botEscape(changed.username) + "</b>\nWebhook و مینی‌اپ دوباره تنظیم شدند.\n\nتمام کاربران، سفارش‌ها، پلن‌ها، موجودی‌ها و تنظیمات قبلی حفظ شدند." +
+      (changed.changed_bot ? "\n\n⚠️ ربات جدید را باز کنید و Start بزنید." : "");
+    let delivered = false;
+    try {
+      await resellerTelegramApi(env, changed.bot, "sendMessage", {
+        chat_id: chatId, text: notice, parse_mode: "HTML",
+        reply_markup: { inline_keyboard: [[{ text: "🚀 بازکردن ربات", url: "https://t.me/" + changed.username }], [{ text: "⚙️ مدیریت ربات", callback_data: "owner:home" }]] }
+      });
+      delivered = true;
+    } catch (_) {}
+    if (!delivered) {
+      try {
+        await telegramApi(env, "sendMessage", {
+          chat_id: chatId, text: notice + "\n\nاین پیام از ربات مرکزی ارسال شد؛ چون ربات جدید هنوز توسط شما Start نشده بود.", parse_mode: "HTML",
+          reply_markup: { inline_keyboard: [[{ text: "🚀 بازکردن ربات جدید", url: "https://t.me/" + changed.username }]] }
+        });
+      } catch (_) {}
+    }
+    return true;
+  }
   if (session.state === "owner_order_agency_password") {
     try { await resellerTelegramApi(env, bot, "deleteMessage", { chat_id: chatId, message_id: message.message_id }); } catch (_) {}
     const agency = await verifyAndStoreAgencyPassword(env, account.user.id, session.data.agencyId, text);
@@ -7097,6 +7229,24 @@ async function resellerOwnerHandleSession(env, bot, account, message, session) {
     await changeDirectResellerAgency(env, bot, account.user.id, agency.id);
     await resellerAudit(env, bot, account, "agency_password_verified_and_connected", { agency_id: agency.id });
     return done("home", "✅ رمز پنل تأیید شد و پنل به ربات نماینده متصل گردید.");
+  }
+  if (session.state === "owner_child_change_token") {
+    const child = await env.PASARGUARD_DB.prepare(`
+      SELECT rb.*,u.telegram_id AS owner_telegram_id
+      FROM reseller_bots rb LEFT JOIN users u ON u.id=rb.user_id
+      WHERE rb.id=? AND rb.parent_bot_id=? LIMIT 1
+    `).bind(session.data.childId, bot.id).first();
+    if (!child) throw new Error("نماینده زیرمجموعه پیدا نشد");
+    try { await resellerTelegramApi(env, bot, "deleteMessage", { chat_id: chatId, message_id: message.message_id }); } catch (_) {}
+    const changed = await replaceResellerBotToken(env, child, text);
+    await salesSessionClear(env, bot.id, account.user.telegram_id);
+    try { await resellerAudit(env, bot, account, "child_bot_token_changed", { childId: child.id, oldTelegramId: changed.old_telegram_id, newTelegramId: changed.bot.bot_telegram_id }); } catch (_) {}
+    await resellerOwnerPrompt(env, bot, chatId,
+      "✅ توکن ربات زیرمجموعه تغییر کرد.\nربات فعال: <b>@" + botEscape(changed.username) + "</b>\nتمام کاربران، سفارش‌ها، پلن‌ها و تنظیمات نماینده حفظ شدند." +
+      (changed.changed_bot ? "\n\n⚠️ مالک نماینده باید ربات جدید را باز کند و Start بزند." : ""),
+      [[{ text: "🚀 بازکردن ربات", url: "https://t.me/" + changed.username }], [{ text: "↩️ بازگشت به نماینده", callback_data: "owner:child:view:" + child.id }]]
+    );
+    return true;
   }
   if (session.state === "owner_child_telegram_id") {
     const telegramId=String(text||"").replace(/\D/g,"");if(!/^\d{5,20}$/.test(telegramId))throw new Error("شناسه عددی تلگرام معتبر ارسال کنید");
@@ -7852,6 +8002,7 @@ async function resellerOwnerDashboardView(env, account) {
     ...(can("backups") ? [{ text: "🗄 پشتیبان‌گیری", callback_data: "owner:backups" }] : [])
   ]);
   if (resellerBotCanCreateDownline(bot) && can("owner")) rows.push([{ text: "👑 نمایندگان من و مدیریت مصرف", callback_data: "owner:children" }]);
+  if (can("owner")) rows.push([{ text: "🔑 تغییر توکن ربات", callback_data: "owner:token" }]);
   if (can("settings")) {
     const settingsRow = [{ text: "⚙️ تنظیمات ربات", callback_data: "owner:settings" }];
     if (!bot.parent_bot_id && String(bot.purchase_source || "central") === "central") settingsRow.push({ text: "🔗 اتصال پنل", callback_data: "owner:panel" });
@@ -7945,6 +8096,7 @@ async function resellerOwnerGroupView(env, bot, account, group) {
         can("backups") ? [{ text: "🗄 پشتیبان‌گیری و بازیابی", callback_data: "owner:backups" }] : [],
         can("settings") ? [{ text: "⚙️ تنظیمات ربات", callback_data: "owner:settings" }] : [],
         can("settings") && !bot.parent_bot_id ? [{ text: "🔗 اتصال و تغییر پنل", callback_data: "owner:panel" }] : [],
+        can("owner") ? [{ text: "🔑 تغییر توکن ربات", callback_data: "owner:token" }] : [],
         can("owner") ? [{ text: "👥 تیم مدیریت و نقش‌ها", callback_data: "owner:staff" }] : [],
         can("settings") ? [{ text: bot.status === "active" ? "⏸ توقف فروش" : "▶️ فعال‌کردن فروش", callback_data: "owner:toggle" }] : []
       ]
