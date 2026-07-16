@@ -1,7 +1,7 @@
 {
-  "version": "3.3.30",
-  "release_id": "3.3.30-location-scoped-catalog-all-active-locations-version-fix",
-  "architecture": "fully-split-three-worker-dual-panel-cascading-ledger-location-scoped-catalog",
+  "version": "3.3.31",
+  "release_id": "3.3.31-reply-keyboard-message-edit-fallback",
+  "architecture": "fully-split-three-worker-dual-panel-cascading-ledger-native-reply-keyboard",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -9,50 +9,45 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "categories are owned by one sales location and plans can only use categories from the same location",
-    "legacy shared categories are automatically split per location without changing existing orders",
-    "every active location is visible in the Telegram bot and customer Mini App even when it has zero active plans",
-    "category and plan creation in central bot, reseller owner bot, and web panel is location-aware",
-    "raw build-version placeholders are replaced by the deployed 3.3.30 version in every Edge HTML page",
-    "dual PasarGuard and shared Marzban routing and cascading usage settlement from 3.3.29 are preserved",
+    "reply-keyboard selections never require editing a user message",
+    "Telegram message can't be edited automatically falls back to a fresh bot message",
+    "customer purchase, plan selection, payment and owner menus keep native reply keyboards",
+    "location-scoped catalog, all active locations and cascading billing from 3.3.30 are preserved",
     "README files are excluded"
   ],
   "deployment": {
     "automatic_provisioning": "upload ZIP through the central bot",
-    "db_schema_revision": "3.3.30"
+    "db_schema_revision": "3.3.31-no-schema-change"
   },
   "validation": {
     "worker_syntax": "passed: core, edge, processor",
     "embedded_browser_scripts": "passed: 10 scripts",
-    "legacy_category_split": "passed: one shared category across two locations becomes two matching categories",
-    "active_location_visibility": "passed: purchase query uses LEFT JOIN and has no plan-count HAVING filter",
-    "location_scope": "passed: bot, Mini App, owner bot and web panel filter categories by location_id",
-    "raw_version_placeholder": "passed: no raw build placeholder remains in runtime files",
-    "live_api": "not run; requires real Telegram, PasarGuard and Marzban credentials"
+    "reply_keyboard_edit_fallback": "passed: Telegram message can't be edited and message to edit not found both fall back to sendMessage",
+    "fallback_payload": "passed: original step text, parse mode, protection flag and native keyboard are preserved; message_id is removed",
+    "raw_error_leak": "passed: edit failure is handled before the customer callback error response",
+    "live_api": "not run; requires a real Telegram bot token"
   },
   "limitations": [
-    "Existing historical Marzban usage is not retroactively re-billed; cascading settlement starts from the next measured delta.",
-    "PasarGuard central cost is still sourced from the real manager aggregate; child attribution is shown separately without double-debiting the master."
+    "Old Telegram messages already containing inline keyboards are not deleted; all new interactions use the updated native-keyboard flow."
+  ],
+  "title": "رفع خطای ویرایش پیام در منوهای معمولی تلگرام",
+  "summary": "انتخاب پلن و سایر دکمه‌های Reply Keyboard دیگر تلاش نمی‌کنند پیام کاربر را ویرایش کنند؛ پیام غیرقابل‌ویرایش به‌صورت خودکار با یک پیام تازه از ربات جایگزین می‌شود.",
+  "changes": [
+    "رفع Bad Request: message can't be edited هنگام انتخاب پلن و روش پرداخت.",
+    "افزودن fallback عمومی برای editMessageText و editMessageCaption در Core و Edge.",
+    "حفظ متن کامل مرحله و کیبورد معمولی در پیام جایگزین، بدون نمایش خطای خام تلگرام به کاربر.",
+    "عدم تغییر در دیتابیس، سفارش‌ها، پلن‌ها و حسابداری پلکانی."
   ],
   "sha256": {
-    "core/worker.js": "a76b75e5c4b61e22b02b6a4453f67732adc327f24a548e8f255aa9e47c819666",
-    "edge/worker.js": "4708c8bda89b82636a676a2d5b5d03c6b500c57bb6b0a153e94bed513388fded",
-    "processor/worker.js": "b1beecb771b465fa540d6e07fb58247b8fd321aa1b4c9cc2fdd89969c58f3fe0",
+    "core/worker.js": "e0a59366e0177b8613273dc96d06aafc9554c075c05db5facd90ee68f0864938",
+    "edge/worker.js": "0cbfcb665215121c93493f34872659e9fa9e40591c21fc12546ec0d9a00a5b0b",
+    "processor/worker.js": "30c9d50819753b7a9291effa5e36222b210ce849f521fd1f038038086e08ca38",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "a76b75e5c4b61e22b02b6a4453f67732adc327f24a548e8f255aa9e47c819666",
-    "edge/worker.js": "4708c8bda89b82636a676a2d5b5d03c6b500c57bb6b0a153e94bed513388fded",
-    "processor/worker.js": "b1beecb771b465fa540d6e07fb58247b8fd321aa1b4c9cc2fdd89969c58f3fe0",
+    "core/worker.js": "e0a59366e0177b8613273dc96d06aafc9554c075c05db5facd90ee68f0864938",
+    "edge/worker.js": "0cbfcb665215121c93493f34872659e9fa9e40591c21fc12546ec0d9a00a5b0b",
+    "processor/worker.js": "30c9d50819753b7a9291effa5e36222b210ce849f521fd1f038038086e08ca38",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
-  },
-  "title": "کاتالوگ مستقل هر لوکیشن، نمایش همه لوکیشن‌ها و رفع نسخه پنل",
-  "summary": "پلن‌ها و دسته‌بندی‌ها برای هر لوکیشن مستقل شدند، همه لوکیشن‌های فعال در ربات و پنل خرید نمایش داده می‌شوند و نسخه واقعی 3.3.30 جای عبارت خام در رابط قرار گرفت.",
-  "changes": [
-    "هر دسته‌بندی به یک لوکیشن مشخص متصل می‌شود و در لوکیشن‌های دیگر نمایش داده نمی‌شود.",
-    "هنگام ساخت یا ویرایش پلن، ابتدا لوکیشن انتخاب می‌شود و فقط دسته‌بندی‌های همان لوکیشن قابل انتخاب هستند.",
-    "تمام لوکیشن‌های فعال، حتی لوکیشن بدون پلن، در ربات و مینی‌اپ خرید نمایش داده می‌شوند.",
-    "دسته‌بندی‌های قدیمیِ مشترک میان چند لوکیشن، در اولین مهاجرت بدون آسیب به سفارش‌ها خودکار تفکیک می‌شوند.",
-    "نسخه واقعی 3.3.30 در تمام صفحات پنل درج می‌شود و عبارت خام نسخه دیگر نمایش داده نمی‌شود."
-  ]
+  }
 }

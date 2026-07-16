@@ -1,15 +1,26 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.29
+ * Version: 3.3.31
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.30';
+const APP_VERSION = '3.3.31';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.31": Object.freeze({
+    central: Object.freeze([
+      { emoji: "⌨️", text: "سازگاری کامل مسیرهای Reply Keyboard با ارسال پیام جدید به‌جای ویرایش پیام کاربر" },
+      { emoji: "🛡", text: "جلوگیری از نمایش خطای Telegram message can't be edited در خرید و مدیریت" },
+      { emoji: "🔁", text: "Fallback خودکار برای پیام حذف‌شده، قدیمی یا غیرقابل‌ویرایش" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "🛒", text: "رفع خطای انتخاب پلن و ادامه پرداخت با کلیدهای معمولی تلگرام" },
+      { emoji: "📨", text: "در صورت غیرقابل‌ویرایش بودن پیام، مرحله بعد به‌صورت پیام تازه نمایش داده می‌شود" }
+    ])
+  }),
   "3.3.29": Object.freeze({
     central: Object.freeze([
       { emoji: "🧮", text: "حسابداری پلکانی واقعی: وصول از ربات فروش دوم و کسر مستقل نرخ مرکزی از مستر" },
@@ -2405,7 +2416,7 @@ async function ensureDbInternal(env) {
   }
 
 
-  // 3.3.30: every category is owned by exactly one location. Legacy databases
+  // 3.3.31: every category is owned by exactly one location. Legacy databases
   // sometimes reused one category across several locations; split those rows
   // without changing any existing plan or order identity.
   const legacyCategoryRows = await env.PASARGUARD_DB.prepare(`
@@ -3614,6 +3625,24 @@ async function telegramSendReplyRouteSpecial(sendFn, chatId, route) {
   return false;
 }
 
+
+function telegramUiEditUnavailable(error) {
+  return /(message can(?:not|'t) be edited|message to edit not found|message identifier is not specified|message_id_invalid)/i.test(String(error?.message || error || ""));
+}
+
+function telegramUiFallbackMessagePayload(payload, replyMarkup = undefined) {
+  const text = String(payload?.text ?? payload?.caption ?? "").trim() || "⌨️ گزینه موردنظر را از منوی پایین انتخاب کنید.";
+  const fallback = { chat_id: payload.chat_id, text };
+  if (payload.parse_mode) fallback.parse_mode = payload.parse_mode;
+  if (payload.disable_web_page_preview != null) fallback.disable_web_page_preview = payload.disable_web_page_preview;
+  if (payload.link_preview_options != null) fallback.link_preview_options = payload.link_preview_options;
+  if (payload.protect_content != null) fallback.protect_content = payload.protect_content;
+  if (payload.message_thread_id != null) fallback.message_thread_id = payload.message_thread_id;
+  if (replyMarkup !== undefined) fallback.reply_markup = replyMarkup;
+  else if (payload.reply_markup) fallback.reply_markup = payload.reply_markup;
+  return fallback;
+}
+
 async function telegramUiApi(env, botScope, token, method, body) {
   const payload = { ...(body || {}) };
   if (method === "answerCallbackQuery" && String(payload.callback_query_id || "").startsWith("reply-keyboard-")) {
@@ -3622,7 +3651,18 @@ async function telegramUiApi(env, botScope, token, method, body) {
   const inlineKeyboard = payload?.reply_markup?.inline_keyboard;
   const chatId = payload.chat_id;
   if (!Array.isArray(inlineKeyboard)) {
-    const result = await telegramApiWithToken(token, method, payload);
+    let result;
+    try {
+      result = await telegramApiWithToken(token, method, payload);
+    } catch (error) {
+      if ((method === "editMessageText" || method === "editMessageCaption") && chatId != null && telegramUiEditUnavailable(error)) {
+        result = await telegramApiWithToken(token, "sendMessage", telegramUiFallbackMessagePayload(payload));
+      } else if (method === "editMessageReplyMarkup" && telegramUiEditUnavailable(error)) {
+        return { ok: true, result: true };
+      } else {
+        throw error;
+      }
+    }
     if (chatId != null && (payload?.reply_markup?.keyboard || payload?.reply_markup?.remove_keyboard)) {
       await telegramReplaceReplyRoutes(env, botScope, chatId, [], result?.result?.message_id || null);
     }
@@ -3648,9 +3688,22 @@ async function telegramUiApi(env, botScope, token, method, body) {
     const editPayload = { ...payload };
     delete editPayload.reply_markup;
     let edited = null;
+    let editUnavailable = false;
     try { edited = await telegramApiWithToken(token, method, editPayload); }
     catch (error) {
-      if (!/message is not modified/i.test(String(error?.message || error))) throw error;
+      const message = String(error?.message || error || "");
+      if (/message is not modified/i.test(message)) {
+        // The text is already current; only refresh the native keyboard below.
+      } else if (telegramUiEditUnavailable(error)) {
+        editUnavailable = true;
+      } else {
+        throw error;
+      }
+    }
+    if (editUnavailable) {
+      const fallback = await telegramApiWithToken(token, "sendMessage", telegramUiFallbackMessagePayload(payload, plan.markup));
+      await telegramReplaceReplyRoutes(env, botScope, chatId, plan.routes, fallback?.result?.message_id || null);
+      return fallback;
     }
     const prompt = await telegramApiWithToken(token, "sendMessage", {
       chat_id: chatId,
