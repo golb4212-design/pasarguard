@@ -5,7 +5,7 @@
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.29';
+const APP_VERSION = '3.3.30';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -1383,6 +1383,7 @@ CREATE TABLE IF NOT EXISTS sales_categories (
   bot_id TEXT NOT NULL,
   title TEXT NOT NULL,
   emoji TEXT,
+  location_id TEXT,
   status TEXT NOT NULL DEFAULT 'active',
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
@@ -1390,6 +1391,7 @@ CREATE TABLE IF NOT EXISTS sales_categories (
   FOREIGN KEY(bot_id) REFERENCES reseller_bots(id)
 );
 CREATE INDEX IF NOT EXISTS idx_sales_categories_bot ON sales_categories(bot_id,status,sort_order,created_at);
+CREATE INDEX IF NOT EXISTS idx_sales_categories_location ON sales_categories(bot_id,location_id,status,sort_order,created_at);
 
 CREATE TABLE IF NOT EXISTS sales_locations (
   id TEXT PRIMARY KEY,
@@ -2300,6 +2302,9 @@ async function ensureDbInternal(env) {
       ["upstream_unpaid_after", "INTEGER NOT NULL DEFAULT 0"],
       ["parent_net_profit_amount", "INTEGER NOT NULL DEFAULT 0"]
     ],
+    sales_categories: [
+      ["location_id", "TEXT"]
+    ],
     sales_plans: [
       ["category_id", "TEXT"],
       ["location_id", "TEXT"],
@@ -2398,6 +2403,55 @@ async function ensureDbInternal(env) {
       }
     }
   }
+
+
+  // 3.3.30: every category is owned by exactly one location. Legacy databases
+  // sometimes reused one category across several locations; split those rows
+  // without changing any existing plan or order identity.
+  const legacyCategoryRows = await env.PASARGUARD_DB.prepare(`
+    SELECT c.id,c.bot_id,c.title,c.emoji,c.status,c.sort_order,c.created_at,c.updated_at,c.location_id,p.location_id AS plan_location_id
+    FROM sales_categories c
+    JOIN sales_plans p ON p.bot_id=c.bot_id AND p.category_id=c.id
+    WHERE p.location_id IS NOT NULL
+    GROUP BY c.id,p.location_id
+    ORDER BY c.id,p.location_id
+  `).all();
+  const categoryGroups = new Map();
+  for (const row of legacyCategoryRows.results || []) {
+    if (!categoryGroups.has(row.id)) categoryGroups.set(row.id, { category: row, locations: [] });
+    const group = categoryGroups.get(row.id);
+    if (!group.locations.includes(row.plan_location_id)) group.locations.push(row.plan_location_id);
+  }
+  for (const group of categoryGroups.values()) {
+    const category = group.category;
+    const assignedLocation = category.location_id || group.locations[0] || null;
+    if (!category.location_id && assignedLocation) {
+      await env.PASARGUARD_DB.prepare("UPDATE sales_categories SET location_id=?,updated_at=? WHERE id=? AND bot_id=?")
+        .bind(assignedLocation, nowIso(), category.id, category.bot_id).run();
+    }
+    for (const locationId of group.locations) {
+      if (!locationId || String(locationId) === String(assignedLocation)) continue;
+      let duplicate = await env.PASARGUARD_DB.prepare(`
+        SELECT id FROM sales_categories
+        WHERE bot_id=? AND location_id=? AND title=? AND COALESCE(emoji,'')=COALESCE(?, '')
+        ORDER BY created_at LIMIT 1
+      `).bind(category.bot_id, locationId, category.title, category.emoji || null).first();
+      if (!duplicate) {
+        const duplicateId = id("cat");
+        await env.PASARGUARD_DB.prepare(`
+          INSERT INTO sales_categories(id,bot_id,title,emoji,location_id,status,sort_order,created_at,updated_at)
+          VALUES(?,?,?,?,?,?,?,?,?)
+        `).bind(duplicateId, category.bot_id, category.title, category.emoji || null, locationId,
+          category.status || 'active', Number(category.sort_order || 0), category.created_at || nowIso(), nowIso()).run();
+        duplicate = { id: duplicateId };
+      }
+      await env.PASARGUARD_DB.prepare(`
+        UPDATE sales_plans SET category_id=?,updated_at=?
+        WHERE bot_id=? AND category_id=? AND location_id=?
+      `).bind(duplicate.id, nowIso(), category.bot_id, category.id, locationId).run();
+    }
+  }
+  await env.PASARGUARD_DB.prepare("CREATE INDEX IF NOT EXISTS idx_sales_categories_location ON sales_categories(bot_id,location_id,status,sort_order,created_at)").run();
 
   // BluePanel 3.3 originally added 13 optional feature columns to reseller_bots.
   // Older D1 databases are already close to the SQLite column ceiling and may
@@ -11780,8 +11834,8 @@ async function createResellerSnapshot(env, bot, actorTelegramId = "system", snap
   if (!fresh) throw new Error("ربات نماینده پیدا نشد");
   try {
     const [locations, categories, plans, texts, promos] = await Promise.all([
-      env.PASARGUARD_DB.prepare("SELECT id,title,emoji,description,group_ids_json,status,sort_order,created_at,updated_at FROM sales_locations WHERE bot_id=? ORDER BY sort_order,created_at").bind(fresh.id).all(),
-      env.PASARGUARD_DB.prepare("SELECT id,title,emoji,status,sort_order,created_at,updated_at FROM sales_categories WHERE bot_id=? ORDER BY sort_order,created_at").bind(fresh.id).all(),
+      env.PASARGUARD_DB.prepare("SELECT id,title,emoji,description,backend_provider,group_ids_json,status,sort_order,created_at,updated_at FROM sales_locations WHERE bot_id=? ORDER BY sort_order,created_at").bind(fresh.id).all(),
+      env.PASARGUARD_DB.prepare("SELECT id,title,emoji,location_id,status,sort_order,created_at,updated_at FROM sales_categories WHERE bot_id=? ORDER BY sort_order,created_at").bind(fresh.id).all(),
       env.PASARGUARD_DB.prepare("SELECT id,title,data_limit_bytes,duration_days,price_toman,status,sort_order,category_id,location_id,plan_type,created_at,updated_at FROM sales_plans WHERE bot_id=? ORDER BY sort_order,created_at").bind(fresh.id).all(),
       env.PASARGUARD_DB.prepare("SELECT text_key,text_value,updated_at FROM reseller_bot_texts WHERE bot_id=? ORDER BY text_key").bind(fresh.id).all(),
       env.PASARGUARD_DB.prepare("SELECT id,code,kind,value_type,value,min_purchase_toman,max_uses,per_user_limit,use_count,status,expires_at,description,created_at,updated_at FROM sales_promo_codes WHERE bot_id=? ORDER BY created_at").bind(fresh.id).all()
@@ -12536,11 +12590,11 @@ async function botSalesOrdersView(env, account) {
 async function botSalesCatalogView(env, account) {
   const bot=await getResellerBotForUser(env,account.user.id); if(!bot) throw new Error('ربات پیدا نشد');
   const [cats,locs]=await Promise.all([
-    env.PASARGUARD_DB.prepare('SELECT * FROM sales_categories WHERE bot_id=? ORDER BY sort_order,created_at LIMIT 15').bind(bot.id).all(),
+    env.PASARGUARD_DB.prepare(`SELECT c.*,l.title AS location_title,l.emoji AS location_emoji FROM sales_categories c LEFT JOIN sales_locations l ON l.id=c.location_id WHERE c.bot_id=? ORDER BY c.sort_order,c.created_at LIMIT 30`).bind(bot.id).all(),
     env.PASARGUARD_DB.prepare('SELECT * FROM sales_locations WHERE bot_id=? ORDER BY sort_order,created_at LIMIT 15').bind(bot.id).all()
   ]);
   const c=(cats.results||[]),l=(locs.results||[]);
-  const text='📂 <b>دسته‌بندی‌ها</b>\n'+(c.map((x,i)=>(x.status==='active'?'🟢':'⚪️')+' '+(i+1)+'. '+botEscape((x.emoji||'📁')+' '+x.title)).join('\n')||'ثبت نشده')+
+  const text='📂 <b>دسته‌بندی‌ها</b>\n'+(c.map((x,i)=>(x.status==='active'?'🟢':'⚪️')+' '+(i+1)+'. '+botEscape((x.emoji||'📁')+' '+x.title)+' · '+botEscape((x.location_emoji||'🌍')+' '+(x.location_title||'بدون لوکیشن'))).join('\n')||'ثبت نشده')+
     '\n\n🌍 <b>لوکیشن‌ها</b>\n'+(l.map((x,i)=>(x.status==='active'?'🟢':'⚪️')+' '+(i+1)+'. '+botEscape((x.emoji||'🌍')+' '+x.title)+' · '+botEscape(serviceProviderLabel(x.backend_provider))).join('\n')||'ثبت نشده');
   const buttons=[[{text:'➕ دسته‌بندی',callback_data:'bot:sales:category:new'},{text:'➕ لوکیشن',callback_data:'bot:sales:location:new'}]];
   c.slice(0,6).forEach((x,i)=>buttons.push([
@@ -14154,8 +14208,22 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
   }
   if (data === "bot:sales:category:new") {
     const bot=await getResellerBotForUser(env,account.user.id);if(!bot)throw new Error("ربات پیدا نشد");
-    await botSetSession(env,account.user.telegram_id,"sales_category_title",{botId:bot.id});
-    await botPrompt(env,chatId,"📂 نام دسته‌بندی را ارسال کنید.\nمی‌توانید اول متن یک ایموجی بگذارید؛ مثال: <b>🎮 گیمینگ</b>");
+    const locations=await env.PASARGUARD_DB.prepare("SELECT id,title,emoji FROM sales_locations WHERE bot_id=? AND status='active' ORDER BY sort_order,created_at LIMIT 30").bind(bot.id).all();
+    if(!(locations.results||[]).length) throw new Error("ابتدا حداقل یک لوکیشن فعال بسازید");
+    await botSetSession(env,account.user.telegram_id,"sales_category_location",{botId:bot.id});
+    const rows=(locations.results||[]).map(l=>[{text:(l.emoji||'🌍')+' '+l.title,callback_data:'bot:sales:category:loc:'+l.id}]);
+    rows.push([{text:'لغو',callback_data:'bot:cancel'}]);
+    await botPrompt(env,chatId,"🌍 لوکیشن این دسته‌بندی را انتخاب کنید.\nهر دسته فقط داخل همان لوکیشن نمایش داده می‌شود.",rows);
+    return;
+  }
+  if (data.startsWith('bot:sales:category:loc:')) {
+    const locationId=data.slice('bot:sales:category:loc:'.length);
+    const session=await botGetSession(env,account.user.telegram_id);
+    if(!session||session.state!=='sales_category_location') throw new Error('فرایند ساخت دسته‌بندی منقضی شده است');
+    const location=await env.PASARGUARD_DB.prepare("SELECT id,title,emoji FROM sales_locations WHERE id=? AND bot_id=? AND status='active'").bind(locationId,session.data.botId).first();
+    if(!location) throw new Error('لوکیشن انتخاب‌شده فعال نیست');
+    await botSetSession(env,account.user.telegram_id,'sales_category_title',{...session.data,locationId});
+    await botPrompt(env,chatId,"📂 نام دسته‌بندی را ارسال کنید.\nلوکیشن: <b>"+botEscape((location.emoji||'🌍')+' '+location.title)+"</b>\nمثال: <b>🎮 گیمینگ</b>");
     return;
   }
   if (data === "bot:sales:location:new") {
@@ -14374,21 +14442,25 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
   }
   if (data.startsWith("bot:sales:plan:type:")) {
     const rawType=data.slice("bot:sales:plan:type:".length);const type=["sale","renew","volume"].includes(rawType)?rawType:"sale";const session=await botGetSession(env,account.user.telegram_id);if(session?.state!=="sales_plan_setup")throw new Error("فرایند ساخت پلن منقضی شده است");
-    const cats=await env.PASARGUARD_DB.prepare("SELECT * FROM sales_categories WHERE bot_id=? AND status='active' ORDER BY sort_order,created_at LIMIT 15").bind(session.data.botId).all();
-    await botSetSession(env,account.user.telegram_id,"sales_plan_category",{...session.data,planType:type});
-    const rows=(cats.results||[]).map(c=>[{text:(c.emoji||'📁')+' '+c.title,callback_data:"bot:sales:plan:cat:"+c.id}]);rows.push([{text:"بدون دسته‌بندی",callback_data:"bot:sales:plan:cat:none"}]);rows.push([{text:"لغو",callback_data:"bot:cancel"}]);
-    await botPrompt(env,chatId,"📂 دسته‌بندی پلن را انتخاب کنید:",rows);return;
-  }
-  if (data.startsWith("bot:sales:plan:cat:")) {
-    const categoryId=data.slice("bot:sales:plan:cat:".length);const session=await botGetSession(env,account.user.telegram_id);if(session?.state!=="sales_plan_category")throw new Error("فرایند ساخت پلن منقضی شده است");
-    const locs=await env.PASARGUARD_DB.prepare("SELECT * FROM sales_locations WHERE bot_id=? AND status='active' ORDER BY sort_order,created_at LIMIT 15").bind(session.data.botId).all();
-    await botSetSession(env,account.user.telegram_id,"sales_plan_location",{...session.data,categoryId:categoryId==='none'?null:categoryId});
-    const rows=(locs.results||[]).map(l=>[{text:(l.emoji||'🌍')+' '+l.title,callback_data:"bot:sales:plan:loc:"+l.id}]);rows.push([{text:"بدون لوکیشن",callback_data:"bot:sales:plan:loc:none"}]);rows.push([{text:"لغو",callback_data:"bot:cancel"}]);
+    const locs=await env.PASARGUARD_DB.prepare("SELECT * FROM sales_locations WHERE bot_id=? AND status='active' ORDER BY sort_order,created_at LIMIT 30").bind(session.data.botId).all();
+    if(!(locs.results||[]).length) throw new Error('ابتدا یک لوکیشن فعال بسازید');
+    await botSetSession(env,account.user.telegram_id,"sales_plan_location",{...session.data,planType:type});
+    const rows=(locs.results||[]).map(l=>[{text:(l.emoji||'🌍')+' '+l.title,callback_data:"bot:sales:plan:loc:"+l.id}]);rows.push([{text:"لغو",callback_data:"bot:cancel"}]);
     await botPrompt(env,chatId,"🌍 لوکیشن پلن را انتخاب کنید:",rows);return;
   }
   if (data.startsWith("bot:sales:plan:loc:")) {
     const locationId=data.slice("bot:sales:plan:loc:".length);const session=await botGetSession(env,account.user.telegram_id);if(session?.state!=="sales_plan_location")throw new Error("فرایند ساخت پلن منقضی شده است");
-    await botSetSession(env,account.user.telegram_id,"sales_plan_title",{...session.data,locationId:locationId==='none'?null:locationId});
+    const location=await env.PASARGUARD_DB.prepare("SELECT id,title,emoji FROM sales_locations WHERE id=? AND bot_id=? AND status='active'").bind(locationId,session.data.botId).first();
+    if(!location) throw new Error('لوکیشن انتخاب‌شده فعال نیست');
+    const cats=await env.PASARGUARD_DB.prepare("SELECT * FROM sales_categories WHERE bot_id=? AND location_id=? AND status='active' ORDER BY sort_order,created_at LIMIT 30").bind(session.data.botId,locationId).all();
+    await botSetSession(env,account.user.telegram_id,"sales_plan_category",{...session.data,locationId});
+    const rows=(cats.results||[]).map(c=>[{text:(c.emoji||'📁')+' '+c.title,callback_data:"bot:sales:plan:cat:"+c.id}]);rows.push([{text:"بدون دسته‌بندی",callback_data:"bot:sales:plan:cat:none"}]);rows.push([{text:"لغو",callback_data:"bot:cancel"}]);
+    await botPrompt(env,chatId,"📂 دسته‌بندی همین لوکیشن را انتخاب کنید:",rows);return;
+  }
+  if (data.startsWith("bot:sales:plan:cat:")) {
+    const categoryId=data.slice("bot:sales:plan:cat:".length);const session=await botGetSession(env,account.user.telegram_id);if(session?.state!=="sales_plan_category")throw new Error("فرایند ساخت پلن منقضی شده است");
+    if(categoryId!=='none'){const cat=await env.PASARGUARD_DB.prepare("SELECT id FROM sales_categories WHERE id=? AND bot_id=? AND location_id=? AND status='active'").bind(categoryId,session.data.botId,session.data.locationId).first();if(!cat)throw new Error('این دسته‌بندی متعلق به لوکیشن انتخاب‌شده نیست');}
+    await botSetSession(env,account.user.telegram_id,"sales_plan_title",{...session.data,categoryId:categoryId==='none'?null:categoryId});
     await botPrompt(env,chatId,"📦 نام پلن را ارسال کنید.\nمثال: <b>۳۰ گیگ یک‌ماهه</b>");return;
   }
   if (data.startsWith("bot:sales:plan:toggle:")) {
@@ -14888,7 +14960,7 @@ async function botHandleSessionMessage(env, account, message, session, origin, c
   if (session.state === "sales_category_title") {
     const raw=cleanText(text,100);if(raw.length<2)throw new Error("نام دسته‌بندی کوتاه است");
     const match=raw.match(/^(\p{Extended_Pictographic}|\p{Regional_Indicator}{2})\s*(.*)$/u);const emoji=match?.[1]||"📁";const title=cleanText(match?.[2]||raw,90);
-    await env.PASARGUARD_DB.prepare(`INSERT INTO sales_categories(id,bot_id,title,emoji,status,sort_order,created_at,updated_at) VALUES(?,?,?,?,'active',0,?,?)`).bind(id("cat"),session.data.botId,title,emoji,nowIso(),nowIso()).run();
+    await env.PASARGUARD_DB.prepare(`INSERT INTO sales_categories(id,bot_id,title,emoji,location_id,status,sort_order,created_at,updated_at) VALUES(?,?,?,?,?,'active',0,?,?)`).bind(id("cat"),session.data.botId,title,emoji,session.data.locationId,nowIso(),nowIso()).run();
     await botClearSession(env,account.user.telegram_id);await botSendOrEdit(env,{account,chatId},"sales_catalog");return true;
   }
   if (session.state === "sales_location_title") {

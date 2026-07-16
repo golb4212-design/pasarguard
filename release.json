@@ -1,7 +1,7 @@
 {
-  "version": "3.3.29",
-  "release_id": "3.3.29-cascading-multi-level-usage-settlement",
-  "architecture": "fully-split-three-worker-dual-panel-cascading-ledger",
+  "version": "3.3.30",
+  "release_id": "3.3.30-location-scoped-catalog-all-active-locations-version-fix",
+  "architecture": "fully-split-three-worker-dual-panel-cascading-ledger-location-scoped-catalog",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -9,28 +9,25 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "second-level reseller wallet is charged at the per-GB rate configured by the master reseller",
-    "the master wallet receives the collected second-level usage income as a separate ledger entry",
-    "the master wallet is independently charged at the central per-GB rate for the same Marzban traffic",
-    "PasarGuard settlement runs child collection before central panel billing so the cascade order is deterministic",
-    "child debt and master upstream debt are tracked independently and may suspend their own level independently",
-    "central reports separate child gross billing, master income, central upstream cost, debt, and accrued profit",
-    "financial events are guarded by idempotent event keys and D1 transaction batches",
+    "categories are owned by one sales location and plans can only use categories from the same location",
+    "legacy shared categories are automatically split per location without changing existing orders",
+    "every active location is visible in the Telegram bot and customer Mini App even when it has zero active plans",
+    "category and plan creation in central bot, reseller owner bot, and web panel is location-aware",
+    "raw build-version placeholders are replaced by the deployed 3.3.30 version in every Edge HTML page",
+    "dual PasarGuard and shared Marzban routing and cascading usage settlement from 3.3.29 are preserved",
     "README files are excluded"
   ],
   "deployment": {
     "automatic_provisioning": "upload ZIP through the central bot",
-    "db_schema_revision": "3.3.29"
+    "db_schema_revision": "3.3.30"
   },
   "validation": {
     "worker_syntax": "passed: core, edge, processor",
     "embedded_browser_scripts": "passed: 10 scripts",
-    "fresh_sqlite_schema": "passed: shared cascade columns and indexes",
-    "legacy_schema_migration": "passed: additive D1 columns are idempotent",
-    "cascade_sql_simulation": "passed: funded and debt scenarios",
-    "placeholder_bind_validation": "passed: 24 prepared statements in each Worker billing path",
-    "financial_order": "passed: child debit -> master income -> master central debit",
-    "duplicate_event_guard": "passed by event-key and processing-token design",
+    "legacy_category_split": "passed: one shared category across two locations becomes two matching categories",
+    "active_location_visibility": "passed: purchase query uses LEFT JOIN and has no plan-count HAVING filter",
+    "location_scope": "passed: bot, Mini App, owner bot and web panel filter categories by location_id",
+    "raw_version_placeholder": "passed: no raw build placeholder remains in runtime files",
     "live_api": "not run; requires real Telegram, PasarGuard and Marzban credentials"
   },
   "limitations": [
@@ -38,15 +35,24 @@
     "PasarGuard central cost is still sourced from the real manager aggregate; child attribution is shown separately without double-debiting the master."
   ],
   "sha256": {
-    "core/worker.js": "043a51c23cf1065e559d34915833241d76e07100d1482daead0d92403a888041",
-    "edge/worker.js": "d73157cefbddc5cf665d0f22e37f8cd6b9febcdb52657757fe7682375ce66a2a",
-    "processor/worker.js": "47b9f0375d1396e05dbc88c41e9f705f298efa636e62cc26839a67b32beb4105",
+    "core/worker.js": "a76b75e5c4b61e22b02b6a4453f67732adc327f24a548e8f255aa9e47c819666",
+    "edge/worker.js": "4708c8bda89b82636a676a2d5b5d03c6b500c57bb6b0a153e94bed513388fded",
+    "processor/worker.js": "b1beecb771b465fa540d6e07fb58247b8fd321aa1b4c9cc2fdd89969c58f3fe0",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "043a51c23cf1065e559d34915833241d76e07100d1482daead0d92403a888041",
-    "edge/worker.js": "d73157cefbddc5cf665d0f22e37f8cd6b9febcdb52657757fe7682375ce66a2a",
-    "processor/worker.js": "47b9f0375d1396e05dbc88c41e9f705f298efa636e62cc26839a67b32beb4105",
+    "core/worker.js": "a76b75e5c4b61e22b02b6a4453f67732adc327f24a548e8f255aa9e47c819666",
+    "edge/worker.js": "4708c8bda89b82636a676a2d5b5d03c6b500c57bb6b0a153e94bed513388fded",
+    "processor/worker.js": "b1beecb771b465fa540d6e07fb58247b8fd321aa1b4c9cc2fdd89969c58f3fe0",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
-  }
+  },
+  "title": "کاتالوگ مستقل هر لوکیشن، نمایش همه لوکیشن‌ها و رفع نسخه پنل",
+  "summary": "پلن‌ها و دسته‌بندی‌ها برای هر لوکیشن مستقل شدند، همه لوکیشن‌های فعال در ربات و پنل خرید نمایش داده می‌شوند و نسخه واقعی 3.3.30 جای عبارت خام در رابط قرار گرفت.",
+  "changes": [
+    "هر دسته‌بندی به یک لوکیشن مشخص متصل می‌شود و در لوکیشن‌های دیگر نمایش داده نمی‌شود.",
+    "هنگام ساخت یا ویرایش پلن، ابتدا لوکیشن انتخاب می‌شود و فقط دسته‌بندی‌های همان لوکیشن قابل انتخاب هستند.",
+    "تمام لوکیشن‌های فعال، حتی لوکیشن بدون پلن، در ربات و مینی‌اپ خرید نمایش داده می‌شوند.",
+    "دسته‌بندی‌های قدیمیِ مشترک میان چند لوکیشن، در اولین مهاجرت بدون آسیب به سفارش‌ها خودکار تفکیک می‌شوند.",
+    "نسخه واقعی 3.3.30 در تمام صفحات پنل درج می‌شود و عبارت خام نسخه دیگر نمایش داده نمی‌شود."
+  ]
 }
