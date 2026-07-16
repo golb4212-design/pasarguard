@@ -1,11 +1,11 @@
 /* BLUEPANEL_PROCESSOR_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.25
+ * Version: 3.3.26
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = '3.3.25';
+const APP_VERSION = '3.3.26';
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
@@ -739,8 +739,8 @@ async function downlineUsageTotal(env, botId) {
     SELECT COALESCE(SUM(used),0) AS total_usage FROM (
       SELECT remote_username,MAX(COALESCE(remote_used_traffic,0)) AS used
       FROM sales_orders
-      WHERE bot_id=? AND status='delivered' AND remote_username IS NOT NULL
-      GROUP BY LOWER(remote_username)
+      WHERE bot_id=? AND status='delivered' AND remote_username IS NOT NULL AND COALESCE(service_provider,'pasarguard')='pasarguard'
+      GROUP BY service_provider,LOWER(remote_username)
     )
   `).bind(botId).first();
   return Math.max(0, Number(row?.total_usage || 0));
@@ -750,8 +750,8 @@ async function syncDownlineRemoteServices(env, childBot, limit = 120) {
   const rows = await env.PASARGUARD_DB.prepare(`
     SELECT MIN(o.id) AS order_id,o.customer_id,o.remote_username
     FROM sales_orders o
-    WHERE o.bot_id=? AND o.status='delivered' AND o.remote_username IS NOT NULL
-    GROUP BY o.customer_id,LOWER(o.remote_username)
+    WHERE o.bot_id=? AND o.status='delivered' AND o.remote_username IS NOT NULL AND COALESCE(o.service_provider,'pasarguard')='pasarguard'
+    GROUP BY o.customer_id,o.service_provider,LOWER(o.remote_username)
     ORDER BY MAX(o.updated_at) DESC LIMIT ?
   `).bind(childBot.id, Math.max(1, Math.min(500, Number(limit || 120)))).all();
   let synced = 0, failed = 0;
@@ -775,15 +775,15 @@ async function sharedMarzbanUsageSnapshots(env, bot, limit = 10) {
              MIN(COALESCE(o.remote_last_synced_at,'')) AS oldest_sync,
              MAX(o.updated_at) AS last_update
       FROM sales_orders o
-      WHERE o.bot_id=? AND o.status='delivered' AND o.remote_username IS NOT NULL
-      GROUP BY o.customer_id,LOWER(o.remote_username)
+      WHERE o.bot_id=? AND o.status='delivered' AND o.remote_username IS NOT NULL AND COALESCE(o.service_provider,'pasarguard')='marzban'
+      GROUP BY o.customer_id,o.service_provider,LOWER(o.remote_username)
       UNION ALL
       SELECT 'trial' AS source_type,t.id AS record_id,t.customer_id,t.remote_username,
              COALESCE(t.remote_used_traffic,0) AS previous_usage,
              COALESCE(t.remote_last_synced_at,'') AS oldest_sync,
              t.updated_at AS last_update
       FROM sales_trials t
-      WHERE t.bot_id=? AND t.status='delivered' AND t.remote_username IS NOT NULL
+      WHERE t.bot_id=? AND t.status='delivered' AND t.remote_username IS NOT NULL AND COALESCE(t.service_provider,'pasarguard')='marzban'
     )
     ORDER BY oldest_sync ASC,last_update ASC LIMIT ?
   `).bind(bot.id, bot.id, Math.max(1, Math.min(20, Number(limit || cfg.syncBatch)))).all();
@@ -792,7 +792,7 @@ async function sharedMarzbanUsageSnapshots(env, bot, limit = 10) {
   let failed = 0;
   for (const row of rows.results || []) {
     try {
-      const remote = await servicePanelRequest(env, agency, "GET", "/api/user/" + encodeURIComponent(row.remote_username));
+      const remote = await servicePanelRequestForProvider(env, agency, "marzban", "GET", "/api/user/" + encodeURIComponent(row.remote_username));
       const snapshot = salesRemoteSnapshot(remote, { remote_username: row.remote_username });
       let subscriptionUrl = snapshot.subscriptionUrl || "";
       if (subscriptionUrl && subscriptionUrl.startsWith("/")) subscriptionUrl = cfg.panelUrl + subscriptionUrl;
@@ -817,7 +817,7 @@ function sharedMarzbanSnapshotUpdate(env, bot, item, eventKey = "", token = "") 
     const stmt = env.PASARGUARD_DB.prepare(`UPDATE sales_trials SET
       subscription_url=CASE WHEN ?<>'' THEN ? ELSE subscription_url END,
       remote_status=?,remote_data_limit=?,remote_used_traffic=?,remote_expire=?,remote_online_at=?,remote_last_synced_at=?,updated_at=?
-      WHERE id=? AND bot_id=? AND customer_id=? AND LOWER(remote_username)=LOWER(?) AND status='delivered'${guard}`);
+      WHERE id=? AND bot_id=? AND customer_id=? AND LOWER(remote_username)=LOWER(?) AND COALESCE(service_provider,'pasarguard')='marzban' AND status='delivered'${guard}`);
     const args = [item.subscriptionUrl,item.subscriptionUrl,item.snapshot.status,item.snapshot.dataLimit,item.current,
       item.snapshot.expire,item.snapshot.onlineAt,item.snapshot.syncedAt,item.snapshot.syncedAt,item.recordId,bot.id,item.customerId,item.username];
     if (eventKey) args.push(eventKey,token);
@@ -826,7 +826,7 @@ function sharedMarzbanSnapshotUpdate(env, bot, item, eventKey = "", token = "") 
   const stmt = env.PASARGUARD_DB.prepare(`UPDATE sales_orders SET
     subscription_url=CASE WHEN ?<>'' THEN ? ELSE subscription_url END,
     remote_status=?,remote_data_limit=?,remote_used_traffic=?,remote_expire=?,remote_online_at=?,remote_last_synced_at=?
-    WHERE bot_id=? AND customer_id=? AND LOWER(remote_username)=LOWER(?) AND status='delivered'${guard}`);
+    WHERE bot_id=? AND customer_id=? AND LOWER(remote_username)=LOWER(?) AND COALESCE(service_provider,'pasarguard')='marzban' AND status='delivered'${guard}`);
   const args = [item.subscriptionUrl,item.subscriptionUrl,item.snapshot.status,item.snapshot.dataLimit,item.current,
     item.snapshot.expire,item.snapshot.onlineAt,item.snapshot.syncedAt,bot.id,item.customerId,item.username];
   if (eventKey) args.push(eventKey,token);
@@ -948,12 +948,12 @@ async function syncSharedMarzbanUsage(env, parentBotId = null, limit = 100, opti
   const cfg = sharedMarzbanConfig(settings, env);
   const sql = parentBotId
     ? `SELECT rb.id FROM reseller_bots rb WHERE rb.parent_bot_id=? AND (
-         EXISTS(SELECT 1 FROM sales_orders o WHERE o.bot_id=rb.id AND o.status='delivered' AND o.remote_username IS NOT NULL) OR
-         EXISTS(SELECT 1 FROM sales_trials t WHERE t.bot_id=rb.id AND t.status='delivered' AND t.remote_username IS NOT NULL)
+         EXISTS(SELECT 1 FROM sales_orders o WHERE o.bot_id=rb.id AND o.status='delivered' AND o.remote_username IS NOT NULL AND COALESCE(o.service_provider,'pasarguard')='marzban') OR
+         EXISTS(SELECT 1 FROM sales_trials t WHERE t.bot_id=rb.id AND t.status='delivered' AND t.remote_username IS NOT NULL AND COALESCE(t.service_provider,'pasarguard')='marzban')
        ) ORDER BY rb.updated_at LIMIT ?`
     : `SELECT rb.id FROM reseller_bots rb WHERE
-         EXISTS(SELECT 1 FROM sales_orders o WHERE o.bot_id=rb.id AND o.status='delivered' AND o.remote_username IS NOT NULL) OR
-         EXISTS(SELECT 1 FROM sales_trials t WHERE t.bot_id=rb.id AND t.status='delivered' AND t.remote_username IS NOT NULL)
+         EXISTS(SELECT 1 FROM sales_orders o WHERE o.bot_id=rb.id AND o.status='delivered' AND o.remote_username IS NOT NULL AND COALESCE(o.service_provider,'pasarguard')='marzban') OR
+         EXISTS(SELECT 1 FROM sales_trials t WHERE t.bot_id=rb.id AND t.status='delivered' AND t.remote_username IS NOT NULL AND COALESCE(t.service_provider,'pasarguard')='marzban')
        ORDER BY rb.updated_at LIMIT ?`;
   const query = env.PASARGUARD_DB.prepare(sql);
   const safeLimit = Math.max(1,Math.min(500,Number(limit||100)));
@@ -1063,7 +1063,9 @@ async function billDownlineResellerBot(env, childBot, options = {}) {
 
 async function syncDownlineUsage(env, parentBotId = null, limit = 100, options = {}) {
   const backendSettings = await getSettings(env);
-  if (sharedMarzbanEnabled(backendSettings, env)) return syncSharedMarzbanUsage(env,parentBotId,limit,options);
+  const marzbanResult=sharedMarzbanEnabled(backendSettings,env)
+    ? await syncSharedMarzbanUsage(env,parentBotId,limit,options)
+    : {processed:0,charged:0,collected:0,unpaid:0,parent_profit:0,failed:0};
   const sql = parentBotId
     ? "SELECT id FROM reseller_bots WHERE parent_bot_id=? ORDER BY updated_at LIMIT ?"
     : "SELECT id FROM reseller_bots WHERE parent_bot_id IS NOT NULL ORDER BY updated_at LIMIT ?";
@@ -1082,7 +1084,15 @@ async function syncDownlineUsage(env, parentBotId = null, limit = 100, options =
       try { await audit(env,null,"downline_usage_sync_failed",{botId:row.id,message:String(error?.message||error)}); } catch (_) {}
     }
   }
-  return {processed,charged,collected,unpaid,failed};
+  return {
+    processed:processed+Number(marzbanResult.processed||0),
+    charged:charged+Number(marzbanResult.charged||0),
+    collected:collected+Number(marzbanResult.collected||0),
+    unpaid:unpaid+Number(marzbanResult.unpaid||0),
+    failed:failed+Number(marzbanResult.failed||0),
+    pasarguard:{processed,charged,collected,unpaid,failed},
+    marzban:marzbanResult
+  };
 }
 
 async function resellerBotToken(env, bot) {
@@ -1153,6 +1163,41 @@ async function agencyPasarguardRequest(env, agency, method, path, body, retry = 
 }
 const sharedMarzbanTokenCache = new Map();
 
+
+function normalizeServiceProvider(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  return ["marzban","marzban_shared"].includes(raw) ? "marzban" : "pasarguard";
+}
+
+function serviceProviderLabel(value) {
+  return normalizeServiceProvider(value) === "marzban" ? "مرزبان" : "PasarGuard";
+}
+
+function locationServiceProvider(location, settings = {}, env = {}) {
+  const provider = normalizeServiceProvider(location?.backend_provider || location?.service_provider || "pasarguard");
+  if (provider === "marzban" && !sharedMarzbanEnabled(settings, env)) {
+    throw new Error("مرزبان مشترک مرکزی فعال یا کامل تنظیم نشده است");
+  }
+  return provider;
+}
+
+function serviceBaseUrlForProvider(settings, env, provider) {
+  return normalizeServiceProvider(provider) === "marzban"
+    ? sharedMarzbanConfig(settings, env).panelUrl
+    : pasarguardBaseUrl(settings);
+}
+
+async function servicePanelRequestForProvider(env, agency, provider, method, path, body, retry = true) {
+  const selected = normalizeServiceProvider(provider);
+  if (selected === "marzban") {
+    const settings = await getSettings(env);
+    if (!sharedMarzbanEnabled(settings, env)) throw new Error("مرزبان مشترک مرکزی فعال نیست");
+    return sharedMarzbanRequest(env, method, path, body, retry);
+  }
+  if (!agency?.id || !agency?.panel_username) throw new Error("پنل PasarGuard متصل برای این ربات پیدا نشد");
+  return agencyPasarguardRequest(env, agency, method, path, body, retry);
+}
+
 function sharedMarzbanEnabled(settings, env = {}) {
   const raw = env.MARZBAN_SHARED_ENABLED !== undefined
     ? env.MARZBAN_SHARED_ENABLED
@@ -1211,8 +1256,8 @@ function sharedMarzbanConfig(settings, env = {}) {
 }
 
 function sharedServiceBaseUrl(settings, env = {}) {
-  const cfg = sharedMarzbanConfig(settings, env);
-  return cfg.enabled ? cfg.panelUrl : pasarguardBaseUrl(settings);
+  // Legacy helper is intentionally PasarGuard-only in dual-panel mode.
+  return pasarguardBaseUrl(settings);
 }
 
 async function getSharedMarzbanToken(env, settings, force = false) {
@@ -1294,8 +1339,7 @@ async function sharedMarzbanRequest(env, method, path, body, retry = true) {
 }
 
 async function servicePanelRequest(env, agency, method, path, body, retry = true) {
-  const settings = await getSettings(env);
-  if (sharedMarzbanEnabled(settings, env)) return sharedMarzbanRequest(env, method, path, body, retry);
+  // Backward-compatible PasarGuard request. Provider-aware paths must use servicePanelRequestForProvider.
   return agencyPasarguardRequest(env, agency, method, path, body, retry);
 }
 
@@ -1355,9 +1399,10 @@ async function ensureSharedBackendAccount(env, botId, activate = false) {
   return env.PASARGUARD_DB.prepare("SELECT * FROM shared_backend_accounts WHERE bot_id=?").bind(botId).first();
 }
 
-async function claimSharedServiceOwnership(env, botId, customerId, orderId, username) {
+async function claimSharedServiceOwnership(env, botId, customerId, orderId, username, provider = "marzban") {
+  if(normalizeServiceProvider(provider)!=="marzban") return { claimed:false };
   const settings = await getSettings(env);
-  if (!sharedMarzbanEnabled(settings, env)) return { claimed: false };
+  if (!sharedMarzbanEnabled(settings, env)) throw new Error("مرزبان مشترک مرکزی فعال نیست");
   await ensureSharedMarzbanTables(env);
   const cfg = sharedMarzbanConfig(settings, env);
   const scope = cfg.panelUrl.toLowerCase();
@@ -1423,21 +1468,23 @@ async function getSalesServiceOrder(env, bot, customer, serviceId) {
 
 async function syncSalesService(env, bot, customer, serviceId) {
   const target = await getSalesServiceOrder(env, bot, customer, serviceId);
-  if (bot.agency_status !== "active") throw new Error("پنل متصل نماینده فعال نیست");
+  const provider=normalizeServiceProvider(target.service_provider);
+  if(provider==="pasarguard"&&bot.agency_status!=="active") throw new Error("پنل PasarGuard متصل نماینده فعال نیست");
+  if(provider==="marzban"&&!sharedMarzbanEnabled(await getSettings(env),env)) throw new Error("مرزبان مشترک مرکزی فعال نیست");
   const agency = { id: bot.agency_id, panel_username: bot.panel_username, panel_password_enc: bot.panel_password_enc };
-  const remote = await servicePanelRequest(env, agency, "GET", "/api/user/" + encodeURIComponent(target.remote_username));
+  const remote = await servicePanelRequestForProvider(env, agency, provider, "GET", "/api/user/" + encodeURIComponent(target.remote_username));
   const snapshot = salesRemoteSnapshot(remote, target);
   let subscriptionUrl = snapshot.subscriptionUrl;
   if (subscriptionUrl && subscriptionUrl.startsWith("/")) {
     const settings = await getSettings(env);
-    subscriptionUrl = sharedServiceBaseUrl(settings, env) + subscriptionUrl;
+    subscriptionUrl = serviceBaseUrlForProvider(settings, env, provider) + subscriptionUrl;
   }
   await env.PASARGUARD_DB.prepare(`
     UPDATE sales_orders SET subscription_url=CASE WHEN ?<>'' THEN ? ELSE subscription_url END,
       remote_status=?,remote_data_limit=?,remote_used_traffic=?,remote_expire=?,remote_online_at=?,remote_last_synced_at=?,updated_at=updated_at
-    WHERE bot_id=? AND customer_id=? AND remote_username=? AND status='delivered'
+    WHERE bot_id=? AND customer_id=? AND remote_username=? AND service_provider=? AND status='delivered'
   `).bind(subscriptionUrl, subscriptionUrl, snapshot.status, snapshot.dataLimit, snapshot.usedTraffic,
-    snapshot.expire, snapshot.onlineAt, snapshot.syncedAt, bot.id, customer.id, target.remote_username).run();
+    snapshot.expire, snapshot.onlineAt, snapshot.syncedAt, bot.id, customer.id, target.remote_username, provider).run();
   await salesEvent(env, bot.id, customer.id, "service_synced", { serviceId: target.id, username: target.remote_username });
   return {
     id: target.id,
@@ -1551,11 +1598,11 @@ async function agencyActivePasarguardGroupIds(env, agency) {
   let response;
   try {
     // PasarGuard v5 exposes this lightweight endpoint to both sudo and operator admins.
-    response = await servicePanelRequest(env, agency, "GET", "/api/groups/simple");
+    response = await agencyPasarguardRequest(env, agency, "GET", "/api/groups/simple");
   } catch (simpleError) {
     try {
       // Compatibility fallback for older installations that only expose the full groups endpoint.
-      response = await servicePanelRequest(env, agency, "GET", "/api/groups");
+      response = await agencyPasarguardRequest(env, agency, "GET", "/api/groups");
     } catch (fullError) {
       throw new Error("دریافت گروه‌های فعال پنل پاسارگارد ناموفق بود: " + cleanText(fullError?.message || simpleError?.message || "خطای نامشخص", 300));
     }
@@ -1566,9 +1613,8 @@ async function agencyActivePasarguardGroupIds(env, agency) {
   return [...ids];
 }
 
-async function resolveSalesGroupIds(env, agency, location) {
-  const backendSettings = await getSettings(env);
-  if (sharedMarzbanEnabled(backendSettings, env)) return [];
+async function resolveSalesGroupIds(env, agency, location, provider = "pasarguard") {
+  if(normalizeServiceProvider(provider)==="marzban") return [];
   const explicitlySelected = salesGroupIds(location);
   if (explicitlySelected.length) return explicitlySelected;
   return agencyActivePasarguardGroupIds(env, agency);
@@ -1784,6 +1830,7 @@ async function processSalesServiceNotifications(env, limit = 30) {
   const result = await env.PASARGUARD_DB.prepare(`
     SELECT o.id,o.bot_id,o.customer_id,o.remote_username,o.subscription_url,o.remote_status,
            o.remote_data_limit,o.remote_used_traffic,o.remote_expire,o.remote_online_at,o.remote_last_synced_at,
+           COALESCE(o.service_provider,'pasarguard') AS service_provider,
            c.telegram_id,c.first_name,c.username
     FROM sales_orders o
     JOIN sales_customers c ON c.id=o.customer_id
@@ -1798,31 +1845,32 @@ async function processSalesServiceNotifications(env, limit = 30) {
     checked++;
     try {
       const bot = await getResellerBotById(env, row.bot_id);
-      if (!bot || bot.agency_status !== "active") continue;
+      if (!bot) continue;
+      const provider=normalizeServiceProvider(row.service_provider);
+      const settings=await getSettings(env);
+      if(provider==='marzban'&&!sharedMarzbanEnabled(settings,env)) continue;
+      if(provider==='pasarguard'&&bot.agency_status!=='active') continue;
       const customer = { id: row.customer_id, telegram_id: row.telegram_id, first_name: row.first_name, username: row.username };
       const agency = { id: bot.agency_id, panel_username: bot.panel_username, panel_password_enc: bot.panel_password_enc };
-      const remote = await servicePanelRequest(env, agency, "GET", "/api/user/" + encodeURIComponent(row.remote_username));
+      const remote = await servicePanelRequestForProvider(env, agency, provider, 'GET', '/api/user/' + encodeURIComponent(row.remote_username));
       const snapshot = salesRemoteSnapshot(remote, row);
       let subscriptionUrl = snapshot.subscriptionUrl;
-      if (subscriptionUrl && subscriptionUrl.startsWith("/")) {
-        const settings = await getSettings(env);
-        subscriptionUrl = sharedServiceBaseUrl(settings, env) + subscriptionUrl;
-      }
+      if (subscriptionUrl && subscriptionUrl.startsWith('/')) subscriptionUrl = serviceBaseUrlForProvider(settings,env,provider) + subscriptionUrl;
       await env.PASARGUARD_DB.prepare(`
         UPDATE sales_orders SET subscription_url=CASE WHEN ?<>'' THEN ? ELSE subscription_url END,
           remote_status=?,remote_data_limit=?,remote_used_traffic=?,remote_expire=?,remote_online_at=?,remote_last_synced_at=?
-        WHERE bot_id=? AND customer_id=? AND remote_username=? AND status='delivered'
+        WHERE id=? AND bot_id=?
       `).bind(subscriptionUrl, subscriptionUrl, snapshot.status, snapshot.dataLimit, snapshot.usedTraffic, snapshot.expire,
-        snapshot.onlineAt, snapshot.syncedAt, bot.id, customer.id, row.remote_username).run();
+        snapshot.onlineAt, snapshot.syncedAt, row.id, bot.id).run();
 
       const threshold = Math.max(1, Math.min(100, Number(bot.usage_reminder_percent || 80)));
       if (snapshot.dataLimit > 0) {
         const usagePercent = Math.floor(snapshot.usedTraffic * 100 / snapshot.dataLimit);
         if (usagePercent >= threshold) {
           const remaining = Math.max(0, snapshot.dataLimit - snapshot.usedTraffic);
-          const notice = await createSalesNotification(env, bot, customer, row.id, "usage", "هشدار مصرف سرویس",
-            "مصرف سرویس " + row.remote_username + " به " + usagePercent + "٪ رسیده و " + botGb(remaining) + " باقی مانده است.",
-            "usage:" + row.remote_username + ":" + threshold + ":" + snapshot.dataLimit);
+          const notice = await createSalesNotification(env, bot, customer, row.id, 'usage', 'هشدار مصرف سرویس',
+            'مصرف سرویس ' + row.remote_username + ' روی ' + serviceProviderLabel(provider) + ' به ' + usagePercent + '٪ رسیده و ' + botGb(remaining) + ' باقی مانده است.',
+            'usage:' + provider + ':' + row.remote_username + ':' + threshold + ':' + snapshot.dataLimit);
           if (notice.created) created++;
         }
       }
@@ -1831,22 +1879,16 @@ async function processSalesServiceNotifications(env, limit = 30) {
       if (snapshot.expire) {
         const remainingMs = Date.parse(snapshot.expire) - Date.now();
         if (remainingMs > 0 && remainingMs <= expiryHours * 3600000) {
-          const hoursLeft = Math.max(1, Math.ceil(remainingMs / 3600000));
-          const notice = await createSalesNotification(env, bot, customer, row.id, "expiry", "اعتبار سرویس رو به پایان است",
-            "از اعتبار سرویس " + row.remote_username + " حدود " + hoursLeft + " ساعت باقی مانده است. برای جلوگیری از قطع سرویس، آن را تمدید کنید.",
-            "expiry:" + row.remote_username + ":" + snapshot.expire + ":" + expiryHours);
+          const notice = await createSalesNotification(env, bot, customer, row.id, 'expiry', 'هشدار انقضای سرویس',
+            'سرویس ' + row.remote_username + ' روی ' + serviceProviderLabel(provider) + ' تا ' + Math.max(1,Math.ceil(remainingMs/3600000)) + ' ساعت دیگر منقضی می‌شود.',
+            'expiry:' + provider + ':' + row.remote_username + ':' + snapshot.expire + ':' + expiryHours);
           if (notice.created) created++;
         }
       }
-
-      const status = String(snapshot.status || "").toLowerCase();
-      if (["expired", "disabled", "limited"].includes(status)) {
-        const notice = await createSalesNotification(env, bot, customer, row.id, "status", "وضعیت سرویس تغییر کرد",
-          "وضعیت سرویس " + row.remote_username + " اکنون «" + status + "» است. جزئیات را در مینی‌اپ بررسی کنید.",
-          "status:" + row.remote_username + ":" + status + ":" + (snapshot.expire || "none"));
-        if (notice.created) created++;
-      }
-    } catch (_) { failed++; }
+    } catch (error) {
+      failed++;
+      try { await recordSystemError(env,'service_notifications',row.bot_id,'SERVICE_NOTIFICATION_SYNC_FAILED',error.message,{orderId:row.id,provider:row.service_provider}); } catch (_) {}
+    }
   }
   return { checked, created, failed };
 }
@@ -1896,7 +1938,7 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
            rb.user_id AS owner_user_id,rb.brand_name,rb.bot_token_enc,rb.bot_username,rb.webhook_secret,rb.id AS reseller_bot_id,
            rb.referral_reward_toman,rb.forward_enabled,
            a.id AS agency_id,a.panel_username,a.panel_password_enc,a.status AS agency_status,
-           l.group_ids_json
+           l.group_ids_json,COALESCE(o.service_provider,l.backend_provider,'pasarguard') AS resolved_service_provider
     FROM sales_orders o
     JOIN sales_plans p ON p.id=o.plan_id
     JOIN sales_customers c ON c.id=o.customer_id
@@ -1910,7 +1952,14 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
   const staleProvisioning = order.status === "provisioning" && Date.now() - new Date(order.updated_at).getTime() > 2 * 60 * 1000;
   if (!["pending_review", "provision_failed"].includes(String(order.status)) && !staleProvisioning) throw new Error("این سفارش قابل تأیید نیست");
   const provisionSettings = await getSettings(env);
-  if (!sharedMarzbanEnabled(provisionSettings, env) && order.agency_status !== "active") throw new Error("پنل متصل فعال نیست");
+  let serviceProvider=normalizeServiceProvider(order.resolved_service_provider);
+  if(order.order_type==="renewal"||order.order_type==="volume"){
+    const targetProvider=await env.PASARGUARD_DB.prepare("SELECT service_provider FROM sales_orders WHERE id=? AND bot_id=? AND customer_id=? AND status='delivered'").bind(order.target_order_id,order.bot_id,order.customer_id).first();
+    if(targetProvider) serviceProvider=normalizeServiceProvider(targetProvider.service_provider);
+  }
+  if(serviceProvider==="marzban"){
+    if(!sharedMarzbanEnabled(provisionSettings,env)) throw new Error("مرزبان مشترک مرکزی فعال نیست");
+  }else if(order.agency_status!=="active") throw new Error("پنل PasarGuard متصل فعال نیست");
   const claim = await env.PASARGUARD_DB.prepare(`
     UPDATE sales_orders SET status='provisioning',error_message=NULL,updated_at=?,reviewed_at=?,reviewed_by=?
     WHERE id=? AND (status IN ('pending_review','provision_failed') OR (status='provisioning' AND updated_at<?))
@@ -1926,7 +1975,7 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
       `).bind(order.target_order_id, order.bot_id, order.customer_id).first();
       if (!target?.remote_username) throw new Error(order.order_type === "volume" ? "سرویس مقصد افزایش حجم پیدا نشد" : "سرویس مقصد تمدید پیدا نشد");
       username = target.remote_username;
-      const current = await servicePanelRequest(env, agency, "GET", "/api/user/" + encodeURIComponent(username));
+      const current = await servicePanelRequestForProvider(env, agency, serviceProvider, "GET", "/api/user/" + encodeURIComponent(username));
       const payload = {
         status: "active",
         data_limit: Math.max(0, Number(current?.data_limit || 0)) + Math.max(0, Number(order.data_limit_bytes || 0)),
@@ -1938,7 +1987,7 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
         const baseTime = Math.max(Date.now(), Number.isFinite(currentExpireTime) ? currentExpireTime : 0);
         payload.expire = new Date(baseTime + Number(order.duration_days) * 86400000).toISOString();
       }
-      created = await servicePanelRequest(env, agency, "PUT", "/api/user/" + encodeURIComponent(username), payload);
+      created = await servicePanelRequestForProvider(env, agency, serviceProvider, "PUT", "/api/user/" + encodeURIComponent(username), payload);
       subscriptionUrl = cleanText(created.subscription_url || current.subscription_url || created?.data?.subscription_url, 2000);
     } else {
       username = order.remote_username ? normalizeUsername(order.remote_username) : normalizeUsername("r" + String(order.reseller_bot_id || order.bot_id || "bot").replace(/[^a-zA-Z0-9]/g, "").slice(-8) + "_" + String(order.id).replace(/[^a-zA-Z0-9]/g, "").slice(-18));
@@ -1951,13 +2000,13 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
         data_limit_reset_strategy: "no_reset",
         note: "Telegram sales order " + order.id + " / customer " + order.customer_telegram_id
       };
-      const groups = await resolveSalesGroupIds(env, agency, order);
+      const groups = await resolveSalesGroupIds(env, agency, order, serviceProvider);
       if (groups.length) payload.group_ids = groups;
       for (let attempt = 0; attempt < 3 && !created; attempt++) {
-        try { created = await servicePanelRequest(env, agency, "POST", "/api/user", payload); }
+        try { created = await servicePanelRequestForProvider(env, agency, serviceProvider, "POST", "/api/user", payload); }
         catch (error) {
           if (error.status === 409 || /username|already|وجود|تکرار/i.test(String(error.message || ""))) {
-            created = await servicePanelRequest(env, agency, "GET", "/api/user/" + encodeURIComponent(username));
+            created = await servicePanelRequestForProvider(env, agency, serviceProvider, "GET", "/api/user/" + encodeURIComponent(username));
             break;
           }
           if (attempt < 2 && (!error.status || error.status >= 500)) continue;
@@ -1969,26 +2018,26 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
     }
     if (subscriptionUrl && subscriptionUrl.startsWith("/")) {
       const settings = await getSettings(env);
-      subscriptionUrl = sharedServiceBaseUrl(settings, env) + subscriptionUrl;
+      subscriptionUrl = serviceBaseUrlForProvider(settings, env, serviceProvider) + subscriptionUrl;
     }
     const remoteId = created?.id || created?.data?.id || "";
     let remoteForSnapshot = created || {};
-    try { remoteForSnapshot = await servicePanelRequest(env, agency, "GET", "/api/user/" + encodeURIComponent(username)); } catch (_) {}
+    try { remoteForSnapshot = await servicePanelRequestForProvider(env, agency, serviceProvider, "GET", "/api/user/" + encodeURIComponent(username)); } catch (_) {}
     const snapshot = salesRemoteSnapshot(remoteForSnapshot, { subscription_url: subscriptionUrl });
     if (!subscriptionUrl) subscriptionUrl = snapshot.subscriptionUrl;
-    await claimSharedServiceOwnership(env, order.bot_id, order.customer_id, order.id, username);
+    await claimSharedServiceOwnership(env, order.bot_id, order.customer_id, order.id, username, serviceProvider);
     await env.PASARGUARD_DB.prepare(`
       UPDATE sales_orders SET status='delivered',remote_user_id=?,remote_username=?,subscription_url=?,
         remote_status=?,remote_data_limit=?,remote_used_traffic=?,remote_expire=?,remote_online_at=?,remote_last_synced_at=?,
-        error_message=NULL,updated_at=? WHERE id=?
+        service_provider=?,error_message=NULL,updated_at=? WHERE id=?
     `).bind(String(remoteId || ""), username, subscriptionUrl, snapshot.status, snapshot.dataLimit,
-      snapshot.usedTraffic, snapshot.expire, snapshot.onlineAt, snapshot.syncedAt, nowIso(), order.id).run();
+      snapshot.usedTraffic, snapshot.expire, snapshot.onlineAt, snapshot.syncedAt, serviceProvider, nowIso(), order.id).run();
     await env.PASARGUARD_DB.prepare(`
       UPDATE sales_orders SET subscription_url=?,remote_status=?,remote_data_limit=?,remote_used_traffic=?,
         remote_expire=?,remote_online_at=?,remote_last_synced_at=?
-      WHERE bot_id=? AND customer_id=? AND remote_username=? AND status='delivered'
+      WHERE bot_id=? AND customer_id=? AND remote_username=? AND service_provider=? AND status='delivered'
     `).bind(subscriptionUrl, snapshot.status, snapshot.dataLimit, snapshot.usedTraffic, snapshot.expire,
-      snapshot.onlineAt, snapshot.syncedAt, order.bot_id, order.customer_id, username).run();
+      snapshot.onlineAt, snapshot.syncedAt, order.bot_id, order.customer_id, username, serviceProvider).run();
     await salesFinalizePromoForOrder(env, order.id);
     if (order.origin !== "miniapp") {
       await sendSalesServiceDelivery(env, bot, order.customer_telegram_id, {
@@ -2718,6 +2767,7 @@ async function processAutoRenewals(env, limit = 30) {
   const dueAt=new Date(Date.now()+7*86400000).toISOString();
   const rows=await env.PASARGUARD_DB.prepare(`
     SELECT pref.*,o.remote_expire,o.remote_status,o.id AS service_order_id,o.remote_username AS service_username,
+           COALESCE(o.service_provider,'pasarguard') AS service_provider,
            c.wallet_balance,c.telegram_id,c.discount_percent,c.loyalty_discount_percent,
            rb.user_id AS owner_user_id,COALESCE(gs.auto_renew_enabled,1) AS bot_auto_renew_enabled
     FROM sales_service_preferences pref
@@ -2762,9 +2812,9 @@ async function processAutoRenewals(env, limit = 30) {
       const ts=nowIso();
       await env.PASARGUARD_DB.prepare(`INSERT INTO sales_orders(
         id,bot_id,plan_id,customer_id,amount_toman,original_amount_toman,discount_toman,status,remote_username,
-        order_type,target_order_id,payment_method,origin,created_at,updated_at
-      ) VALUES(?,?,?,?,?,?,?,'pending_review',?,'renewal',?,'wallet','auto_renew',?,?)`)
-        .bind(orderId,row.bot_id,plan.id,row.customer_id,amount,original,Math.max(0,original-amount),row.remote_username,row.service_order_id,ts,ts).run();
+        order_type,target_order_id,payment_method,origin,service_provider,created_at,updated_at
+      ) VALUES(?,?,?,?,?,?,?,'pending_review',?,'renewal',?,'wallet','auto_renew',?,?,?)`)
+        .bind(orderId,row.bot_id,plan.id,row.customer_id,amount,original,Math.max(0,original-amount),row.remote_username,row.service_order_id,normalizeServiceProvider(row.service_provider),ts,ts).run();
       await adjustSalesCustomerBalance(env,row.bot_id,row.customer_id,-amount,"auto_renew","sales_order",orderId,"تمدید خودکار سرویس "+row.remote_username);
       try{
         await provisionSalesOrder(env,{id:row.owner_user_id},orderId);
@@ -2794,7 +2844,9 @@ function serviceHealthScore(remote, latencyMs) {
 
 async function tryServiceFailover(env, row, consecutiveFailures) {
   if(Number(row.auto_failover_enabled||0)!==1||consecutiveFailures<3)return {queued:false};
-  const target=await env.PASARGUARD_DB.prepare(`SELECT * FROM sales_locations WHERE bot_id=? AND status='active' AND id<>COALESCE(?, '')
+  const provider=normalizeServiceProvider(row.service_provider);
+  if(provider!=="pasarguard") return {queued:false,reason:"provider_not_supported"};
+  const target=await env.PASARGUARD_DB.prepare(`SELECT * FROM sales_locations WHERE bot_id=? AND status='active' AND COALESCE(backend_provider,'pasarguard')='pasarguard' AND id<>COALESCE(?, '')
     AND group_ids_json IS NOT NULL AND group_ids_json<>'[]' ORDER BY sort_order,created_at LIMIT 1`).bind(row.bot_id,row.from_location_id||"").first();
   if(!target)return {queued:false,reason:"no_target"};
   const jobId=id("failover"),ts=nowIso();
@@ -2821,7 +2873,7 @@ async function processServiceHealthAndFailover(env, limit = 40) {
   await env.PASARGUARD_DB.prepare(`CREATE TABLE IF NOT EXISTS reseller_growth_settings (bot_id TEXT PRIMARY KEY,auto_renew_enabled INTEGER NOT NULL DEFAULT 1,smart_recommendations_enabled INTEGER NOT NULL DEFAULT 1,upsell_enabled INTEGER NOT NULL DEFAULT 1,favorite_plan_enabled INTEGER NOT NULL DEFAULT 1,gift_service_enabled INTEGER NOT NULL DEFAULT 1,service_health_enabled INTEGER NOT NULL DEFAULT 1,auto_failover_enabled INTEGER NOT NULL DEFAULT 0,guarantee_enabled INTEGER NOT NULL DEFAULT 1,low_balance_alert_enabled INTEGER NOT NULL DEFAULT 1,low_balance_threshold_toman INTEGER NOT NULL DEFAULT 200000,low_balance_recharge_amount_toman INTEGER NOT NULL DEFAULT 500000,reseller_tier TEXT NOT NULL DEFAULT 'bronze',reseller_tier_discount_percent REAL NOT NULL DEFAULT 0,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)`).run();
   const cutoff=new Date(Date.now()-30*60000).toISOString();
   const rows=await env.PASARGUARD_DB.prepare(`
-    SELECT pref.*,o.remote_expire,o.remote_status,p.location_id AS from_location_id,
+    SELECT pref.*,o.remote_expire,o.remote_status,COALESCE(o.service_provider,'pasarguard') AS service_provider,p.location_id AS from_location_id,
       COALESCE(gs.service_health_enabled,1) AS service_health_enabled,COALESCE(gs.auto_failover_enabled,0) AS auto_failover_enabled,rb.user_id AS owner_user_id,
       a.id AS agency_id,a.panel_username,a.panel_password_enc
     FROM sales_service_preferences pref
@@ -2841,7 +2893,8 @@ async function processServiceHealthAndFailover(env, limit = 40) {
     const started=Date.now();
     let status="error",score=0,details={},consecutive=0;
     try{
-      const remote=await servicePanelRequest(env,{id:row.agency_id,panel_username:row.panel_username,panel_password_enc:row.panel_password_enc},"GET","/api/user/"+encodeURIComponent(row.remote_username));
+      const provider=normalizeServiceProvider(row.service_provider);
+      const remote=await servicePanelRequestForProvider(env,{id:row.agency_id,panel_username:row.panel_username,panel_password_enc:row.panel_password_enc},provider,"GET","/api/user/"+encodeURIComponent(row.remote_username));
       const result=serviceHealthScore(remote,Date.now()-started);status=result.status;score=result.score;healthy++;
       details={remote_status:remote?.status||"",expire:salesRemoteExpireValue(remote?.expire)};
       consecutive=0;

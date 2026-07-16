@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.25
+ * Version: 3.3.26
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = '3.3.25';
+const APP_VERSION = '3.3.26';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -1779,8 +1779,8 @@ async function downlineUsageTotal(env, botId) {
     SELECT COALESCE(SUM(used),0) AS total_usage FROM (
       SELECT remote_username,MAX(COALESCE(remote_used_traffic,0)) AS used
       FROM sales_orders
-      WHERE bot_id=? AND status='delivered' AND remote_username IS NOT NULL
-      GROUP BY LOWER(remote_username)
+      WHERE bot_id=? AND status='delivered' AND remote_username IS NOT NULL AND COALESCE(service_provider,'pasarguard')='pasarguard'
+      GROUP BY service_provider,LOWER(remote_username)
     )
   `).bind(botId).first();
   return Math.max(0, Number(row?.total_usage || 0));
@@ -1790,8 +1790,8 @@ async function syncDownlineRemoteServices(env, childBot, limit = 120) {
   const rows = await env.PASARGUARD_DB.prepare(`
     SELECT MIN(o.id) AS order_id,o.customer_id,o.remote_username
     FROM sales_orders o
-    WHERE o.bot_id=? AND o.status='delivered' AND o.remote_username IS NOT NULL
-    GROUP BY o.customer_id,LOWER(o.remote_username)
+    WHERE o.bot_id=? AND o.status='delivered' AND o.remote_username IS NOT NULL AND COALESCE(o.service_provider,'pasarguard')='pasarguard'
+    GROUP BY o.customer_id,o.service_provider,LOWER(o.remote_username)
     ORDER BY MAX(o.updated_at) DESC LIMIT ?
   `).bind(childBot.id, Math.max(1, Math.min(500, Number(limit || 120)))).all();
   let synced = 0, failed = 0;
@@ -1841,15 +1841,15 @@ async function sharedMarzbanUsageSnapshots(env, bot, limit = 10) {
              MIN(COALESCE(o.remote_last_synced_at,'')) AS oldest_sync,
              MAX(o.updated_at) AS last_update
       FROM sales_orders o
-      WHERE o.bot_id=? AND o.status='delivered' AND o.remote_username IS NOT NULL
-      GROUP BY o.customer_id,LOWER(o.remote_username)
+      WHERE o.bot_id=? AND o.status='delivered' AND o.remote_username IS NOT NULL AND COALESCE(o.service_provider,'pasarguard')='marzban'
+      GROUP BY o.customer_id,o.service_provider,LOWER(o.remote_username)
       UNION ALL
       SELECT 'trial' AS source_type,t.id AS record_id,t.customer_id,t.remote_username,
              COALESCE(t.remote_used_traffic,0) AS previous_usage,
              COALESCE(t.remote_last_synced_at,'') AS oldest_sync,
              t.updated_at AS last_update
       FROM sales_trials t
-      WHERE t.bot_id=? AND t.status='delivered' AND t.remote_username IS NOT NULL
+      WHERE t.bot_id=? AND t.status='delivered' AND t.remote_username IS NOT NULL AND COALESCE(t.service_provider,'pasarguard')='marzban'
     )
     ORDER BY oldest_sync ASC,last_update ASC LIMIT ?
   `).bind(bot.id, bot.id, Math.max(1, Math.min(20, Number(limit || cfg.syncBatch)))).all();
@@ -1858,7 +1858,7 @@ async function sharedMarzbanUsageSnapshots(env, bot, limit = 10) {
   let failed = 0;
   for (const row of rows.results || []) {
     try {
-      const remote = await servicePanelRequest(env, agency, "GET", "/api/user/" + encodeURIComponent(row.remote_username));
+      const remote = await servicePanelRequestForProvider(env, agency, "marzban", "GET", "/api/user/" + encodeURIComponent(row.remote_username));
       const snapshot = salesRemoteSnapshot(remote, { remote_username: row.remote_username });
       let subscriptionUrl = snapshot.subscriptionUrl || "";
       if (subscriptionUrl && subscriptionUrl.startsWith("/")) subscriptionUrl = cfg.panelUrl + subscriptionUrl;
@@ -1883,7 +1883,7 @@ function sharedMarzbanSnapshotUpdate(env, bot, item, eventKey = "", token = "") 
     const stmt = env.PASARGUARD_DB.prepare(`UPDATE sales_trials SET
       subscription_url=CASE WHEN ?<>'' THEN ? ELSE subscription_url END,
       remote_status=?,remote_data_limit=?,remote_used_traffic=?,remote_expire=?,remote_online_at=?,remote_last_synced_at=?,updated_at=?
-      WHERE id=? AND bot_id=? AND customer_id=? AND LOWER(remote_username)=LOWER(?) AND status='delivered'${guard}`);
+      WHERE id=? AND bot_id=? AND customer_id=? AND LOWER(remote_username)=LOWER(?) AND COALESCE(service_provider,'pasarguard')='marzban' AND status='delivered'${guard}`);
     const args = [item.subscriptionUrl,item.subscriptionUrl,item.snapshot.status,item.snapshot.dataLimit,item.current,
       item.snapshot.expire,item.snapshot.onlineAt,item.snapshot.syncedAt,item.snapshot.syncedAt,item.recordId,bot.id,item.customerId,item.username];
     if (eventKey) args.push(eventKey,token);
@@ -1892,7 +1892,7 @@ function sharedMarzbanSnapshotUpdate(env, bot, item, eventKey = "", token = "") 
   const stmt = env.PASARGUARD_DB.prepare(`UPDATE sales_orders SET
     subscription_url=CASE WHEN ?<>'' THEN ? ELSE subscription_url END,
     remote_status=?,remote_data_limit=?,remote_used_traffic=?,remote_expire=?,remote_online_at=?,remote_last_synced_at=?
-    WHERE bot_id=? AND customer_id=? AND LOWER(remote_username)=LOWER(?) AND status='delivered'${guard}`);
+    WHERE bot_id=? AND customer_id=? AND LOWER(remote_username)=LOWER(?) AND COALESCE(service_provider,'pasarguard')='marzban' AND status='delivered'${guard}`);
   const args = [item.subscriptionUrl,item.subscriptionUrl,item.snapshot.status,item.snapshot.dataLimit,item.current,
     item.snapshot.expire,item.snapshot.onlineAt,item.snapshot.syncedAt,bot.id,item.customerId,item.username];
   if (eventKey) args.push(eventKey,token);
@@ -2014,12 +2014,12 @@ async function syncSharedMarzbanUsage(env, parentBotId = null, limit = 100, opti
   const cfg = sharedMarzbanConfig(settings, env);
   const sql = parentBotId
     ? `SELECT rb.id FROM reseller_bots rb WHERE rb.parent_bot_id=? AND (
-         EXISTS(SELECT 1 FROM sales_orders o WHERE o.bot_id=rb.id AND o.status='delivered' AND o.remote_username IS NOT NULL) OR
-         EXISTS(SELECT 1 FROM sales_trials t WHERE t.bot_id=rb.id AND t.status='delivered' AND t.remote_username IS NOT NULL)
+         EXISTS(SELECT 1 FROM sales_orders o WHERE o.bot_id=rb.id AND o.status='delivered' AND o.remote_username IS NOT NULL AND COALESCE(o.service_provider,'pasarguard')='marzban') OR
+         EXISTS(SELECT 1 FROM sales_trials t WHERE t.bot_id=rb.id AND t.status='delivered' AND t.remote_username IS NOT NULL AND COALESCE(t.service_provider,'pasarguard')='marzban')
        ) ORDER BY rb.updated_at LIMIT ?`
     : `SELECT rb.id FROM reseller_bots rb WHERE
-         EXISTS(SELECT 1 FROM sales_orders o WHERE o.bot_id=rb.id AND o.status='delivered' AND o.remote_username IS NOT NULL) OR
-         EXISTS(SELECT 1 FROM sales_trials t WHERE t.bot_id=rb.id AND t.status='delivered' AND t.remote_username IS NOT NULL)
+         EXISTS(SELECT 1 FROM sales_orders o WHERE o.bot_id=rb.id AND o.status='delivered' AND o.remote_username IS NOT NULL AND COALESCE(o.service_provider,'pasarguard')='marzban') OR
+         EXISTS(SELECT 1 FROM sales_trials t WHERE t.bot_id=rb.id AND t.status='delivered' AND t.remote_username IS NOT NULL AND COALESCE(t.service_provider,'pasarguard')='marzban')
        ORDER BY rb.updated_at LIMIT ?`;
   const query = env.PASARGUARD_DB.prepare(sql);
   const safeLimit = Math.max(1,Math.min(500,Number(limit||100)));
@@ -2129,7 +2129,9 @@ async function billDownlineResellerBot(env, childBot, options = {}) {
 
 async function syncDownlineUsage(env, parentBotId = null, limit = 100, options = {}) {
   const backendSettings = await getSettings(env);
-  if (sharedMarzbanEnabled(backendSettings, env)) return syncSharedMarzbanUsage(env,parentBotId,limit,options);
+  const marzbanResult=sharedMarzbanEnabled(backendSettings,env)
+    ? await syncSharedMarzbanUsage(env,parentBotId,limit,options)
+    : {processed:0,charged:0,collected:0,unpaid:0,parent_profit:0,failed:0};
   const sql = parentBotId
     ? "SELECT id FROM reseller_bots WHERE parent_bot_id=? ORDER BY updated_at LIMIT ?"
     : "SELECT id FROM reseller_bots WHERE parent_bot_id IS NOT NULL ORDER BY updated_at LIMIT ?";
@@ -2148,7 +2150,15 @@ async function syncDownlineUsage(env, parentBotId = null, limit = 100, options =
       try { await audit(env,null,"downline_usage_sync_failed",{botId:row.id,message:String(error?.message||error)}); } catch (_) {}
     }
   }
-  return {processed,charged,collected,unpaid,failed};
+  return {
+    processed:processed+Number(marzbanResult.processed||0),
+    charged:charged+Number(marzbanResult.charged||0),
+    collected:collected+Number(marzbanResult.collected||0),
+    unpaid:unpaid+Number(marzbanResult.unpaid||0),
+    failed:failed+Number(marzbanResult.failed||0),
+    pasarguard:{processed,charged,collected,unpaid,failed},
+    marzban:marzbanResult
+  };
 }
 
 async function resellerBotToken(env, bot) {
@@ -2464,6 +2474,41 @@ async function agencyPasarguardRequest(env, agency, method, path, body, retry = 
 }
 const sharedMarzbanTokenCache = new Map();
 
+
+function normalizeServiceProvider(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  return ["marzban","marzban_shared"].includes(raw) ? "marzban" : "pasarguard";
+}
+
+function serviceProviderLabel(value) {
+  return normalizeServiceProvider(value) === "marzban" ? "مرزبان" : "PasarGuard";
+}
+
+function locationServiceProvider(location, settings = {}, env = {}) {
+  const provider = normalizeServiceProvider(location?.backend_provider || location?.service_provider || "pasarguard");
+  if (provider === "marzban" && !sharedMarzbanEnabled(settings, env)) {
+    throw new Error("مرزبان مشترک مرکزی فعال یا کامل تنظیم نشده است");
+  }
+  return provider;
+}
+
+function serviceBaseUrlForProvider(settings, env, provider) {
+  return normalizeServiceProvider(provider) === "marzban"
+    ? sharedMarzbanConfig(settings, env).panelUrl
+    : pasarguardBaseUrl(settings);
+}
+
+async function servicePanelRequestForProvider(env, agency, provider, method, path, body, retry = true) {
+  const selected = normalizeServiceProvider(provider);
+  if (selected === "marzban") {
+    const settings = await getSettings(env);
+    if (!sharedMarzbanEnabled(settings, env)) throw new Error("مرزبان مشترک مرکزی فعال نیست");
+    return sharedMarzbanRequest(env, method, path, body, retry);
+  }
+  if (!agency?.id || !agency?.panel_username) throw new Error("پنل PasarGuard متصل برای این ربات پیدا نشد");
+  return agencyPasarguardRequest(env, agency, method, path, body, retry);
+}
+
 function sharedMarzbanEnabled(settings, env = {}) {
   const raw = env.MARZBAN_SHARED_ENABLED !== undefined
     ? env.MARZBAN_SHARED_ENABLED
@@ -2522,8 +2567,8 @@ function sharedMarzbanConfig(settings, env = {}) {
 }
 
 function sharedServiceBaseUrl(settings, env = {}) {
-  const cfg = sharedMarzbanConfig(settings, env);
-  return cfg.enabled ? cfg.panelUrl : pasarguardBaseUrl(settings);
+  // Legacy helper is intentionally PasarGuard-only in dual-panel mode.
+  return pasarguardBaseUrl(settings);
 }
 
 async function getSharedMarzbanToken(env, settings, force = false) {
@@ -2605,8 +2650,7 @@ async function sharedMarzbanRequest(env, method, path, body, retry = true) {
 }
 
 async function servicePanelRequest(env, agency, method, path, body, retry = true) {
-  const settings = await getSettings(env);
-  if (sharedMarzbanEnabled(settings, env)) return sharedMarzbanRequest(env, method, path, body, retry);
+  // Backward-compatible PasarGuard request. Provider-aware paths must use servicePanelRequestForProvider.
   return agencyPasarguardRequest(env, agency, method, path, body, retry);
 }
 
@@ -2666,9 +2710,10 @@ async function ensureSharedBackendAccount(env, botId, activate = false) {
   return env.PASARGUARD_DB.prepare("SELECT * FROM shared_backend_accounts WHERE bot_id=?").bind(botId).first();
 }
 
-async function claimSharedServiceOwnership(env, botId, customerId, orderId, username) {
+async function claimSharedServiceOwnership(env, botId, customerId, orderId, username, provider = "marzban") {
+  if(normalizeServiceProvider(provider)!=="marzban") return { claimed:false };
   const settings = await getSettings(env);
-  if (!sharedMarzbanEnabled(settings, env)) return { claimed: false };
+  if (!sharedMarzbanEnabled(settings, env)) throw new Error("مرزبان مشترک مرکزی فعال نیست");
   await ensureSharedMarzbanTables(env);
   const cfg = sharedMarzbanConfig(settings, env);
   const scope = cfg.panelUrl.toLowerCase();
@@ -2890,7 +2935,7 @@ async function importSalesServiceBySubscriptionLink(env, bot, customer, rawLink)
       env.PASARGUARD_DB.prepare(`
         UPDATE sales_orders SET subscription_url=?,remote_user_id=COALESCE(NULLIF(?,''),remote_user_id),
           remote_status=?,remote_data_limit=?,remote_used_traffic=?,remote_expire=?,remote_online_at=?,
-          remote_last_synced_at=?
+          remote_last_synced_at=?,service_provider='pasarguard'
         WHERE bot_id=? AND customer_id=? AND LOWER(remote_username)=? AND status='delivered'
       `).bind(canonicalUrl, String(remote?.id || remote?.data?.id || ""), snapshot.status, snapshot.dataLimit,
         snapshot.usedTraffic, snapshot.expire, snapshot.onlineAt, snapshot.syncedAt, bot.id, customer.id, normalizedUsername),
@@ -2902,7 +2947,7 @@ async function importSalesServiceBySubscriptionLink(env, bot, customer, rawLink)
         WHERE sales_service_claims.bot_id=excluded.bot_id AND sales_service_claims.customer_id=excluded.customer_id
       `).bind(panelScope, normalizedUsername, bot.id, customer.id, existing.id, "existing", tokenHash, nowIso(), nowIso())
     ]);
-    await claimSharedServiceOwnership(env, bot.id, customer.id, existing.id, remoteUsername);
+    await claimSharedServiceOwnership(env, bot.id, customer.id, existing.id, remoteUsername, "pasarguard");
     await salesEvent(env, bot.id, customer.id, "service_import_refreshed", { serviceId: existing.id, username: remoteUsername });
     return {
       id: existing.id, remote_username: remoteUsername, subscription_url: canonicalUrl, imported: false, alreadyLinked: true,
@@ -2931,7 +2976,7 @@ async function importSalesServiceBySubscriptionLink(env, bot, customer, rawLink)
   if (claimedOrder?.id) {
     await env.PASARGUARD_DB.prepare(`
       UPDATE sales_orders SET subscription_url=?,remote_status=?,remote_data_limit=?,remote_used_traffic=?,
-        remote_expire=?,remote_online_at=?,remote_last_synced_at=? WHERE id=?
+        remote_expire=?,remote_online_at=?,remote_last_synced_at=?,service_provider='pasarguard' WHERE id=?
     `).bind(canonicalUrl, snapshot.status, snapshot.dataLimit, snapshot.usedTraffic, snapshot.expire,
       snapshot.onlineAt, snapshot.syncedAt, orderId).run();
     return {
@@ -2948,8 +2993,8 @@ async function importSalesServiceBySubscriptionLink(env, bot, customer, rawLink)
       INSERT INTO sales_orders(
         id,bot_id,plan_id,customer_id,amount_toman,original_amount_toman,discount_toman,status,
         remote_user_id,remote_username,subscription_url,remote_status,remote_data_limit,remote_used_traffic,
-        remote_expire,remote_online_at,remote_last_synced_at,order_type,payment_method,origin,created_at,updated_at
-      ) VALUES(?,?,?,?,0,0,0,'delivered',?,?,?,?,?,?,?,?,?,'imported','import','subscription_link',?,?)
+        remote_expire,remote_online_at,remote_last_synced_at,order_type,payment_method,origin,service_provider,created_at,updated_at
+      ) VALUES(?,?,?,?,0,0,0,'delivered',?,?,?,?,?,?,?,?,?,'imported','import','subscription_link','pasarguard',?,?)
     `).bind(orderId, bot.id, planId, customer.id, remoteId, remoteUsername, canonicalUrl, snapshot.status,
       snapshot.dataLimit, snapshot.usedTraffic, snapshot.expire, snapshot.onlineAt, snapshot.syncedAt, claimAt, claimAt).run();
   } catch (error) {
@@ -2960,7 +3005,7 @@ async function importSalesServiceBySubscriptionLink(env, bot, customer, rawLink)
     } catch (_) {}
     throw error;
   }
-  await claimSharedServiceOwnership(env, bot.id, customer.id, orderId, remoteUsername);
+  await claimSharedServiceOwnership(env, bot.id, customer.id, orderId, remoteUsername, "pasarguard");
   await salesEvent(env, bot.id, customer.id, "service_imported", { serviceId: orderId, username: remoteUsername });
   try {
     await queueReportEvent(env, bot.id, "service_imports", "سرویس قبلی به ربات متصل شد",
@@ -2979,7 +3024,7 @@ function buildSalesServices(orderRows = []) {
   for (const row of orderRows || []) {
     if (String(row.status || "") !== "delivered" || !row.remote_username) continue;
     if (["deleted", "removed", "remote_missing"].includes(String(row.remote_status || "").toLowerCase())) continue;
-    const key = String(row.remote_username).toLowerCase();
+    const key = normalizeServiceProvider(row.service_provider)+":"+String(row.remote_username).toLowerCase();
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(row);
   }
@@ -2995,6 +3040,8 @@ function buildSalesServices(orderRows = []) {
       latest_order_id: latest.id,
       plan_title: root.plan_title || latest.plan_title || "سرویس",
       remote_username: latest.remote_username || root.remote_username,
+      service_provider: normalizeServiceProvider(latest.service_provider || root.service_provider),
+      service_provider_label: serviceProviderLabel(latest.service_provider || root.service_provider),
       subscription_url: latest.subscription_url || root.subscription_url || "",
       remote_status: snap.remote_status || "active",
       remote_data_limit: Math.max(0, Number(snap.remote_data_limit || 0)),
@@ -3036,21 +3083,23 @@ async function getSalesServiceOrder(env, bot, customer, serviceId) {
 
 async function syncSalesService(env, bot, customer, serviceId) {
   const target = await getSalesServiceOrder(env, bot, customer, serviceId);
-  if (bot.agency_status !== "active") throw new Error("پنل متصل نماینده فعال نیست");
+  const provider=normalizeServiceProvider(target.service_provider);
+  if(provider==="pasarguard"&&bot.agency_status!=="active") throw new Error("پنل PasarGuard متصل نماینده فعال نیست");
+  if(provider==="marzban"&&!sharedMarzbanEnabled(await getSettings(env),env)) throw new Error("مرزبان مشترک مرکزی فعال نیست");
   const agency = { id: bot.agency_id, panel_username: bot.panel_username, panel_password_enc: bot.panel_password_enc };
-  const remote = await servicePanelRequest(env, agency, "GET", "/api/user/" + encodeURIComponent(target.remote_username));
+  const remote = await servicePanelRequestForProvider(env, agency, provider, "GET", "/api/user/" + encodeURIComponent(target.remote_username));
   const snapshot = salesRemoteSnapshot(remote, target);
   let subscriptionUrl = snapshot.subscriptionUrl;
   if (subscriptionUrl && subscriptionUrl.startsWith("/")) {
     const settings = await getSettings(env);
-    subscriptionUrl = sharedServiceBaseUrl(settings, env) + subscriptionUrl;
+    subscriptionUrl = serviceBaseUrlForProvider(settings, env, provider) + subscriptionUrl;
   }
   await env.PASARGUARD_DB.prepare(`
     UPDATE sales_orders SET subscription_url=CASE WHEN ?<>'' THEN ? ELSE subscription_url END,
       remote_status=?,remote_data_limit=?,remote_used_traffic=?,remote_expire=?,remote_online_at=?,remote_last_synced_at=?,updated_at=updated_at
-    WHERE bot_id=? AND customer_id=? AND remote_username=? AND status='delivered'
+    WHERE bot_id=? AND customer_id=? AND remote_username=? AND service_provider=? AND status='delivered'
   `).bind(subscriptionUrl, subscriptionUrl, snapshot.status, snapshot.dataLimit, snapshot.usedTraffic,
-    snapshot.expire, snapshot.onlineAt, snapshot.syncedAt, bot.id, customer.id, target.remote_username).run();
+    snapshot.expire, snapshot.onlineAt, snapshot.syncedAt, bot.id, customer.id, target.remote_username, provider).run();
   await salesEvent(env, bot.id, customer.id, "service_synced", { serviceId: target.id, username: target.remote_username });
   return {
     id: target.id,
@@ -3067,25 +3116,27 @@ async function syncSalesService(env, bot, customer, serviceId) {
 
 async function revokeSalesServiceSubscription(env, bot, customer, serviceId) {
   const target = await getSalesServiceOrder(env, bot, customer, serviceId);
-  if (bot.agency_status !== "active") throw new Error("پنل متصل نماینده فعال نیست");
+  const provider=normalizeServiceProvider(target.service_provider);
+  if(provider==="pasarguard"&&bot.agency_status!=="active") throw new Error("پنل PasarGuard متصل نماینده فعال نیست");
+  if(provider==="marzban"&&!sharedMarzbanEnabled(await getSettings(env),env)) throw new Error("مرزبان مشترک مرکزی فعال نیست");
   const agency = { id: bot.agency_id, panel_username: bot.panel_username, panel_password_enc: bot.panel_password_enc };
-  let changed = await servicePanelRequest(env, agency, "POST", "/api/user/" + encodeURIComponent(target.remote_username) + "/revoke_sub");
+  let changed = await servicePanelRequestForProvider(env, agency, provider, "POST", "/api/user/" + encodeURIComponent(target.remote_username) + "/revoke_sub");
   if (!changed?.subscription_url && !changed?.data?.subscription_url) {
-    changed = await servicePanelRequest(env, agency, "GET", "/api/user/" + encodeURIComponent(target.remote_username));
+    changed = await servicePanelRequestForProvider(env, agency, provider, "GET", "/api/user/" + encodeURIComponent(target.remote_username));
   }
   const snapshot = salesRemoteSnapshot(changed, target);
   let subscriptionUrl = snapshot.subscriptionUrl;
   if (!subscriptionUrl) throw new Error("لینک اشتراک جدید از پنل دریافت نشد");
   if (subscriptionUrl.startsWith("/")) {
     const settings = await getSettings(env);
-    subscriptionUrl = sharedServiceBaseUrl(settings, env) + subscriptionUrl;
+    subscriptionUrl = serviceBaseUrlForProvider(settings, env, provider) + subscriptionUrl;
   }
   await env.PASARGUARD_DB.prepare(`
     UPDATE sales_orders SET subscription_url=?,remote_status=?,remote_data_limit=?,remote_used_traffic=?,
       remote_expire=?,remote_online_at=?,remote_last_synced_at=?
-    WHERE bot_id=? AND customer_id=? AND remote_username=? AND status='delivered'
+    WHERE bot_id=? AND customer_id=? AND remote_username=? AND service_provider=? AND status='delivered'
   `).bind(subscriptionUrl, snapshot.status, snapshot.dataLimit, snapshot.usedTraffic, snapshot.expire,
-    snapshot.onlineAt, snapshot.syncedAt, bot.id, customer.id, target.remote_username).run();
+    snapshot.onlineAt, snapshot.syncedAt, bot.id, customer.id, target.remote_username, provider).run();
   await salesEvent(env, bot.id, customer.id, "service_subscription_revoked", { serviceId: target.id, username: target.remote_username });
   return { ...snapshot, id: target.id, remote_username: target.remote_username, subscription_url: subscriptionUrl,
     remote_status: snapshot.status, remote_data_limit: snapshot.dataLimit, remote_used_traffic: snapshot.usedTraffic,
@@ -4060,35 +4111,38 @@ function normalizeChosenSubscriptionUsername(value) {
   return username;
 }
 
-async function assertSalesSubscriptionUsernameAvailable(env, bot, customer, username) {
+async function assertSalesSubscriptionUsernameAvailable(env, bot, customer, username, planId = '') {
   const local = await env.PASARGUARD_DB.prepare(`
     SELECT id,customer_id,status FROM sales_orders
     WHERE bot_id=? AND LOWER(remote_username)=? AND status NOT IN ('cancelled','rejected','provision_failed')
     LIMIT 1
   `).bind(bot.id, username).first();
   if (local) {
-    if (String(local.customer_id) === String(customer.id)) throw new Error("این نام قبلاً در یکی از سفارش‌های خودتان استفاده شده است");
-    throw new Error("این نام اشتراک قبلاً رزرو شده است؛ نام دیگری انتخاب کنید");
+    if (String(local.customer_id) === String(customer.id)) throw new Error('این نام قبلاً در یکی از سفارش‌های خودتان استفاده شده است');
+    throw new Error('این نام اشتراک قبلاً رزرو شده است؛ نام دیگری انتخاب کنید');
   }
-  const ownershipSettings = await getSettings(env);
-  if (sharedMarzbanEnabled(ownershipSettings, env)) {
+  let provider='pasarguard';
+  const cleanPlan=cleanText(planId,100);
+  if(cleanPlan){
+    const plan=await env.PASARGUARD_DB.prepare(`SELECT COALESCE(l.backend_provider,'pasarguard') AS backend_provider FROM sales_plans p LEFT JOIN sales_locations l ON l.id=p.location_id WHERE p.id=? AND p.bot_id=?`).bind(cleanPlan,bot.id).first();
+    if(plan) provider=normalizeServiceProvider(plan.backend_provider);
+  }
+  const settings=await getSettings(env);
+  if(provider==='marzban'){
+    if(!sharedMarzbanEnabled(settings,env)) throw new Error('مرزبان مشترک مرکزی فعال نیست');
     await ensureSharedMarzbanTables(env);
-    const cfg = sharedMarzbanConfig(ownershipSettings, env);
-    const owner = await env.PASARGUARD_DB.prepare(`SELECT bot_id FROM shared_service_ownership WHERE provider='marzban' AND panel_scope=? AND remote_username=?`).bind(cfg.panelUrl.toLowerCase(),username).first();
-    if (owner && String(owner.bot_id)!==String(bot.id)) throw new Error("این نام اشتراک متعلق به نماینده دیگری است");
+    const cfg=sharedMarzbanConfig(settings,env);
+    const owner=await env.PASARGUARD_DB.prepare(`SELECT bot_id FROM shared_service_ownership WHERE provider='marzban' AND panel_scope=? AND remote_username=?`).bind(cfg.panelUrl.toLowerCase(),username).first();
+    if(owner&&String(owner.bot_id)!==String(bot.id)) throw new Error('این نام اشتراک متعلق به نماینده دیگری است');
   }
-  const serviceBot = await resolveResellerServiceAgency(env, bot);
-  if (serviceBot.agency_status && serviceBot.agency_status !== "active") throw new Error("پنل ساخت سرویس این ربات فعال نیست");
-  const agency = {
-    id: serviceBot.agency_id,
-    panel_username: serviceBot.panel_username,
-    panel_password_enc: serviceBot.panel_password_enc
-  };
-  try {
-    await servicePanelRequest(env, agency, "GET", "/api/user/" + encodeURIComponent(username));
-    throw new Error("این نام اشتراک در پنل قبلاً استفاده شده است؛ نام دیگری انتخاب کنید");
-  } catch (error) {
-    if (Number(error?.status) === 404) return username;
+  const serviceBot=await resolveResellerServiceAgency(env,bot);
+  if(provider==='pasarguard'&&serviceBot.agency_status&&serviceBot.agency_status!=='active') throw new Error('پنل PasarGuard این ربات فعال نیست');
+  const agency={id:serviceBot.agency_id,panel_username:serviceBot.panel_username,panel_password_enc:serviceBot.panel_password_enc};
+  try{
+    await servicePanelRequestForProvider(env,agency,provider,'GET','/api/user/'+encodeURIComponent(username));
+    throw new Error('این نام اشتراک در پنل '+serviceProviderLabel(provider)+' قبلاً استفاده شده است؛ نام دیگری انتخاب کنید');
+  }catch(error){
+    if(Number(error?.status)===404) return username;
     throw error;
   }
 }
@@ -4216,11 +4270,13 @@ async function salesPlanPurchaseMethodsView(env, bot, customer, planId, options 
 
 async function deleteSalesService(env, bot, customer, serviceId, options = {}) {
   const target = await getSalesServiceOrder(env, bot, customer, serviceId);
-  if (bot.agency_status !== "active") throw new Error("پنل متصل نماینده فعال نیست");
+  const provider=normalizeServiceProvider(target.service_provider);
+  if(provider==="pasarguard"&&bot.agency_status!=="active") throw new Error("پنل PasarGuard متصل نماینده فعال نیست");
+  if(provider==="marzban"&&!sharedMarzbanEnabled(await getSettings(env),env)) throw new Error("مرزبان مشترک مرکزی فعال نیست");
   const agency = { id: bot.agency_id, panel_username: bot.panel_username, panel_password_enc: bot.panel_password_enc };
   let remoteAlreadyMissing = false;
   try {
-    await servicePanelRequest(env, agency, "DELETE", "/api/user/" + encodeURIComponent(target.remote_username));
+    await servicePanelRequestForProvider(env, agency, provider, "DELETE", "/api/user/" + encodeURIComponent(target.remote_username));
   } catch (error) {
     if (Number(error?.status || 0) === 404) remoteAlreadyMissing = true;
     else if (Number(error?.status || 0) === 403) throw new Error("حذف سرویس در پنل مجاز نیست؛ دسترسی users.delete را برای ادمین متصل فعال کنید");
@@ -4229,8 +4285,8 @@ async function deleteSalesService(env, bot, customer, serviceId, options = {}) {
   const ts = nowIso();
   await env.PASARGUARD_DB.prepare(`
     UPDATE sales_orders SET remote_status='deleted',subscription_url=NULL,remote_last_synced_at=?,error_message=NULL,updated_at=?
-    WHERE bot_id=? AND customer_id=? AND LOWER(remote_username)=LOWER(?) AND status='delivered'
-  `).bind(ts,ts,bot.id,customer.id,target.remote_username).run();
+    WHERE bot_id=? AND customer_id=? AND LOWER(remote_username)=LOWER(?) AND service_provider=? AND status='delivered'
+  `).bind(ts,ts,bot.id,customer.id,target.remote_username,provider).run();
   const cleanup = [
     ["DELETE FROM sales_service_claims WHERE bot_id=? AND customer_id=? AND LOWER(remote_username)=LOWER(?)", [bot.id,customer.id,target.remote_username]],
     ["DELETE FROM sales_service_preferences WHERE bot_id=? AND customer_id=? AND LOWER(remote_username)=LOWER(?)", [bot.id,customer.id,target.remote_username]],
@@ -4688,9 +4744,17 @@ async function ensureUniqueSalesReceipt(env, bot, customer, fingerprint, current
 
 async function createSalesOrder(env, bot, customer, planId, options = {}) {
   salesRequireVerifiedPhone(bot, customer);
-  const plan = await env.PASARGUARD_DB.prepare("SELECT * FROM sales_plans WHERE id=? AND bot_id=? AND status='active'").bind(planId, bot.id).first();
+  const plan = await env.PASARGUARD_DB.prepare("SELECT p.*,COALESCE(l.backend_provider,'pasarguard') AS backend_provider FROM sales_plans p LEFT JOIN sales_locations l ON l.id=p.location_id WHERE p.id=? AND p.bot_id=? AND p.status='active'").bind(planId, bot.id).first();
   if (!plan) throw new Error("این پلن دیگر فعال نیست");
   const expectedPlanType = options.orderType === "renewal" ? "renew" : options.orderType === "volume" ? "volume" : "sale";
+  let serviceProvider=normalizeServiceProvider(plan.backend_provider);
+  if(expectedPlanType!=="sale"){
+    const targetProvider=await env.PASARGUARD_DB.prepare("SELECT service_provider FROM sales_orders WHERE id=? AND bot_id=? AND customer_id=? AND status='delivered'").bind(options.targetOrderId||"",bot.id,customer.id).first();
+    if(!targetProvider) throw new Error("سرویس مقصد برای این عملیات پیدا نشد");
+    serviceProvider=normalizeServiceProvider(targetProvider.service_provider);
+  }else{
+    serviceProvider=locationServiceProvider(plan,await getSettings(env),env);
+  }
   if (String(plan.plan_type || "sale") !== expectedPlanType) {
     const label = expectedPlanType === "renew" ? "تمدید" : expectedPlanType === "volume" ? "افزایش حجم" : "خرید جدید";
     throw new Error("این پلن برای «" + label + "» قابل استفاده نیست");
@@ -4735,13 +4799,13 @@ async function createSalesOrder(env, bot, customer, planId, options = {}) {
     await env.PASARGUARD_DB.prepare(`
       INSERT INTO sales_orders(
         id,bot_id,plan_id,customer_id,amount_toman,original_amount_toman,discount_toman,promo_code_id,promo_code,
-        status,order_type,target_order_id,payment_method,origin,remote_username,gift_sender_customer_id,gift_message,created_at,updated_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        status,order_type,target_order_id,payment_method,origin,remote_username,gift_sender_customer_id,gift_message,service_provider,created_at,updated_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).bind(
       orderId, bot.id, plan.id, customer.id, finalPrice, originalPrice, discountToman,
       promoResult?.promo?.id || null, promoResult?.promo?.code || null,
       status, options.orderType || "new", options.targetOrderId || null, paymentMethod, origin, requestedUsername,
-      options.giftSenderCustomerId || null, cleanText(options.giftMessage,500) || null, ts, ts
+      options.giftSenderCustomerId || null, cleanText(options.giftMessage,500) || null, serviceProvider, ts, ts
     ).run();
   } catch (error) {
     if (promoResult) try { await salesReleasePromoForOrder(env, orderId); } catch (_) {}
@@ -4751,7 +4815,7 @@ async function createSalesOrder(env, bot, customer, planId, options = {}) {
   if (status === "awaiting_receipt" && origin !== "miniapp") await salesSessionSet(env, bot.id, customer.telegram_id, "awaiting_receipt", { orderId });
   await salesEvent(env, bot.id, customer.id, "order_created", {
     orderId, planId, paymentMethod, orderType: options.orderType || "new", originalPrice,
-    discountToman, finalPrice, promoCode: promoResult?.promo?.code || "", origin, requestedUsername
+    discountToman, finalPrice, promoCode: promoResult?.promo?.code || "", origin, requestedUsername, serviceProvider
   });
   await queueReportEvent(env, bot.id, "orders", "سفارش جدید ثبت شد",
     "مشتری: <b>" + botEscape(customer.first_name || customer.username || customer.telegram_id) + "</b>\n" +
@@ -4765,7 +4829,7 @@ async function createSalesOrder(env, bot, customer, planId, options = {}) {
   return {
     orderId, plan, amountToman: finalPrice, originalAmountToman: originalPrice, discountToman,
     promoCode: promoResult?.promo?.code || "", orderType: options.orderType || "new",
-    targetOrderId: options.targetOrderId || null, origin, requestedUsername
+    targetOrderId: options.targetOrderId || null, origin, requestedUsername, serviceProvider
   };
 }
 
@@ -5178,11 +5242,11 @@ async function agencyActivePasarguardGroupIds(env, agency) {
   let response;
   try {
     // PasarGuard v5 exposes this lightweight endpoint to both sudo and operator admins.
-    response = await servicePanelRequest(env, agency, "GET", "/api/groups/simple");
+    response = await agencyPasarguardRequest(env, agency, "GET", "/api/groups/simple");
   } catch (simpleError) {
     try {
       // Compatibility fallback for older installations that only expose the full groups endpoint.
-      response = await servicePanelRequest(env, agency, "GET", "/api/groups");
+      response = await agencyPasarguardRequest(env, agency, "GET", "/api/groups");
     } catch (fullError) {
       throw new Error("دریافت گروه‌های فعال پنل پاسارگارد ناموفق بود: " + cleanText(fullError?.message || simpleError?.message || "خطای نامشخص", 300));
     }
@@ -5193,9 +5257,8 @@ async function agencyActivePasarguardGroupIds(env, agency) {
   return [...ids];
 }
 
-async function resolveSalesGroupIds(env, agency, location) {
-  const backendSettings = await getSettings(env);
-  if (sharedMarzbanEnabled(backendSettings, env)) return [];
+async function resolveSalesGroupIds(env, agency, location, provider = "pasarguard") {
+  if(normalizeServiceProvider(provider)==="marzban") return [];
   const explicitlySelected = salesGroupIds(location);
   if (explicitlySelected.length) return explicitlySelected;
   return agencyActivePasarguardGroupIds(env, agency);
@@ -5555,7 +5618,7 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
            rb.user_id AS owner_user_id,rb.brand_name,rb.bot_token_enc,rb.bot_username,rb.webhook_secret,rb.id AS reseller_bot_id,
            rb.referral_reward_toman,rb.forward_enabled,
            a.id AS agency_id,a.panel_username,a.panel_password_enc,a.status AS agency_status,
-           l.group_ids_json
+           l.group_ids_json,COALESCE(o.service_provider,l.backend_provider,'pasarguard') AS resolved_service_provider
     FROM sales_orders o
     JOIN sales_plans p ON p.id=o.plan_id
     JOIN sales_customers c ON c.id=o.customer_id
@@ -5569,7 +5632,14 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
   const staleProvisioning = order.status === "provisioning" && Date.now() - new Date(order.updated_at).getTime() > 2 * 60 * 1000;
   if (!["pending_review", "provision_failed"].includes(String(order.status)) && !staleProvisioning) throw new Error("این سفارش قابل تأیید نیست");
   const provisionSettings = await getSettings(env);
-  if (!sharedMarzbanEnabled(provisionSettings, env) && order.agency_status !== "active") throw new Error("پنل متصل فعال نیست");
+  let serviceProvider=normalizeServiceProvider(order.resolved_service_provider);
+  if(order.order_type==="renewal"||order.order_type==="volume"){
+    const targetProvider=await env.PASARGUARD_DB.prepare("SELECT service_provider FROM sales_orders WHERE id=? AND bot_id=? AND customer_id=? AND status='delivered'").bind(order.target_order_id,order.bot_id,order.customer_id).first();
+    if(targetProvider) serviceProvider=normalizeServiceProvider(targetProvider.service_provider);
+  }
+  if(serviceProvider==="marzban"){
+    if(!sharedMarzbanEnabled(provisionSettings,env)) throw new Error("مرزبان مشترک مرکزی فعال نیست");
+  }else if(order.agency_status!=="active") throw new Error("پنل PasarGuard متصل فعال نیست");
   const claim = await env.PASARGUARD_DB.prepare(`
     UPDATE sales_orders SET status='provisioning',error_message=NULL,updated_at=?,reviewed_at=?,reviewed_by=?
     WHERE id=? AND (status IN ('pending_review','provision_failed') OR (status='provisioning' AND updated_at<?))
@@ -5585,7 +5655,7 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
       `).bind(order.target_order_id, order.bot_id, order.customer_id).first();
       if (!target?.remote_username) throw new Error(order.order_type === "volume" ? "سرویس مقصد افزایش حجم پیدا نشد" : "سرویس مقصد تمدید پیدا نشد");
       username = target.remote_username;
-      const current = await servicePanelRequest(env, agency, "GET", "/api/user/" + encodeURIComponent(username));
+      const current = await servicePanelRequestForProvider(env, agency, serviceProvider, "GET", "/api/user/" + encodeURIComponent(username));
       const payload = {
         status: "active",
         data_limit: Math.max(0, Number(current?.data_limit || 0)) + Math.max(0, Number(order.data_limit_bytes || 0)),
@@ -5597,7 +5667,7 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
         const baseTime = Math.max(Date.now(), Number.isFinite(currentExpireTime) ? currentExpireTime : 0);
         payload.expire = new Date(baseTime + Number(order.duration_days) * 86400000).toISOString();
       }
-      created = await servicePanelRequest(env, agency, "PUT", "/api/user/" + encodeURIComponent(username), payload);
+      created = await servicePanelRequestForProvider(env, agency, serviceProvider, "PUT", "/api/user/" + encodeURIComponent(username), payload);
       subscriptionUrl = cleanText(created.subscription_url || current.subscription_url || created?.data?.subscription_url, 2000);
     } else {
       username = order.remote_username
@@ -5612,10 +5682,10 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
         data_limit_reset_strategy: "no_reset",
         note: "Telegram sales order " + order.id + " / customer " + order.customer_telegram_id
       };
-      const groups = await resolveSalesGroupIds(env, agency, order);
+      const groups = await resolveSalesGroupIds(env, agency, order, serviceProvider);
       if (groups.length) payload.group_ids = groups;
       for (let attempt = 0; attempt < 3 && !created; attempt++) {
-        try { created = await servicePanelRequest(env, agency, "POST", "/api/user", payload); }
+        try { created = await servicePanelRequestForProvider(env, agency, serviceProvider, "POST", "/api/user", payload); }
         catch (error) {
           if (error.status === 409 || /username|already|وجود|تکرار/i.test(String(error.message || ""))) {
             throw new Error("نام اشتراک «" + username + "» قبلاً استفاده شده است؛ سفارش را با نام دیگری ثبت کنید");
@@ -5629,26 +5699,26 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
     }
     if (subscriptionUrl && subscriptionUrl.startsWith("/")) {
       const settings = await getSettings(env);
-      subscriptionUrl = sharedServiceBaseUrl(settings, env) + subscriptionUrl;
+      subscriptionUrl = serviceBaseUrlForProvider(settings, env, serviceProvider) + subscriptionUrl;
     }
     const remoteId = created?.id || created?.data?.id || "";
     let remoteForSnapshot = created || {};
-    try { remoteForSnapshot = await servicePanelRequest(env, agency, "GET", "/api/user/" + encodeURIComponent(username)); } catch (_) {}
+    try { remoteForSnapshot = await servicePanelRequestForProvider(env, agency, serviceProvider, "GET", "/api/user/" + encodeURIComponent(username)); } catch (_) {}
     const snapshot = salesRemoteSnapshot(remoteForSnapshot, { subscription_url: subscriptionUrl });
     if (!subscriptionUrl) subscriptionUrl = snapshot.subscriptionUrl;
-    await claimSharedServiceOwnership(env, order.bot_id, order.customer_id, order.id, username);
+    await claimSharedServiceOwnership(env, order.bot_id, order.customer_id, order.id, username, serviceProvider);
     await env.PASARGUARD_DB.prepare(`
       UPDATE sales_orders SET status='delivered',remote_user_id=?,remote_username=?,subscription_url=?,
         remote_status=?,remote_data_limit=?,remote_used_traffic=?,remote_expire=?,remote_online_at=?,remote_last_synced_at=?,
-        error_message=NULL,updated_at=? WHERE id=?
+        service_provider=?,error_message=NULL,updated_at=? WHERE id=?
     `).bind(String(remoteId || ""), username, subscriptionUrl, snapshot.status, snapshot.dataLimit,
-      snapshot.usedTraffic, snapshot.expire, snapshot.onlineAt, snapshot.syncedAt, nowIso(), order.id).run();
+      snapshot.usedTraffic, snapshot.expire, snapshot.onlineAt, snapshot.syncedAt, serviceProvider, nowIso(), order.id).run();
     await env.PASARGUARD_DB.prepare(`
       UPDATE sales_orders SET subscription_url=?,remote_status=?,remote_data_limit=?,remote_used_traffic=?,
         remote_expire=?,remote_online_at=?,remote_last_synced_at=?
-      WHERE bot_id=? AND customer_id=? AND remote_username=? AND status='delivered'
+      WHERE bot_id=? AND customer_id=? AND remote_username=? AND service_provider=? AND status='delivered'
     `).bind(subscriptionUrl, snapshot.status, snapshot.dataLimit, snapshot.usedTraffic, snapshot.expire,
-      snapshot.onlineAt, snapshot.syncedAt, order.bot_id, order.customer_id, username).run();
+      snapshot.onlineAt, snapshot.syncedAt, order.bot_id, order.customer_id, username, serviceProvider).run();
     await salesFinalizePromoForOrder(env, order.id);
     if (order.origin !== "miniapp") {
       await sendSalesServiceDelivery(env, bot, order.customer_telegram_id, {
@@ -5716,8 +5786,12 @@ async function requestSalesTrial(env, bot, customer, options = {}) {
   const existing = await env.PASARGUARD_DB.prepare("SELECT * FROM sales_trials WHERE bot_id=? AND customer_id=?").bind(bot.id, customer.id).first();
   if (existing && existing.status === "delivered") throw new Error("شما قبلاً تست رایگان دریافت کرده‌اید");
   const trialId = existing?.id || id("trial");
-  if (!existing) await env.PASARGUARD_DB.prepare("INSERT INTO sales_trials(id,bot_id,customer_id,status,origin,created_at,updated_at) VALUES(?,?,?,'provisioning',?,?,?)").bind(trialId, bot.id, customer.id, origin, nowIso(), nowIso()).run();
-  else await env.PASARGUARD_DB.prepare("UPDATE sales_trials SET status='provisioning',origin=?,error_message=NULL,updated_at=? WHERE id=?").bind(origin, nowIso(), trialId).run();
+  const location = await env.PASARGUARD_DB.prepare("SELECT group_ids_json,backend_provider FROM sales_locations WHERE bot_id=? AND status='active' ORDER BY sort_order,created_at LIMIT 1").bind(bot.id).first();
+  const provider=normalizeServiceProvider(existing?.service_provider || location?.backend_provider || "pasarguard");
+  if(provider==="marzban"&&!sharedMarzbanEnabled(await getSettings(env),env)) throw new Error("مرزبان مشترک مرکزی فعال نیست");
+  if(provider==="pasarguard"&&bot.agency_status!=="active") throw new Error("پنل PasarGuard متصل نماینده فعال نیست");
+  if (!existing) await env.PASARGUARD_DB.prepare("INSERT INTO sales_trials(id,bot_id,customer_id,status,service_provider,origin,created_at,updated_at) VALUES(?,?,?,'provisioning',?,?,?,?)").bind(trialId, bot.id, customer.id, provider, origin, nowIso(), nowIso()).run();
+  else await env.PASARGUARD_DB.prepare("UPDATE sales_trials SET status='provisioning',service_provider=?,origin=?,error_message=NULL,updated_at=? WHERE id=?").bind(provider, origin, nowIso(), trialId).run();
   const fullBot = await getResellerBotById(env, bot.id);
   const agency = { id: fullBot.agency_id, panel_username: fullBot.panel_username, panel_password_enc: fullBot.panel_password_enc };
   const username = normalizeUsername("test_" + String(customer.telegram_id).slice(-8) + "_" + trialId.slice(-5));
@@ -5725,17 +5799,16 @@ async function requestSalesTrial(env, bot, customer, options = {}) {
   const dataBytes = Math.max(1024 * 1024, Number(bot.trial_data_limit_bytes || (100 * 1024 * 1024)));
   try {
     const payload = { username, status: "active", data_limit: dataBytes, expire: new Date(Date.now() + durationHours * 3600000).toISOString(), data_limit_reset_strategy: "no_reset", note: "Free trial / telegram " + customer.telegram_id };
-    const location = await env.PASARGUARD_DB.prepare("SELECT group_ids_json FROM sales_locations WHERE bot_id=? AND status='active' ORDER BY sort_order,created_at LIMIT 1").bind(bot.id).first();
-    const groups = await resolveSalesGroupIds(env, agency, location); if (groups.length) payload.group_ids = groups;
+    const groups = await resolveSalesGroupIds(env, agency, location, provider); if (groups.length) payload.group_ids = groups;
     let created;
-    try { created = await servicePanelRequest(env, agency, "POST", "/api/user", payload); }
-    catch (error) { if (error.status === 409) created = await servicePanelRequest(env, agency, "GET", "/api/user/" + encodeURIComponent(username)); else throw error; }
+    try { created = await servicePanelRequestForProvider(env, agency, provider, "POST", "/api/user", payload); }
+    catch (error) { if (error.status === 409) created = await servicePanelRequestForProvider(env, agency, provider, "GET", "/api/user/" + encodeURIComponent(username)); else throw error; }
     let subscriptionUrl = cleanText(created.subscription_url || created?.data?.subscription_url, 2000);
-    if (subscriptionUrl?.startsWith("/")) subscriptionUrl = sharedServiceBaseUrl(await getSettings(env), env) + subscriptionUrl;
+    if (subscriptionUrl?.startsWith("/")) subscriptionUrl = serviceBaseUrlForProvider(await getSettings(env), env, provider) + subscriptionUrl;
     const trialRemote = salesRemoteSnapshot(created || {}, { subscription_url: subscriptionUrl, remote_data_limit: dataBytes });
-    await claimSharedServiceOwnership(env, bot.id, customer.id, trialId, username);
-    await env.PASARGUARD_DB.prepare("UPDATE sales_trials SET status='delivered',remote_user_id=?,remote_username=?,subscription_url=?,remote_status=?,remote_data_limit=?,remote_used_traffic=?,remote_expire=?,remote_online_at=?,remote_last_synced_at=?,updated_at=? WHERE id=?")
-      .bind(String(created.id || created?.data?.id || ""), username, subscriptionUrl, trialRemote.status, trialRemote.dataLimit,
+    await claimSharedServiceOwnership(env, bot.id, customer.id, trialId, username, provider);
+    await env.PASARGUARD_DB.prepare("UPDATE sales_trials SET status='delivered',service_provider=?,remote_user_id=?,remote_username=?,subscription_url=?,remote_status=?,remote_data_limit=?,remote_used_traffic=?,remote_expire=?,remote_online_at=?,remote_last_synced_at=?,updated_at=? WHERE id=?")
+      .bind(provider, String(created.id || created?.data?.id || ""), username, subscriptionUrl, trialRemote.status, trialRemote.dataLimit,
         trialRemote.usedTraffic, trialRemote.expire, trialRemote.onlineAt, trialRemote.syncedAt, nowIso(), trialId).run();
     const trialText = await salesBotText(env, bot.id, "trial", "این سرویس فقط برای تست کیفیت ارائه شده است.");
     if (origin !== "miniapp") {
@@ -5748,7 +5821,7 @@ async function requestSalesTrial(env, bot, customer, options = {}) {
       "مدت: <b>" + botMoney(durationHours) + " ساعت</b>\n" +
       "حجم: <b>" + botGb(dataBytes) + "</b>",
       "trial-delivered:" + trialId);
-    return { id: trialId, status: "delivered", username, subscriptionUrl, durationHours, dataBytes, title: trialText, origin };
+    return { id: trialId, status: "delivered", username, subscriptionUrl, durationHours, dataBytes, title: trialText, origin, serviceProvider:provider };
   } catch (error) {
     await env.PASARGUARD_DB.prepare("UPDATE sales_trials SET status='failed',error_message=?,updated_at=? WHERE id=?")
       .bind(cleanText(error.message, 800), nowIso(), trialId).run();
@@ -6476,7 +6549,7 @@ async function createResellerSnapshot(env, bot, actorTelegramId = "system", snap
   if (!fresh) throw new Error("ربات نماینده پیدا نشد");
   try {
     const [locations, categories, plans, texts, promos] = await Promise.all([
-      env.PASARGUARD_DB.prepare("SELECT id,title,emoji,description,group_ids_json,status,sort_order,created_at,updated_at FROM sales_locations WHERE bot_id=? ORDER BY sort_order,created_at").bind(fresh.id).all(),
+      env.PASARGUARD_DB.prepare("SELECT id,title,emoji,description,backend_provider,group_ids_json,status,sort_order,created_at,updated_at FROM sales_locations WHERE bot_id=? ORDER BY sort_order,created_at").bind(fresh.id).all(),
       env.PASARGUARD_DB.prepare("SELECT id,title,emoji,status,sort_order,created_at,updated_at FROM sales_categories WHERE bot_id=? ORDER BY sort_order,created_at").bind(fresh.id).all(),
       env.PASARGUARD_DB.prepare("SELECT id,title,data_limit_bytes,duration_days,price_toman,status,sort_order,category_id,location_id,plan_type,created_at,updated_at FROM sales_plans WHERE bot_id=? AND COALESCE(plan_type,'sale')<>'imported' ORDER BY sort_order,created_at").bind(fresh.id).all(),
       env.PASARGUARD_DB.prepare("SELECT text_key,text_value,updated_at FROM reseller_bot_texts WHERE bot_id=? ORDER BY text_key").bind(fresh.id).all(),
@@ -6558,9 +6631,9 @@ async function restoreResellerSnapshot(env, bot, account, snapshotId) {
       .bind(...values,nowIso(),bot.id).run();
   }
   for (const x of Array.isArray(payload.locations) ? payload.locations : []) {
-    await env.PASARGUARD_DB.prepare(`INSERT INTO sales_locations(id,bot_id,title,emoji,description,group_ids_json,status,sort_order,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,emoji=excluded.emoji,description=excluded.description,group_ids_json=excluded.group_ids_json,status=excluded.status,sort_order=excluded.sort_order,updated_at=excluded.updated_at`)
-      .bind(x.id,bot.id,x.title,x.emoji||null,x.description||null,x.group_ids_json||"[]",x.status||"active",Number(x.sort_order||0),x.created_at||nowIso(),nowIso()).run();
+    await env.PASARGUARD_DB.prepare(`INSERT INTO sales_locations(id,bot_id,title,emoji,description,backend_provider,group_ids_json,status,sort_order,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,emoji=excluded.emoji,description=excluded.description,backend_provider=excluded.backend_provider,group_ids_json=excluded.group_ids_json,status=excluded.status,sort_order=excluded.sort_order,updated_at=excluded.updated_at`)
+      .bind(x.id,bot.id,x.title,x.emoji||null,x.description||null,normalizeServiceProvider(x.backend_provider),x.group_ids_json||"[]",x.status||"active",Number(x.sort_order||0),x.created_at||nowIso(),nowIso()).run();
   }
   for (const x of Array.isArray(payload.categories) ? payload.categories : []) {
     await env.PASARGUARD_DB.prepare(`INSERT INTO sales_categories(id,bot_id,title,emoji,status,sort_order,created_at,updated_at)
@@ -7517,8 +7590,82 @@ async function resellerOwnerHandleCallback(env, bot, callback) {
     return resellerOwnerPrompt(env, bot, chatId, "📂 نام دسته‌بندی را ارسال کنید. می‌توانید ابتدای آن ایموجی بگذارید؛ مثال: <b>⭐️ ویژه</b>");
   }
   if (data === "owner:location:new") {
-    await salesSessionSet(env, bot.id, account.user.telegram_id, "owner_location_title", {});
-    return resellerOwnerPrompt(env, bot, chatId, "🌍 نام لوکیشن را ارسال کنید؛ مثال: <b>🇩🇪 آلمان</b>");
+    const settings=await getSettings(env);
+    const rows=[[{text:"🛡 PasarGuard",callback_data:"owner:location:provider:pasarguard"}]];
+    if(sharedMarzbanEnabled(settings,env)) rows[0].push({text:"🌐 مرزبان",callback_data:"owner:location:provider:marzban"});
+    rows.push([{text:"لغو",callback_data:"owner:catalog"}]);
+    await salesSessionSet(env, bot.id, account.user.telegram_id, "owner_location_provider", {});
+    return resellerOwnerPrompt(env, bot, chatId, "🔀 <b>پنل مقصد این لوکیشن را انتخاب کنید</b>\n\nسفارش‌های این لوکیشن فقط روی پنل انتخاب‌شده ساخته می‌شوند.",rows);
+  }
+  if (data.startsWith("owner:location:provider:")) {
+    const provider=normalizeServiceProvider(data.slice("owner:location:provider:".length));
+    const session=await salesSessionGet(env,bot.id,account.user.telegram_id);
+    if(!session||session.state!=="owner_location_provider") throw new Error("فرایند ساخت لوکیشن منقضی شده است");
+    if(provider==="marzban"&&!sharedMarzbanEnabled(await getSettings(env),env)) throw new Error("مرزبان مشترک مرکزی هنوز فعال نشده است");
+    await salesSessionSet(env,bot.id,account.user.telegram_id,"owner_location_title",{backendProvider:provider});
+    return resellerOwnerPrompt(env,bot,chatId,"🌍 نام لوکیشن را ارسال کنید؛ مثال: <b>🇩🇪 آلمان</b>\nپنل مقصد: <b>"+botEscape(serviceProviderLabel(provider))+"</b>");
+  }
+  if (data.startsWith('owner:category:edit:')) {
+    const itemId=data.slice('owner:category:edit:'.length);
+    const item=await env.PASARGUARD_DB.prepare('SELECT * FROM sales_categories WHERE id=? AND bot_id=?').bind(itemId,bot.id).first();
+    if(!item) throw new Error('دسته‌بندی پیدا نشد');
+    await salesSessionSet(env,bot.id,account.user.telegram_id,'owner_category_edit_title',{itemId});
+    return resellerOwnerPrompt(env,bot,chatId,'✏️ نام جدید دسته‌بندی را ارسال کنید.\nنام فعلی: <b>'+botEscape((item.emoji||'📁')+' '+item.title)+'</b>');
+  }
+  if (data.startsWith('owner:category:delok:')) {
+    const itemId=data.slice('owner:category:delok:'.length);
+    const item=await env.PASARGUARD_DB.prepare('SELECT id,title FROM sales_categories WHERE id=? AND bot_id=?').bind(itemId,bot.id).first();
+    if(!item) throw new Error('دسته‌بندی پیدا نشد');
+    await env.PASARGUARD_DB.batch([
+      env.PASARGUARD_DB.prepare('UPDATE sales_plans SET category_id=NULL,updated_at=? WHERE bot_id=? AND category_id=?').bind(nowIso(),bot.id,itemId),
+      env.PASARGUARD_DB.prepare('DELETE FROM sales_categories WHERE id=? AND bot_id=?').bind(itemId,bot.id)
+    ]);
+    await resellerAudit(env,bot,account,'category_deleted',{id:itemId,title:item.title});
+    return resellerOwnerSendOrEdit(env,bot,target,'catalog');
+  }
+  if (data.startsWith('owner:category:delete:')) {
+    const itemId=data.slice('owner:category:delete:'.length);
+    const item=await env.PASARGUARD_DB.prepare('SELECT id,title FROM sales_categories WHERE id=? AND bot_id=?').bind(itemId,bot.id).first();
+    if(!item) throw new Error('دسته‌بندی پیدا نشد');
+    return resellerOwnerPrompt(env,bot,chatId,'⚠️ دسته‌بندی <b>'+botEscape(item.title)+'</b> حذف شود؟\nپلن‌های آن حذف نمی‌شوند و بدون دسته‌بندی باقی می‌مانند.',[[{text:'✅ حذف نهایی',callback_data:'owner:category:delok:'+itemId}],[{text:'انصراف',callback_data:'owner:catalog'}]]);
+  }
+  if (data.startsWith('owner:location:edit:')) {
+    const itemId=data.slice('owner:location:edit:'.length);
+    const item=await env.PASARGUARD_DB.prepare('SELECT * FROM sales_locations WHERE id=? AND bot_id=?').bind(itemId,bot.id).first();
+    if(!item) throw new Error('لوکیشن پیدا نشد');
+    const settings=await getSettings(env);
+    const rows=[[{text:'🛡 PasarGuard',callback_data:'owner:location:editprovider:pasarguard'}]];
+    if(sharedMarzbanEnabled(settings,env)) rows[0].push({text:'🌐 مرزبان',callback_data:'owner:location:editprovider:marzban'});
+    rows.push([{text:'انصراف',callback_data:'owner:catalog'}]);
+    await salesSessionSet(env,bot.id,account.user.telegram_id,'owner_location_edit_provider',{itemId});
+    return resellerOwnerPrompt(env,bot,chatId,'✏️ پنل مقصد جدید لوکیشن <b>'+botEscape((item.emoji||'🌍')+' '+item.title)+'</b> را انتخاب کنید.\nپنل فعلی: <b>'+botEscape(serviceProviderLabel(item.backend_provider))+'</b>',rows);
+  }
+  if (data.startsWith('owner:location:editprovider:')) {
+    const provider=normalizeServiceProvider(data.slice('owner:location:editprovider:'.length));
+    const session=await salesSessionGet(env,bot.id,account.user.telegram_id);
+    if(!session||session.state!=='owner_location_edit_provider') throw new Error('فرایند ویرایش لوکیشن منقضی شده است');
+    if(provider==='marzban'&&!sharedMarzbanEnabled(await getSettings(env),env)) throw new Error('مرزبان مشترک مرکزی فعال نیست');
+    const item=await env.PASARGUARD_DB.prepare('SELECT * FROM sales_locations WHERE id=? AND bot_id=?').bind(session.data.itemId,bot.id).first();
+    if(!item) throw new Error('لوکیشن پیدا نشد');
+    await salesSessionSet(env,bot.id,account.user.telegram_id,'owner_location_edit_title',{itemId:item.id,backendProvider:provider});
+    return resellerOwnerPrompt(env,bot,chatId,'✏️ نام جدید لوکیشن را ارسال کنید.\nنام فعلی: <b>'+botEscape((item.emoji||'🌍')+' '+item.title)+'</b>\nپنل مقصد: <b>'+botEscape(serviceProviderLabel(provider))+'</b>');
+  }
+  if (data.startsWith('owner:location:delok:')) {
+    const itemId=data.slice('owner:location:delok:'.length);
+    const item=await env.PASARGUARD_DB.prepare('SELECT id,title FROM sales_locations WHERE id=? AND bot_id=?').bind(itemId,bot.id).first();
+    if(!item) throw new Error('لوکیشن پیدا نشد');
+    await env.PASARGUARD_DB.batch([
+      env.PASARGUARD_DB.prepare("UPDATE sales_plans SET status='inactive',location_id=NULL,updated_at=? WHERE bot_id=? AND location_id=?").bind(nowIso(),bot.id,itemId),
+      env.PASARGUARD_DB.prepare('DELETE FROM sales_locations WHERE id=? AND bot_id=?').bind(itemId,bot.id)
+    ]);
+    await resellerAudit(env,bot,account,'location_deleted',{id:itemId,title:item.title});
+    return resellerOwnerSendOrEdit(env,bot,target,'catalog');
+  }
+  if (data.startsWith('owner:location:delete:')) {
+    const itemId=data.slice('owner:location:delete:'.length);
+    const item=await env.PASARGUARD_DB.prepare('SELECT id,title,backend_provider FROM sales_locations WHERE id=? AND bot_id=?').bind(itemId,bot.id).first();
+    if(!item) throw new Error('لوکیشن پیدا نشد');
+    return resellerOwnerPrompt(env,bot,chatId,'⚠️ لوکیشن <b>'+botEscape(item.title)+'</b> از پنل <b>'+botEscape(serviceProviderLabel(item.backend_provider))+'</b> حذف شود؟\nپلن‌های متصل غیرفعال می‌شوند تا فروش اشتباه انجام نشود. سرویس‌های قبلی همچنان پنل اصلی خود را حفظ می‌کنند.',[[{text:'✅ حذف نهایی',callback_data:'owner:location:delok:'+itemId}],[{text:'انصراف',callback_data:'owner:catalog'}]]);
   }
   if (data.startsWith("owner:category:toggle:") || data.startsWith("owner:location:toggle:")) {
     const isCategory = data.startsWith("owner:category:toggle:");
@@ -8051,6 +8198,33 @@ async function resellerOwnerHandleSession(env, bot, account, message, session) {
     await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET referral_banner_file_id=?,referral_banner_file_type=?,updated_at=? WHERE id=?").bind(fileId, fileType, nowIso(), bot.id).run();
     return done("settings", "✅ بنر زیرمجموعه ثبت شد.");
   }
+  if (session.state === 'owner_category_edit_title') {
+    const raw=cleanText(text,100);if(raw.length<2)throw new Error('نام دسته‌بندی کوتاه است');
+    const match=raw.match(/^(\p{Extended_Pictographic}|\p{Regional_Indicator}{2})\s*(.*)$/u);const emoji=match?.[1]||'📁';const title=cleanText(match?.[2]||raw,90);
+    const result=await env.PASARGUARD_DB.prepare('UPDATE sales_categories SET title=?,emoji=?,updated_at=? WHERE id=? AND bot_id=?').bind(title,emoji,nowIso(),session.data.itemId,bot.id).run();
+    if(!Number(result?.meta?.changes||0)) throw new Error('دسته‌بندی پیدا نشد');
+    return done('catalog','✅ دسته‌بندی ویرایش شد.');
+  }
+  if (session.state === 'owner_location_edit_title') {
+    const raw=cleanText(text,100);if(raw.length<2)throw new Error('نام لوکیشن کوتاه است');
+    const match=raw.match(/^(\p{Extended_Pictographic}|\p{Regional_Indicator}{2})\s*(.*)$/u);const emoji=match?.[1]||'🌍';const title=cleanText(match?.[2]||raw,90);
+    const provider=normalizeServiceProvider(session.data.backendProvider);
+    if(provider==='marzban'){
+      const result=await env.PASARGUARD_DB.prepare("UPDATE sales_locations SET title=?,emoji=?,backend_provider='marzban',group_ids_json='[]',updated_at=? WHERE id=? AND bot_id=?").bind(title,emoji,nowIso(),session.data.itemId,bot.id).run();
+      if(!Number(result?.meta?.changes||0)) throw new Error('لوکیشن پیدا نشد');
+      return done('catalog','✅ لوکیشن و پنل مقصد آن ویرایش شد.');
+    }
+    await salesSessionSet(env,bot.id,account.user.telegram_id,'owner_location_edit_groups',{itemId:session.data.itemId,title,emoji,backendProvider:provider});
+    await resellerOwnerPrompt(env,bot,chatId,'شناسه Groupهای PasarGuard را با کاما ارسال کنید؛ مثال: <code>1,2</code>\nبرای انتخاب خودکار همه گروه‌های فعال، عدد <code>0</code> بفرستید.');
+    return true;
+  }
+  if (session.state === 'owner_location_edit_groups') {
+    const groupIds=text==='0'?[]:text.split(/[،,\s]+/).map(Number).filter(Number.isInteger).filter(x=>x>0);
+    if(text!=='0'&&!groupIds.length) throw new Error('حداقل یک Group ID معتبر یا عدد ۰ ارسال کنید');
+    const result=await env.PASARGUARD_DB.prepare("UPDATE sales_locations SET title=?,emoji=?,backend_provider='pasarguard',group_ids_json=?,updated_at=? WHERE id=? AND bot_id=?").bind(session.data.title,session.data.emoji,JSON.stringify(groupIds),nowIso(),session.data.itemId,bot.id).run();
+    if(!Number(result?.meta?.changes||0)) throw new Error('لوکیشن پیدا نشد');
+    return done('catalog','✅ لوکیشن و پنل مقصد آن ویرایش شد.');
+  }
   if (session.state === "owner_category_title") {
     const raw = cleanText(text, 100); if (raw.length < 2) throw new Error("نام دسته‌بندی کوتاه است");
     const match = raw.match(/^(\p{Extended_Pictographic}|\p{Regional_Indicator}{2})\s*(.*)$/u); const emoji = match?.[1] || "📁"; const title = cleanText(match?.[2] || raw, 90);
@@ -8060,15 +8234,20 @@ async function resellerOwnerHandleSession(env, bot, account, message, session) {
   if (session.state === "owner_location_title") {
     const raw = cleanText(text, 100); if (raw.length < 2) throw new Error("نام لوکیشن کوتاه است");
     const match = raw.match(/^(\p{Extended_Pictographic}|\p{Regional_Indicator}{2})\s*(.*)$/u); const emoji = match?.[1] || "🌍"; const title = cleanText(match?.[2] || raw, 90);
-    await salesSessionSet(env, bot.id, account.user.telegram_id, "owner_location_groups", { title, emoji });
-    await resellerOwnerPrompt(env, bot, chatId, "شناسه Groupهای پاسارگارد را با کاما ارسال کنید؛ مثال: <code>1,2</code>\nبرای انتخاب خودکار همه گروه‌های فعال، عدد <code>0</code> بفرستید.");
+    const provider=normalizeServiceProvider(session.data.backendProvider);
+    if(provider==="marzban"){
+      await env.PASARGUARD_DB.prepare("INSERT INTO sales_locations(id,bot_id,title,emoji,backend_provider,group_ids_json,status,sort_order,created_at,updated_at) VALUES(?,?,?,?,?,'[]','active',0,?,?)").bind(id("loc"),bot.id,title,emoji,provider,nowIso(),nowIso()).run();
+      return done("catalog","✅ لوکیشن مرزبان ساخته شد.");
+    }
+    await salesSessionSet(env, bot.id, account.user.telegram_id, "owner_location_groups", { title, emoji, backendProvider:provider });
+    await resellerOwnerPrompt(env, bot, chatId, "شناسه Groupهای PasarGuard را با کاما ارسال کنید؛ مثال: <code>1,2</code>\nبرای انتخاب خودکار همه گروه‌های فعال، عدد <code>0</code> بفرستید.");
     return true;
   }
   if (session.state === "owner_location_groups") {
     const groupIds = text === "0" ? [] : text.split(/[،,\s]+/).map(Number).filter(Number.isInteger).filter(x => x > 0);
     if (text !== "0" && !groupIds.length) throw new Error("حداقل یک Group ID معتبر یا عدد ۰ برای همه گروه‌های فعال ارسال کنید");
-    await env.PASARGUARD_DB.prepare("INSERT INTO sales_locations(id,bot_id,title,emoji,group_ids_json,status,sort_order,created_at,updated_at) VALUES(?,?,?,?,?,'active',0,?,?)").bind(id("loc"), bot.id, session.data.title, session.data.emoji, JSON.stringify(groupIds), nowIso(), nowIso()).run();
-    return done("catalog", "✅ لوکیشن ساخته شد.");
+    await env.PASARGUARD_DB.prepare("INSERT INTO sales_locations(id,bot_id,title,emoji,backend_provider,group_ids_json,status,sort_order,created_at,updated_at) VALUES(?,?,?,?,?,?,'active',0,?,?)").bind(id("loc"), bot.id, session.data.title, session.data.emoji, normalizeServiceProvider(session.data.backendProvider), JSON.stringify(groupIds), nowIso(), nowIso()).run();
+    return done("catalog", "✅ لوکیشن PasarGuard ساخته شد.");
   }
   if (session.state === "owner_text_edit") {
     const value = text === "-" ? "" : cleanText(text || message.caption, 3500);
@@ -8466,8 +8645,8 @@ async function resellerSalesWebhook(request, env, botId, ctx = null) {
     }
     if (session?.state === "gift_username") {
       const requestedUsername=normalizeChosenSubscriptionUsername(text);
-      await assertSalesSubscriptionUsernameAvailable(env,bot,customer,requestedUsername);
       const planId=cleanText(session.data?.planId,100),recipientId=String(session.data?.recipientId||"");
+      await assertSalesSubscriptionUsernameAvailable(env,bot,customer,requestedUsername,planId);
       if(!planId||!recipientId)throw new Error("اطلاعات هدیه منقضی شده است");
       const delivered=await purchaseGiftPlanFromWallet(env,bot,customer,planId,recipientId,requestedUsername,"هدیه از طرف "+(customer.first_name||customer.username||customer.telegram_id));
       await salesSessionClear(env,bot.id,customer.telegram_id);
@@ -8476,8 +8655,8 @@ async function resellerSalesWebhook(request, env, botId, ctx = null) {
     }
     if (session?.state === "subscription_username") {
       const requestedUsername = normalizeChosenSubscriptionUsername(text);
-      await assertSalesSubscriptionUsernameAvailable(env, bot, customer, requestedUsername);
       const planId = cleanText(session.data?.planId, 100);
+      await assertSalesSubscriptionUsernameAvailable(env, bot, customer, requestedUsername, planId);
       if (!planId) throw new Error("انتخاب پلن منقضی شده است؛ دوباره پلن را انتخاب کنید");
       const view = await salesPlanPurchaseMethodsView(env, bot, customer, planId, { planType: "sale", requestedUsername });
       await salesSessionSet(env, bot.id, customer.telegram_id, "subscription_username_ready", {
@@ -8830,19 +9009,27 @@ async function botSalesServiceOwnerDetailView(env, account, serviceId) {
 }
 
 async function botSalesCatalogView(env, account) {
-  const bot=await getResellerBotForUser(env,account.user.id); if(!bot) throw new Error("ربات پیدا نشد");
+  const bot=await getResellerBotForUser(env,account.user.id); if(!bot) throw new Error('ربات پیدا نشد');
   const [cats,locs]=await Promise.all([
-    env.PASARGUARD_DB.prepare("SELECT * FROM sales_categories WHERE bot_id=? ORDER BY sort_order,created_at LIMIT 15").bind(bot.id).all(),
-    env.PASARGUARD_DB.prepare("SELECT * FROM sales_locations WHERE bot_id=? ORDER BY sort_order,created_at LIMIT 15").bind(bot.id).all()
+    env.PASARGUARD_DB.prepare('SELECT * FROM sales_categories WHERE bot_id=? ORDER BY sort_order,created_at LIMIT 15').bind(bot.id).all(),
+    env.PASARGUARD_DB.prepare('SELECT * FROM sales_locations WHERE bot_id=? ORDER BY sort_order,created_at LIMIT 15').bind(bot.id).all()
   ]);
   const c=(cats.results||[]),l=(locs.results||[]);
-  const text="📂 <b>دسته‌بندی‌ها</b>\n"+(c.map((x,i)=>(x.status==='active'?'🟢':'⚪️')+" "+(i+1)+". "+botEscape((x.emoji||'📁')+' '+x.title)).join('\n')||'ثبت نشده')+
-    "\n\n🌍 <b>لوکیشن‌ها</b>\n"+(l.map((x,i)=>(x.status==='active'?'🟢':'⚪️')+" "+(i+1)+". "+botEscape((x.emoji||'🌍')+' '+x.title)).join('\n')||'ثبت نشده');
-  const buttons=[[{text:"➕ دسته‌بندی",callback_data:"bot:sales:category:new"},{text:"➕ لوکیشن",callback_data:"bot:sales:location:new"}]];
-  c.slice(0,6).forEach((x,i)=>buttons.push([{text:"تغییر وضعیت دسته "+(i+1),callback_data:"bot:sales:category:toggle:"+x.id}]));
-  l.slice(0,6).forEach((x,i)=>buttons.push([{text:"تغییر وضعیت لوکیشن "+(i+1),callback_data:"bot:sales:location:toggle:"+x.id}]));
-  buttons.push([{text:"📦 پلن‌ها",callback_data:"bot:sales:plans"},{text:"↩️ ربات",callback_data:"bot:sales"}]);
-  return {text:"🗂 <b>مدیریت دسته‌بندی و لوکیشن</b>\n━━━━━━━━━━━━━━\n"+text,reply_markup:{inline_keyboard:buttons}};
+  const text='📂 <b>دسته‌بندی‌ها</b>\n'+(c.map((x,i)=>(x.status==='active'?'🟢':'⚪️')+' '+(i+1)+'. '+botEscape((x.emoji||'📁')+' '+x.title)).join('\n')||'ثبت نشده')+
+    '\n\n🌍 <b>لوکیشن‌ها</b>\n'+(l.map((x,i)=>(x.status==='active'?'🟢':'⚪️')+' '+(i+1)+'. '+botEscape((x.emoji||'🌍')+' '+x.title)+' · '+botEscape(serviceProviderLabel(x.backend_provider))).join('\n')||'ثبت نشده');
+  const buttons=[[{text:'➕ دسته‌بندی',callback_data:'bot:sales:category:new'},{text:'➕ لوکیشن',callback_data:'bot:sales:location:new'}]];
+  c.slice(0,6).forEach((x,i)=>buttons.push([
+    {text:'✏️ دسته '+(i+1),callback_data:'bot:sales:category:edit:'+x.id},
+    {text:x.status==='active'?'⏸':'▶️',callback_data:'bot:sales:category:toggle:'+x.id},
+    {text:'🗑',callback_data:'bot:sales:category:delete:'+x.id}
+  ]));
+  l.slice(0,6).forEach((x,i)=>buttons.push([
+    {text:'✏️ لوکیشن '+(i+1),callback_data:'bot:sales:location:edit:'+x.id},
+    {text:x.status==='active'?'⏸':'▶️',callback_data:'bot:sales:location:toggle:'+x.id},
+    {text:'🗑',callback_data:'bot:sales:location:delete:'+x.id}
+  ]));
+  buttons.push([{text:'📦 پلن‌ها',callback_data:'bot:sales:plans'},{text:'↩️ ربات',callback_data:'bot:sales'}]);
+  return {text:'🗂 <b>مدیریت دسته‌بندی و لوکیشن</b>\n━━━━━━━━━━━━━━\n'+text,reply_markup:{inline_keyboard:buttons}};
 }
 
 async function botSalesWalletRequestsView(env,account){
@@ -10204,7 +10391,7 @@ async function salesMiniAppBootstrap(request, env, botId, ctx = null) {
       env.PASARGUARD_DB.prepare("SELECT id,title,emoji,sort_order FROM sales_categories WHERE bot_id=? AND status='active' ORDER BY sort_order,created_at").bind(bot.id),
       env.PASARGUARD_DB.prepare("SELECT id,title,emoji,description,sort_order FROM sales_locations WHERE bot_id=? AND status='active' ORDER BY sort_order,created_at").bind(bot.id),
       env.PASARGUARD_DB.prepare(`SELECT p.id,p.title,p.data_limit_bytes,p.duration_days,p.price_toman,p.category_id,p.location_id,p.plan_type,c.title AS category_title,c.emoji AS category_emoji,l.title AS location_title,l.emoji AS location_emoji FROM sales_plans p LEFT JOIN sales_categories c ON c.id=p.category_id LEFT JOIN sales_locations l ON l.id=p.location_id WHERE p.bot_id=? AND p.status='active' ORDER BY p.sort_order,p.price_toman,p.created_at`).bind(bot.id),
-      env.PASARGUARD_DB.prepare(`SELECT o.id,o.amount_toman,o.original_amount_toman,o.discount_toman,o.promo_code,o.cashback_toman,o.status,o.order_type,o.target_order_id,o.payment_method,o.origin,o.remote_username,o.subscription_url,o.remote_status,o.remote_data_limit,o.remote_used_traffic,o.remote_expire,o.remote_online_at,o.remote_last_synced_at,o.error_message,o.created_at,o.updated_at,p.title AS plan_title,p.data_limit_bytes,p.duration_days,p.category_id,p.location_id,c.title AS category_title,c.emoji AS category_emoji,l.title AS location_title,l.emoji AS location_emoji FROM sales_orders o JOIN sales_plans p ON p.id=o.plan_id LEFT JOIN sales_categories c ON c.id=p.category_id LEFT JOIN sales_locations l ON l.id=p.location_id WHERE o.bot_id=? AND o.customer_id=? ORDER BY o.created_at DESC LIMIT 80`).bind(bot.id,customer.id),
+      env.PASARGUARD_DB.prepare(`SELECT o.id,o.service_provider,o.amount_toman,o.original_amount_toman,o.discount_toman,o.promo_code,o.cashback_toman,o.status,o.order_type,o.target_order_id,o.payment_method,o.origin,o.remote_username,o.subscription_url,o.remote_status,o.remote_data_limit,o.remote_used_traffic,o.remote_expire,o.remote_online_at,o.remote_last_synced_at,o.error_message,o.created_at,o.updated_at,p.title AS plan_title,p.data_limit_bytes,p.duration_days,p.category_id,p.location_id,c.title AS category_title,c.emoji AS category_emoji,l.title AS location_title,l.emoji AS location_emoji FROM sales_orders o JOIN sales_plans p ON p.id=o.plan_id LEFT JOIN sales_categories c ON c.id=p.category_id LEFT JOIN sales_locations l ON l.id=p.location_id WHERE o.bot_id=? AND o.customer_id=? ORDER BY o.created_at DESC LIMIT 80`).bind(bot.id,customer.id),
       env.PASARGUARD_DB.prepare("SELECT type,amount,balance_after,description,created_at FROM sales_customer_ledger WHERE customer_id=? ORDER BY created_at DESC LIMIT 30").bind(customer.id),
       env.PASARGUARD_DB.prepare("SELECT id,amount_toman,status,bonus_toman,origin,created_at,updated_at FROM sales_wallet_requests WHERE bot_id=? AND customer_id=? ORDER BY created_at DESC LIMIT 20").bind(bot.id,customer.id),
       env.PASARGUARD_DB.prepare("SELECT COUNT(*) AS c FROM sales_customers WHERE referrer_customer_id=?").bind(customer.id),
@@ -10870,7 +11057,7 @@ async function resellerAdminBootstrap(request, env, botId) {
       FROM sales_plans p LEFT JOIN sales_categories c ON c.id=p.category_id LEFT JOIN sales_locations l ON l.id=p.location_id
       WHERE p.bot_id=? ORDER BY p.sort_order,p.created_at DESC LIMIT 400`).bind(bot.id),
     env.PASARGUARD_DB.prepare("SELECT id,title,emoji,status,sort_order,created_at,updated_at FROM sales_categories WHERE bot_id=? ORDER BY sort_order,created_at").bind(bot.id),
-    env.PASARGUARD_DB.prepare("SELECT id,title,emoji,description,group_ids_json,status,sort_order,created_at,updated_at FROM sales_locations WHERE bot_id=? ORDER BY sort_order,created_at").bind(bot.id),
+    env.PASARGUARD_DB.prepare("SELECT id,title,emoji,description,backend_provider,group_ids_json,status,sort_order,created_at,updated_at FROM sales_locations WHERE bot_id=? ORDER BY sort_order,created_at").bind(bot.id),
     env.PASARGUARD_DB.prepare(`SELECT t.id,t.public_code,t.subject,t.category,t.priority,t.status,t.last_message_at,t.created_at,t.updated_at,t.closed_at,
       c.id AS customer_id,c.telegram_id,c.username,c.first_name,c.last_name
       FROM sales_tickets t JOIN sales_customers c ON c.id=t.customer_id
@@ -11233,22 +11420,25 @@ async function resellerAdminAction(request, env, botId) {
     if (action === "location_save") {
       const itemId=cleanText(body.id,100),title=cleanText(body.title,100),emoji=cleanText(body.emoji,20),description=cleanText(body.description,500),sort=clampInt(body.sort_order||0,-100000,100000);
       if(!title) throw new Error("عنوان لوکیشن را وارد کنید");
-      const groups=Array.isArray(body.group_ids)?body.group_ids:String(body.group_ids||"").split(/[\s,]+/);const groupIds=[...new Set(groups.map(x=>cleanText(x,80)).filter(Boolean))].slice(0,100);
+      const backendProvider=normalizeServiceProvider(body.backend_provider);
+      if(backendProvider==="marzban"&&!sharedMarzbanEnabled(await getSettings(env),env)) throw new Error("ابتدا مرزبان مشترک مرکزی را فعال و تست کنید");
+      const groups=Array.isArray(body.group_ids)?body.group_ids:String(body.group_ids||"").split(/[\s,]+/);
+      const groupIds=backendProvider==="marzban"?[]:[...new Set(groups.map(x=>cleanText(x,80)).filter(Boolean))].slice(0,100);
       if(itemId){
         const row=await env.PASARGUARD_DB.prepare("SELECT id FROM sales_locations WHERE id=? AND bot_id=?").bind(itemId,bot.id).first();if(!row)throw new Error("لوکیشن پیدا نشد");
-        await env.PASARGUARD_DB.prepare("UPDATE sales_locations SET title=?,emoji=?,description=?,group_ids_json=?,sort_order=?,updated_at=? WHERE id=? AND bot_id=?").bind(title,emoji||null,description||null,JSON.stringify(groupIds),sort,nowIso(),itemId,bot.id).run();
+        await env.PASARGUARD_DB.prepare("UPDATE sales_locations SET title=?,emoji=?,description=?,backend_provider=?,group_ids_json=?,sort_order=?,updated_at=? WHERE id=? AND bot_id=?").bind(title,emoji||null,description||null,backendProvider,JSON.stringify(groupIds),sort,nowIso(),itemId,bot.id).run();
       }else{
-        await env.PASARGUARD_DB.prepare("INSERT INTO sales_locations(id,bot_id,title,emoji,description,group_ids_json,status,sort_order,created_at,updated_at) VALUES(?,?,?,?,?,?,'active',?,?,?)").bind(id("loc"),bot.id,title,emoji||null,description||null,JSON.stringify(groupIds),sort,nowIso(),nowIso()).run();
+        await env.PASARGUARD_DB.prepare("INSERT INTO sales_locations(id,bot_id,title,emoji,description,backend_provider,group_ids_json,status,sort_order,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'active',?,?,?)").bind(id("loc"),bot.id,title,emoji||null,description||null,backendProvider,JSON.stringify(groupIds),sort,nowIso(),nowIso()).run();
       }
-      await resellerAudit(env,bot,account,"web_location_saved",{id:itemId||null,title,groups:groupIds.length});return json({success:true,message:itemId?"لوکیشن ویرایش شد":"لوکیشن ساخته شد"});
+      await resellerAudit(env,bot,account,"web_location_saved",{id:itemId||null,title,backendProvider,groups:groupIds.length});return json({success:true,message:itemId?"لوکیشن ویرایش شد":"لوکیشن ساخته شد"});
     }
     if (action === "location_toggle") {
       const itemId=cleanText(body.id,100);const row=await env.PASARGUARD_DB.prepare("SELECT status FROM sales_locations WHERE id=? AND bot_id=?").bind(itemId,bot.id).first();if(!row)throw new Error("لوکیشن پیدا نشد");const next=row.status==="active"?"inactive":"active";
       await env.PASARGUARD_DB.prepare("UPDATE sales_locations SET status=?,updated_at=? WHERE id=? AND bot_id=?").bind(next,nowIso(),itemId,bot.id).run();return json({success:true,message:next==="active"?"لوکیشن فعال شد":"لوکیشن غیرفعال شد"});
     }
     if (action === "location_delete") {
-      const itemId=cleanText(body.id,100);await env.PASARGUARD_DB.prepare("UPDATE sales_plans SET location_id=NULL,updated_at=? WHERE bot_id=? AND location_id=?").bind(nowIso(),bot.id,itemId).run();
-      await env.PASARGUARD_DB.prepare("DELETE FROM sales_locations WHERE id=? AND bot_id=?").bind(itemId,bot.id).run();await resellerAudit(env,bot,account,"web_location_deleted",{id:itemId});return json({success:true,message:"لوکیشن حذف شد؛ پلن‌ها بدون لوکیشن باقی ماندند"});
+      const itemId=cleanText(body.id,100);await env.PASARGUARD_DB.prepare("UPDATE sales_plans SET status='inactive',location_id=NULL,updated_at=? WHERE bot_id=? AND location_id=?").bind(nowIso(),bot.id,itemId).run();
+      await env.PASARGUARD_DB.prepare("DELETE FROM sales_locations WHERE id=? AND bot_id=?").bind(itemId,bot.id).run();await resellerAudit(env,bot,account,"web_location_deleted",{id:itemId});return json({success:true,message:"لوکیشن حذف شد؛ پلن‌های متصل غیرفعال شدند و سرویس‌های قبلی محفوظ ماندند"});
     }
     if (action === "plan_save" || action === "plan_create") {
       const planId=cleanText(body.id,100),title=cleanText(body.title,100);if(!title)throw new Error("عنوان پلن را وارد کنید");
@@ -11566,7 +11756,7 @@ function planTypeLabel(x){return x==="renew"?"تمدید":x==="volume"?"افزا
 function planTile(x){return'<div class="tile"><div class="tileTop"><div class="tileIcon">📦</div>'+badge(x.status)+'</div><h4>'+esc(x.title)+'</h4><p>'+esc(planTypeLabel(x.plan_type))+' · '+gb(x.data_limit_bytes)+' · '+num(x.duration_days)+' روز</p><div class="pillRow"><span class="miniPill">'+esc((x.category_emoji||"")+" "+(x.category_title||"بدون دسته"))+'</span><span class="miniPill">'+esc((x.location_emoji||"")+" "+(x.location_title||"بدون لوکیشن"))+'</span><span class="miniPill">اولویت '+num(x.sort_order||0)+'</span></div><div class="planPrice">'+money(x.price_toman)+'</div><div class="itemActions"><button class="btn secondary small" data-act="plan-edit" data-id="'+esc(x.id)+'">ویرایش</button><button class="btn '+(x.status==="active"?'warn':'ok')+' small" data-act="plan-toggle" data-id="'+esc(x.id)+'">'+(x.status==="active"?'غیرفعال':'فعال')+'</button><button class="btn danger small" data-act="plan-delete" data-id="'+esc(x.id)+'">حذف</button></div></div>'}
 function renderPlans(){var q=String(el("planSearch").value||"").toLowerCase(),type=el("planTypeFilter").value,st=el("planStateFilter").value,rows=(state.plans||[]).filter(function(x){var hay=[x.title,x.category_title,x.location_title].join(" ").toLowerCase();return(!q||hay.includes(q))&&(type==="all"||x.plan_type===type)&&(st==="all"||x.status===st)});el("plansGrid").innerHTML=rows.length?rows.map(planTile).join(""):empty("📦","پلنی پیدا نشد")}
 function categoryTile(x){var used=(state.plans||[]).filter(function(p){return p.category_id===x.id}).length;return'<div class="tile"><div class="tileTop"><div class="tileIcon">'+esc(x.emoji||"📂")+'</div>'+badge(x.status)+'</div><h4>'+esc(x.title)+'</h4><p>'+num(used)+' پلن متصل · اولویت '+num(x.sort_order||0)+'</p><div class="itemActions"><button class="btn secondary small" data-act="category-edit" data-id="'+esc(x.id)+'">ویرایش</button><button class="btn '+(x.status==="active"?'warn':'ok')+' small" data-act="category-toggle" data-id="'+esc(x.id)+'">'+(x.status==="active"?'غیرفعال':'فعال')+'</button><button class="btn danger small" data-act="category-delete" data-id="'+esc(x.id)+'">حذف</button></div></div>'}
-function locationTile(x){var used=(state.plans||[]).filter(function(p){return p.location_id===x.id}).length,groups=[];try{groups=JSON.parse(x.group_ids_json||"[]")}catch(_){}return'<div class="tile"><div class="tileTop"><div class="tileIcon">'+esc(x.emoji||"🌍")+'</div>'+badge(x.status)+'</div><h4>'+esc(x.title)+'</h4><p>'+esc(x.description||"بدون توضیح")+'</p><div class="pillRow"><span class="miniPill">'+num(used)+' پلن</span><span class="miniPill">'+(groups.length?num(groups.length)+' گروه پنل':'همه گروه‌های فعال')+'</span><span class="miniPill">اولویت '+num(x.sort_order||0)+'</span></div><div class="itemActions"><button class="btn secondary small" data-act="location-edit" data-id="'+esc(x.id)+'">ویرایش</button><button class="btn '+(x.status==="active"?'warn':'ok')+' small" data-act="location-toggle" data-id="'+esc(x.id)+'">'+(x.status==="active"?'غیرفعال':'فعال')+'</button><button class="btn danger small" data-act="location-delete" data-id="'+esc(x.id)+'">حذف</button></div></div>'}
+function locationTile(x){var used=(state.plans||[]).filter(function(p){return p.location_id===x.id}).length,groups=[];try{groups=JSON.parse(x.group_ids_json||"[]")}catch(_){}return'<div class="tile"><div class="tileTop"><div class="tileIcon">'+esc(x.emoji||"🌍")+'</div>'+badge(x.status)+'</div><h4>'+esc(x.title)+'</h4><p>'+esc(x.description||"بدون توضیح")+'</p><div class="pillRow"><span class="miniPill">'+num(used)+' پلن</span><span class="miniPill">'+(String(x.backend_provider||"pasarguard")==="marzban"?"مرزبان مشترک":"PasarGuard")+'</span><span class="miniPill">'+(String(x.backend_provider||"pasarguard")==="marzban"?"Inbound از اشتراک نمونه":(groups.length?num(groups.length)+' گروه پنل':'همه گروه‌های فعال'))+'</span><span class="miniPill">اولویت '+num(x.sort_order||0)+'</span></div><div class="itemActions"><button class="btn secondary small" data-act="location-edit" data-id="'+esc(x.id)+'">ویرایش</button><button class="btn '+(x.status==="active"?'warn':'ok')+' small" data-act="location-toggle" data-id="'+esc(x.id)+'">'+(x.status==="active"?'غیرفعال':'فعال')+'</button><button class="btn danger small" data-act="location-delete" data-id="'+esc(x.id)+'">حذف</button></div></div>'}
 function renderCatalog(){renderPlans();el("categoriesGrid").innerHTML=(state.categories||[]).length?state.categories.map(categoryTile).join(""):empty("📂","هنوز دسته‌بندی ساخته نشده است");el("locationsGrid").innerHTML=(state.locations||[]).length?state.locations.map(locationTile).join(""):empty("🌍","هنوز لوکیشن ساخته نشده است")}
 function ticketCard(x){return'<div class="item"><div class="itemTop"><div><div class="title">'+esc(x.public_code)+' · '+esc(x.subject)+'</div><div class="meta">'+esc(nameOf(x))+' · '+esc(statusLabel(x.category))+' · اولویت '+esc(statusLabel(x.priority))+' · '+date(x.last_message_at)+'</div></div>'+badge(x.status)+'</div><div class="itemActions"><button class="btn secondary small" data-act="ticket-open" data-id="'+esc(x.id)+'">مشاهده و پاسخ</button><button class="btn '+(x.status==="closed"?'ok':'danger')+' small" data-act="ticket-toggle" data-id="'+esc(x.id)+'">'+(x.status==="closed"?'بازکردن':'بستن')+'</button></div></div>'}
 function renderTickets(){var q=String(el("ticketSearch").value||"").toLowerCase(),st=el("ticketStatus").value,rows=(state.tickets||[]).filter(function(x){var hay=[x.public_code,x.subject,x.username,x.first_name,x.last_name,x.telegram_id].join(" ").toLowerCase();return(!q||hay.includes(q))&&(st==="all"||x.status===st)});el("ticketsCount").textContent=num(rows.length)+" تیکت";el("ticketsList").innerHTML=rows.length?rows.map(ticketCard).join(""):empty("🎫","تیکتی پیدا نشد")}
@@ -11599,7 +11789,7 @@ function renderAll(){var b=state.bot,s=state.stats||{};el("sideBrand").textConte
 function categoryOptions(selected){return'<option value="">بدون دسته‌بندی</option>'+(state.categories||[]).map(function(x){return'<option value="'+esc(x.id)+'"'+(selected===x.id?' selected':'')+'>'+esc((x.emoji||"")+" "+x.title)+'</option>'}).join("")}
 function locationOptions(selected){return'<option value="">بدون لوکیشن</option>'+(state.locations||[]).map(function(x){return'<option value="'+esc(x.id)+'"'+(selected===x.id?' selected':'')+'>'+esc((x.emoji||"")+" "+x.title)+'</option>'}).join("")}
 function openCategoryForm(x){x=x||{};openModal(x.id?"ویرایش دسته‌بندی":"دسته‌بندی جدید",'<form id="modalForm"><div class="formGrid"><div class="field"><label>عنوان دسته‌بندی</label><input id="mfTitle" class="input" value="'+esc(x.title||"")+'" required></div><div class="field"><label>ایموجی</label><input id="mfEmoji" class="input" value="'+esc(x.emoji||"")+'" maxlength="20"></div><div class="field"><label>اولویت نمایش</label><input id="mfSort" class="input" type="number" value="'+esc(x.sort_order||0)+'"></div></div><button class="btn" type="submit">ذخیره دسته‌بندی</button></form>');el("modalForm").onsubmit=function(e){e.preventDefault();run({action:"category_save",id:x.id||"",title:el("mfTitle").value,emoji:el("mfEmoji").value,sort_order:el("mfSort").value})}}
-function openLocationForm(x){x=x||{};var groups=[];try{groups=JSON.parse(x.group_ids_json||"[]")}catch(_){}openModal(x.id?"ویرایش لوکیشن":"لوکیشن جدید",'<form id="modalForm"><div class="formGrid"><div class="field"><label>عنوان لوکیشن</label><input id="mfTitle" class="input" value="'+esc(x.title||"")+'" required></div><div class="field"><label>ایموجی</label><input id="mfEmoji" class="input" value="'+esc(x.emoji||"")+'" maxlength="20"></div><div class="field"><label>اولویت نمایش</label><input id="mfSort" class="input" type="number" value="'+esc(x.sort_order||0)+'"></div><div class="field"><label>شناسه گروه‌های پنل <small>با کاما؛ خالی = همه گروه‌های فعال</small></label><input id="mfGroups" class="input ltr" value="'+esc(groups.join(","))+'"></div></div><div class="field"><label>توضیح لوکیشن</label><textarea id="mfDescription" class="input" rows="3">'+esc(x.description||"")+'</textarea></div><button class="btn" type="submit">ذخیره لوکیشن</button></form>');el("modalForm").onsubmit=function(e){e.preventDefault();run({action:"location_save",id:x.id||"",title:el("mfTitle").value,emoji:el("mfEmoji").value,sort_order:el("mfSort").value,description:el("mfDescription").value,group_ids:el("mfGroups").value})}}
+function openLocationForm(x){x=x||{};var groups=[];try{groups=JSON.parse(x.group_ids_json||"[]")}catch(_){}var provider=String(x.backend_provider||"pasarguard");openModal(x.id?"ویرایش لوکیشن":"لوکیشن جدید",'<form id="modalForm"><div class="formGrid"><div class="field"><label>عنوان لوکیشن</label><input id="mfTitle" class="input" value="'+esc(x.title||"")+'" required></div><div class="field"><label>ایموجی</label><input id="mfEmoji" class="input" value="'+esc(x.emoji||"")+'" maxlength="20"></div><div class="field"><label>پنل مقصد</label><select id="mfProvider" class="input"><option value="pasarguard"'+(provider!=="marzban"?" selected":"")+'>PasarGuard</option><option value="marzban"'+(provider==="marzban"?" selected":"")+'>مرزبان مشترک</option></select></div><div class="field"><label>اولویت نمایش</label><input id="mfSort" class="input" type="number" value="'+esc(x.sort_order||0)+'"></div><div class="field" id="mfGroupsWrap"><label>شناسه گروه‌های PasarGuard <small>با کاما؛ خالی = همه گروه‌های فعال</small></label><input id="mfGroups" class="input ltr" value="'+esc(groups.join(","))+'"></div></div><div class="field"><label>توضیح لوکیشن</label><textarea id="mfDescription" class="input" rows="3">'+esc(x.description||"")+'</textarea></div><div class="hint">در لوکیشن مرزبان، Inboundها از اشتراک نمونه مرکزی خوانده می‌شوند و Group ID لازم نیست.</div><button class="btn" type="submit">ذخیره لوکیشن</button></form>');function syncProviderFields(){el("mfGroupsWrap").style.display=el("mfProvider").value==="marzban"?"none":"block"}el("mfProvider").onchange=syncProviderFields;syncProviderFields();el("modalForm").onsubmit=function(e){e.preventDefault();run({action:"location_save",id:x.id||"",title:el("mfTitle").value,emoji:el("mfEmoji").value,backend_provider:el("mfProvider").value,sort_order:el("mfSort").value,description:el("mfDescription").value,group_ids:el("mfGroups").value})}}
 function openPlanForm(x){x=x||{};openModal(x.id?"ویرایش پلن":"پلن جدید",'<form id="modalForm"><div class="formGrid"><div class="field"><label>عنوان پلن</label><input id="mfTitle" class="input" value="'+esc(x.title||"")+'" required></div><div class="field"><label>نوع پلن</label><select id="mfType" class="input"><option value="sale"'+(x.plan_type==="sale"?' selected':'')+'>فروش جدید</option><option value="renew"'+(x.plan_type==="renew"?' selected':'')+'>تمدید</option><option value="volume"'+(x.plan_type==="volume"?' selected':'')+'>افزایش حجم</option></select></div><div class="field"><label>حجم گیگابایت</label><input id="mfGb" class="input" type="number" step="0.01" min="0.01" value="'+esc(x.data_limit_bytes?Number(x.data_limit_bytes)/1073741824:"")+'" required></div><div class="field"><label>مدت روز</label><input id="mfDays" class="input" type="number" min="1" value="'+esc(x.duration_days||30)+'" required></div><div class="field"><label>قیمت تومان</label><input id="mfPrice" class="input" type="number" min="0" value="'+esc(x.price_toman||0)+'" required></div><div class="field"><label>اولویت نمایش</label><input id="mfSort" class="input" type="number" value="'+esc(x.sort_order||0)+'"></div><div class="field"><label>دسته‌بندی</label><select id="mfCategory" class="input">'+categoryOptions(x.category_id)+'</select></div><div class="field"><label>لوکیشن</label><select id="mfLocation" class="input">'+locationOptions(x.location_id)+'</select></div></div><button class="btn" type="submit">ذخیره پلن</button></form>');el("modalForm").onsubmit=function(e){e.preventDefault();run({action:"plan_save",id:x.id||"",title:el("mfTitle").value,plan_type:el("mfType").value,data_gb:el("mfGb").value,duration_days:el("mfDays").value,price_toman:el("mfPrice").value,sort_order:el("mfSort").value,category_id:el("mfCategory").value,location_id:el("mfLocation").value})}}
 function openPromoForm(x){x=x||{};var localDate="";if(x.expires_at){var d=new Date(x.expires_at);if(!isNaN(d.getTime()))localDate=d.toISOString().slice(0,10)}openModal(x.id?"ویرایش کد":"کد جدید",'<form id="modalForm"><div class="formGrid"><div class="field"><label>کد</label><input id="mfCode" class="input ltr" value="'+esc(x.code||"")+'" required></div><div class="field"><label>نوع</label><select id="mfKind" class="input"><option value="discount"'+(x.kind!=="gift"?' selected':'')+'>تخفیف</option><option value="gift"'+(x.kind==="gift"?' selected':'')+'>هدیه کیف پول</option></select></div><div class="field"><label>نوع مقدار</label><select id="mfValueType" class="input"><option value="percent"'+(x.value_type!=="fixed"?' selected':'')+'>درصد</option><option value="fixed"'+(x.value_type==="fixed"?' selected':'')+'>مبلغ ثابت</option></select></div><div class="field"><label>مقدار</label><input id="mfValue" class="input" type="number" min="1" value="'+esc(x.value||"")+'" required></div><div class="field"><label>حداقل خرید تومان</label><input id="mfMin" class="input" type="number" min="0" value="'+esc(x.min_purchase_toman||0)+'"></div><div class="field"><label>حداکثر استفاده کل <small>۰ نامحدود</small></label><input id="mfMax" class="input" type="number" min="0" value="'+esc(x.max_uses||0)+'"></div><div class="field"><label>سهم هر کاربر</label><input id="mfPer" class="input" type="number" min="1" value="'+esc(x.per_user_limit||1)+'"></div><div class="field"><label>تاریخ انقضا</label><input id="mfExpire" class="input ltr" type="date" value="'+esc(localDate)+'"></div></div><div class="field"><label>توضیح</label><textarea id="mfDesc" class="input" rows="3">'+esc(x.description||"")+'</textarea></div><button class="btn" type="submit">ذخیره کد</button></form>');el("modalForm").onsubmit=function(e){e.preventDefault();run({action:"promo_save",id:x.id||"",code:el("mfCode").value,kind:el("mfKind").value,value_type:el("mfValueType").value,value:el("mfValue").value,min_purchase_toman:el("mfMin").value,max_uses:el("mfMax").value,per_user_limit:el("mfPer").value,expires_at:el("mfExpire").value,description:el("mfDesc").value})}}
 function openBalance(x){openModal("اصلاح موجودی "+nameOf(x),'<form id="modalForm"><div class="field"><label>نوع عملیات</label><select id="mfOperation" class="input"><option value="increase">افزایش موجودی</option><option value="decrease">کاهش موجودی</option></select></div><div class="field"><label>مبلغ تومان</label><input id="mfAmount" class="input" type="number" min="1" required></div><div class="field"><label>توضیح</label><input id="mfNote" class="input" placeholder="اصلاح موجودی توسط نماینده"></div><button class="btn" type="submit">ثبت تغییر</button></form>');el("modalForm").onsubmit=function(e){e.preventDefault();run({action:"customer_balance",id:x.id,operation:el("mfOperation").value,amount:el("mfAmount").value,note:el("mfNote").value})}}
@@ -11611,7 +11801,7 @@ el("logoutBtn").onclick=async function(){try{await fetch("/reseller-control-auth
 document.querySelectorAll(".navBtn").forEach(function(b){b.onclick=function(){page(b.dataset.page)}});document.querySelectorAll(".catalogTab").forEach(function(b){b.onclick=function(){currentCatalog=b.dataset.catalog;document.querySelectorAll(".catalogTab").forEach(function(x){x.classList.toggle("active",x===b)});document.querySelectorAll(".catalogPanel").forEach(function(x){x.classList.toggle("active",x.id==="catalog-"+currentCatalog)})}});
 ["orderSearch","serviceSearch","walletSearch","customerSearch","ticketSearch","planSearch","promoSearch","paymentSearch"].forEach(function(id){el(id).oninput=function(){if(id==="orderSearch")renderOrders();else if(id==="serviceSearch")renderServices();else if(id==="walletSearch")renderWallets();else if(id==="customerSearch")renderCustomers();else if(id==="ticketSearch")renderTickets();else if(id==="planSearch")renderPlans();else if(id==="promoSearch")renderPromos();else renderPayments()}});["orderStatus","walletStatus","customerStatus","customerSort","ticketStatus","planTypeFilter","planStateFilter","promoStatus","paymentStatus"].forEach(function(id){el(id).onchange=function(){if(id==="orderStatus")renderOrders();else if(id==="walletStatus")renderWallets();else if(id==="customerStatus"||id==="customerSort")renderCustomers();else if(id==="ticketStatus")renderTickets();else if(id==="planTypeFilter"||id==="planStateFilter")renderPlans();else if(id==="promoStatus")renderPromos();else renderPayments()}});
 el("downlineSettingsForm").onsubmit=function(e){e.preventDefault();run({action:"downline_settings_save",sales_enabled:el("downlineSalesEnabled").checked,default_price_per_gb:el("downlineDefaultPrice").value,setup_fee:el("downlineSetupFee").value,renewal_fee:el("downlineRenewalFee").value})};el("downlineCreateForm").onsubmit=function(e){e.preventDefault();run({action:"downline_create",telegram_id:el("downlineTelegram").value,brand_name:el("downlineBrand").value,price_per_gb:el("downlinePrice").value,initial_balance_toman:el("downlineInitialBalance").value,control_username:el("downlineUsername").value,control_password:el("downlinePassword").value,bot_token:el("downlineToken").value}).then(function(d){el("downlineToken").value="";el("downlinePassword").value="";if(d&&d.result)openModal("ربات نماینده ساخته شد",'<div class="notice">پنل PasarGuard برای این نماینده ساخته نشده است.<br>آدرس مدیریت: <span class="ltr">'+esc(d.result.management_url)+'</span><br>نام کاربری: <b class="ltr">'+esc(d.result.control_username)+'</b><br>رمز یک‌بار نمایش: <b class="ltr">'+esc(d.result.control_password)+'</b></div>')})};el("textsForm").onsubmit=function(e){e.preventDefault();var texts={};document.querySelectorAll(".textValue").forEach(function(x){texts[x.dataset.key]=x.value});run({action:"save_texts",texts:texts})};el("channelsForm").onsubmit=function(e){e.preventDefault();var channels=Array.from(document.querySelectorAll(".channelRow")).map(function(r){return{chat_id:r.querySelector(".chId").value,title:r.querySelector(".chTitle").value,url:r.querySelector(".chUrl").value}}).filter(function(x){return x.chat_id.trim()});run({action:"save_channels",join_enabled:el("joinEnabled").checked,channels:channels})};el("settingsForm").onsubmit=function(e){e.preventDefault();run(collectSettings()).then(function(){el("setBlupalKey").value=""})};el("campaignForm").onsubmit=function(e){e.preventDefault();run({action:"campaign_create",message:el("campaignMessage").value,target_scope:el("campaignTarget").value,schedule_hours:el("campaignHours").value}).then(function(){el("campaignMessage").value=""})};el("staffForm").onsubmit=function(e){e.preventDefault();run({action:"staff_save",telegram_id:el("staffTelegram").value,display_name:el("staffName").value,role:el("staffRole").value}).then(function(){el("staffTelegram").value="";el("staffName").value=""})};el("panelForm").onsubmit=function(e){e.preventDefault();if(!state.bot.panel_access)return;run({action:"change_agency",agency_id:el("ownerAgency").value},"پنل متصل ربات تغییر کند؟")};
-document.onclick=function(e){var b=e.target.closest("[data-act],[data-page]");if(!b)return;if(b.dataset.page){page(b.dataset.page);return}var a=b.dataset.act,idv=b.dataset.id||"";if(a==="refresh")load(true);else if(a==="downline-generate")generateDownlineCredentials();else if(a==="downline-sync-all")run({action:"downline_sync_all"});else if(a==="downline-sync")run({action:"downline_sync_usage",id:idv});else if(a==="downline-balance")openDownlineBalance(findDownline(idv));else if(a==="downline-price")openDownlinePrice(findDownline(idv));else if(a==="downline-password")openDownlinePassword(findDownline(idv));else if(a==="downline-renew")run({action:"downline_renew",id:idv},"لایسنس این ربات یک ماه تمدید شود؟");else if(a==="downline-toggle")run({action:"downline_toggle",id:idv},"وضعیت فروش این ربات تغییر کند؟");else if(a==="bot-toggle")run({action:"bot_toggle"},"وضعیت فروش ربات تغییر کند؟");else if(a==="configure")run({action:"configure_bot"},"Webhook، دستورات، منو و مینی‌اپ ربات ترمیم شوند؟");else if(a==="test")run({action:"test_message"});else if(a==="order-approve")run({action:"order_approve",id:idv},"سفارش تأیید و سرویس ساخته شود؟");else if(a==="order-reject")run({action:"order_reject",id:idv},"سفارش رد شود؟");else if(a==="service-copy"){var sv=(state.services||[]).find(function(x){return x.id===idv});if(sv&&sv.subscription_url)navigator.clipboard.writeText(sv.subscription_url).then(function(){toast("لینک کپی شد")}).catch(function(){toast("کپی لینک ناموفق بود")})}else if(a==="service-delete")run({action:"service_delete",id:idv},"این سرویس از پنل PasarGuard حذف شود؟ این عملیات قابل بازگشت نیست.");else if(a==="wallet-approve")run({action:"wallet_approve",id:idv},"شارژ کیف پول تأیید شود؟");else if(a==="wallet-reject")run({action:"wallet_reject",id:idv},"درخواست شارژ رد شود؟");else if(a==="customer-toggle"){var c=(state.customers||[]).find(function(x){return x.id===idv});run({action:"customer_toggle",id:idv},c&&c.status==="active"?"مشتری مسدود شود؟":"مشتری فعال شود؟")}else if(a==="customer-balance")openBalance((state.customers||[]).find(function(x){return x.id===idv}));else if(a==="customer-type")openCustomerType((state.customers||[]).find(function(x){return x.id===idv}));else if(a==="customer-risk")run({action:"customer_risk_reset",id:idv},"امتیاز ریسک مشتری بازنشانی شود؟");else if(a==="catalog-new"){if(currentCatalog==="categories")openCategoryForm();else if(currentCatalog==="locations")openLocationForm();else openPlanForm()}else if(a==="category-edit")openCategoryForm((state.categories||[]).find(function(x){return x.id===idv}));else if(a==="category-toggle")run({action:"category_toggle",id:idv});else if(a==="category-delete")run({action:"category_delete",id:idv},"دسته‌بندی حذف شود؟ پلن‌های آن بدون دسته باقی می‌مانند.");else if(a==="location-edit")openLocationForm((state.locations||[]).find(function(x){return x.id===idv}));else if(a==="location-toggle")run({action:"location_toggle",id:idv});else if(a==="location-delete")run({action:"location_delete",id:idv},"لوکیشن حذف شود؟ پلن‌های آن بدون لوکیشن باقی می‌مانند.");else if(a==="plan-edit")openPlanForm((state.plans||[]).find(function(x){return x.id===idv}));else if(a==="plan-toggle")run({action:"plan_toggle",id:idv});else if(a==="plan-delete")run({action:"plan_delete",id:idv},"پلن حذف شود؟ پلن دارای سابقه سفارش حذف نمی‌شود.");else if(a==="ticket-open")openTicket(idv);else if(a==="ticket-toggle")run({action:"ticket_toggle",id:idv});else if(a==="promo-new")openPromoForm();else if(a==="promo-edit")openPromoForm((state.promos||[]).find(function(x){return x.id===idv}));else if(a==="promo-toggle")run({action:"promo_toggle",id:idv});else if(a==="promo-delete")run({action:"promo_delete",id:idv},"کد حذف شود؟ کد دارای سابقه استفاده حذف نمی‌شود.");else if(a==="channel-add")addChannel({});else if(a==="texts-reset"){if(confirm("همه متن‌ها به نسخه پیش‌فرض برگردند؟")){document.querySelectorAll(".textValue").forEach(function(x){x.value=(state.text_defaults||{})[x.dataset.key]||""})}}else if(a==="payment-recheck")run({action:"payment_recheck",id:idv});else if(a==="campaign-cancel")run({action:"campaign_cancel",id:idv},"کمپین لغو شود؟");else if(a==="staff-toggle")run({action:"staff_toggle",id:idv});else if(a==="staff-delete")run({action:"staff_delete",id:idv},"عضو تیم حذف شود؟");else if(a==="health")run({action:"health_check"});else if(a==="backup-create")run({action:"backup_create"},"نسخه پشتیبان جدید ساخته شود؟");else if(a==="backup-restore")run({action:"backup_restore",id:idv},"این نسخه پشتیبان بازیابی شود؟ تنظیمات و کاتالوگ فعلی تغییر می‌کند.")};
+document.onclick=function(e){var b=e.target.closest("[data-act],[data-page]");if(!b)return;if(b.dataset.page){page(b.dataset.page);return}var a=b.dataset.act,idv=b.dataset.id||"";if(a==="refresh")load(true);else if(a==="downline-generate")generateDownlineCredentials();else if(a==="downline-sync-all")run({action:"downline_sync_all"});else if(a==="downline-sync")run({action:"downline_sync_usage",id:idv});else if(a==="downline-balance")openDownlineBalance(findDownline(idv));else if(a==="downline-price")openDownlinePrice(findDownline(idv));else if(a==="downline-password")openDownlinePassword(findDownline(idv));else if(a==="downline-renew")run({action:"downline_renew",id:idv},"لایسنس این ربات یک ماه تمدید شود؟");else if(a==="downline-toggle")run({action:"downline_toggle",id:idv},"وضعیت فروش این ربات تغییر کند؟");else if(a==="bot-toggle")run({action:"bot_toggle"},"وضعیت فروش ربات تغییر کند؟");else if(a==="configure")run({action:"configure_bot"},"Webhook، دستورات، منو و مینی‌اپ ربات ترمیم شوند؟");else if(a==="test")run({action:"test_message"});else if(a==="order-approve")run({action:"order_approve",id:idv},"سفارش تأیید و سرویس ساخته شود؟");else if(a==="order-reject")run({action:"order_reject",id:idv},"سفارش رد شود؟");else if(a==="service-copy"){var sv=(state.services||[]).find(function(x){return x.id===idv});if(sv&&sv.subscription_url)navigator.clipboard.writeText(sv.subscription_url).then(function(){toast("لینک کپی شد")}).catch(function(){toast("کپی لینک ناموفق بود")})}else if(a==="service-delete")run({action:"service_delete",id:idv},"این سرویس از پنل اصلی خودش حذف شود؟ این عملیات قابل بازگشت نیست.");else if(a==="wallet-approve")run({action:"wallet_approve",id:idv},"شارژ کیف پول تأیید شود؟");else if(a==="wallet-reject")run({action:"wallet_reject",id:idv},"درخواست شارژ رد شود؟");else if(a==="customer-toggle"){var c=(state.customers||[]).find(function(x){return x.id===idv});run({action:"customer_toggle",id:idv},c&&c.status==="active"?"مشتری مسدود شود؟":"مشتری فعال شود؟")}else if(a==="customer-balance")openBalance((state.customers||[]).find(function(x){return x.id===idv}));else if(a==="customer-type")openCustomerType((state.customers||[]).find(function(x){return x.id===idv}));else if(a==="customer-risk")run({action:"customer_risk_reset",id:idv},"امتیاز ریسک مشتری بازنشانی شود؟");else if(a==="catalog-new"){if(currentCatalog==="categories")openCategoryForm();else if(currentCatalog==="locations")openLocationForm();else openPlanForm()}else if(a==="category-edit")openCategoryForm((state.categories||[]).find(function(x){return x.id===idv}));else if(a==="category-toggle")run({action:"category_toggle",id:idv});else if(a==="category-delete")run({action:"category_delete",id:idv},"دسته‌بندی حذف شود؟ پلن‌های آن بدون دسته باقی می‌مانند.");else if(a==="location-edit")openLocationForm((state.locations||[]).find(function(x){return x.id===idv}));else if(a==="location-toggle")run({action:"location_toggle",id:idv});else if(a==="location-delete")run({action:"location_delete",id:idv},"لوکیشن حذف شود؟ پلن‌های متصل غیرفعال می‌شوند و سرویس‌های قبلی محفوظ می‌مانند.");else if(a==="plan-edit")openPlanForm((state.plans||[]).find(function(x){return x.id===idv}));else if(a==="plan-toggle")run({action:"plan_toggle",id:idv});else if(a==="plan-delete")run({action:"plan_delete",id:idv},"پلن حذف شود؟ پلن دارای سابقه سفارش حذف نمی‌شود.");else if(a==="ticket-open")openTicket(idv);else if(a==="ticket-toggle")run({action:"ticket_toggle",id:idv});else if(a==="promo-new")openPromoForm();else if(a==="promo-edit")openPromoForm((state.promos||[]).find(function(x){return x.id===idv}));else if(a==="promo-toggle")run({action:"promo_toggle",id:idv});else if(a==="promo-delete")run({action:"promo_delete",id:idv},"کد حذف شود؟ کد دارای سابقه استفاده حذف نمی‌شود.");else if(a==="channel-add")addChannel({});else if(a==="texts-reset"){if(confirm("همه متن‌ها به نسخه پیش‌فرض برگردند؟")){document.querySelectorAll(".textValue").forEach(function(x){x.value=(state.text_defaults||{})[x.dataset.key]||""})}}else if(a==="payment-recheck")run({action:"payment_recheck",id:idv});else if(a==="campaign-cancel")run({action:"campaign_cancel",id:idv},"کمپین لغو شود؟");else if(a==="staff-toggle")run({action:"staff_toggle",id:idv});else if(a==="staff-delete")run({action:"staff_delete",id:idv},"عضو تیم حذف شود؟");else if(a==="health")run({action:"health_check"});else if(a==="backup-create")run({action:"backup_create"},"نسخه پشتیبان جدید ساخته شود؟");else if(a==="backup-restore")run({action:"backup_restore",id:idv},"این نسخه پشتیبان بازیابی شود؟ تنظیمات و کاتالوگ فعلی تغییر می‌کند.")};
 var initial=String(location.hash||"").replace("#","");var allowed=["overview","orders","services","wallets","customers","tickets","catalog","promos","texts","channels","campaigns","payments","downline","settings","team","activity","system"];if(allowed.includes(initial))page(initial);load();
 })();
 </script>

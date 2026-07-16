@@ -1,15 +1,27 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.25
+ * Version: 3.3.26
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.25';
+const APP_VERSION = '3.3.26';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.26": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🔀", text: "فروش هم‌زمان از PasarGuard و مرزبان با انتخاب پنل مقصد برای هر لوکیشن" },
+      { emoji: "🧭", text: "ذخیره پنل مالک هر سفارش برای تمدید، افزایش حجم، بروزرسانی و تعویض لینک روی همان پنل" },
+      { emoji: "🧾", text: "تفکیک حسابداری و همگام‌سازی مصرف مرزبان از سرویس‌های PasarGuard" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "🌍", text: "انتخاب PasarGuard یا مرزبان هنگام ساخت و ویرایش لوکیشن" },
+      { emoji: "♻️", text: "حفظ پنل اصلی سرویس در عملیات تمدید، افزایش حجم، بروزرسانی و حذف" },
+      { emoji: "✏️", text: "ویرایش و حذف امن دسته‌بندی و لوکیشن از ربات و پنل مدیریت" }
+    ])
+  }),
   "3.3.25": Object.freeze({
     central: Object.freeze([
       { emoji: "🧩", text: "رفع خطای bytes is not defined در پنل مدیریت نماینده پس از ورود موفق" },
@@ -442,7 +454,7 @@ let errorCenterSchemaPromise = null;
 
 // Persistent schema marker: avoids replaying the full D1 migration sweep whenever
 // Cloudflare starts a fresh isolate after an idle period.
-const DB_SCHEMA_REVISION = "3.3.25";
+const DB_SCHEMA_REVISION = "3.3.26";
 
 let settingsCache = null;
 
@@ -1263,6 +1275,7 @@ CREATE TABLE IF NOT EXISTS sales_orders (
   origin TEXT NOT NULL DEFAULT 'bot',
   gift_sender_customer_id TEXT,
   gift_message TEXT,
+  service_provider TEXT NOT NULL DEFAULT 'pasarguard',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   reviewed_at TEXT,
@@ -1325,6 +1338,7 @@ CREATE TABLE IF NOT EXISTS sales_locations (
   title TEXT NOT NULL,
   emoji TEXT,
   description TEXT,
+  backend_provider TEXT NOT NULL DEFAULT 'pasarguard',
   group_ids_json TEXT NOT NULL DEFAULT '[]',
   status TEXT NOT NULL DEFAULT 'active',
   sort_order INTEGER NOT NULL DEFAULT 0,
@@ -1417,6 +1431,7 @@ CREATE TABLE IF NOT EXISTS sales_trials (
   remote_online_at TEXT,
   remote_last_synced_at TEXT,
   error_message TEXT,
+  service_provider TEXT NOT NULL DEFAULT 'pasarguard',
   origin TEXT NOT NULL DEFAULT 'bot',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -2247,7 +2262,11 @@ async function ensureDbInternal(env) {
       ["origin", "TEXT NOT NULL DEFAULT 'bot'"],
       ["receipt_unique_id", "TEXT"]
     ],
+    sales_locations: [
+      ["backend_provider", "TEXT NOT NULL DEFAULT 'pasarguard'"]
+    ],
     sales_trials: [
+      ["service_provider", "TEXT NOT NULL DEFAULT 'pasarguard'"],
       ["origin", "TEXT NOT NULL DEFAULT 'bot'"],
       ["remote_status", "TEXT"],
       ["remote_data_limit", "INTEGER"],
@@ -2260,6 +2279,7 @@ async function ensureDbInternal(env) {
       ["message_text", "TEXT"]
     ],
     sales_orders: [
+      ["service_provider", "TEXT NOT NULL DEFAULT 'pasarguard'"],
       ["order_type", "TEXT NOT NULL DEFAULT 'new'"],
       ["target_order_id", "TEXT"],
       ["payment_method", "TEXT NOT NULL DEFAULT 'card'"],
@@ -4582,8 +4602,6 @@ async function billAgency(env, agency, currentUsageBytes, pricePerGb) {
 }
 
 async function syncUsage(env, limit = 50) {
-  const backendSettings = await getSettings(env);
-  if (sharedMarzbanEnabled(backendSettings, env)) return { provider:"marzban_shared", skipped:true, processed:0, charged:0 };
   await ensureDb(env);
   const settings = await getSettings(env);
   if (settings.usage_sync_enabled !== "true") return { processed: 0, charged: 0, collected: 0, errors: [] };
@@ -9640,8 +9658,8 @@ async function downlineUsageTotal(env, botId) {
     SELECT COALESCE(SUM(used),0) AS total_usage FROM (
       SELECT remote_username,MAX(COALESCE(remote_used_traffic,0)) AS used
       FROM sales_orders
-      WHERE bot_id=? AND status='delivered' AND remote_username IS NOT NULL
-      GROUP BY LOWER(remote_username)
+      WHERE bot_id=? AND status='delivered' AND remote_username IS NOT NULL AND COALESCE(service_provider,'pasarguard')='pasarguard'
+      GROUP BY service_provider,LOWER(remote_username)
     )
   `).bind(botId).first();
   return Math.max(0, Number(row?.total_usage || 0));
@@ -9651,8 +9669,8 @@ async function syncDownlineRemoteServices(env, childBot, limit = 120) {
   const rows = await env.PASARGUARD_DB.prepare(`
     SELECT MIN(o.id) AS order_id,o.customer_id,o.remote_username
     FROM sales_orders o
-    WHERE o.bot_id=? AND o.status='delivered' AND o.remote_username IS NOT NULL
-    GROUP BY o.customer_id,LOWER(o.remote_username)
+    WHERE o.bot_id=? AND o.status='delivered' AND o.remote_username IS NOT NULL AND COALESCE(o.service_provider,'pasarguard')='pasarguard'
+    GROUP BY o.customer_id,o.service_provider,LOWER(o.remote_username)
     ORDER BY MAX(o.updated_at) DESC LIMIT ?
   `).bind(childBot.id, Math.max(1, Math.min(500, Number(limit || 120)))).all();
   let synced = 0, failed = 0;
@@ -9676,15 +9694,15 @@ async function sharedMarzbanUsageSnapshots(env, bot, limit = 10) {
              MIN(COALESCE(o.remote_last_synced_at,'')) AS oldest_sync,
              MAX(o.updated_at) AS last_update
       FROM sales_orders o
-      WHERE o.bot_id=? AND o.status='delivered' AND o.remote_username IS NOT NULL
-      GROUP BY o.customer_id,LOWER(o.remote_username)
+      WHERE o.bot_id=? AND o.status='delivered' AND o.remote_username IS NOT NULL AND COALESCE(o.service_provider,'pasarguard')='marzban'
+      GROUP BY o.customer_id,o.service_provider,LOWER(o.remote_username)
       UNION ALL
       SELECT 'trial' AS source_type,t.id AS record_id,t.customer_id,t.remote_username,
              COALESCE(t.remote_used_traffic,0) AS previous_usage,
              COALESCE(t.remote_last_synced_at,'') AS oldest_sync,
              t.updated_at AS last_update
       FROM sales_trials t
-      WHERE t.bot_id=? AND t.status='delivered' AND t.remote_username IS NOT NULL
+      WHERE t.bot_id=? AND t.status='delivered' AND t.remote_username IS NOT NULL AND COALESCE(t.service_provider,'pasarguard')='marzban'
     )
     ORDER BY oldest_sync ASC,last_update ASC LIMIT ?
   `).bind(bot.id, bot.id, Math.max(1, Math.min(20, Number(limit || cfg.syncBatch)))).all();
@@ -9693,7 +9711,7 @@ async function sharedMarzbanUsageSnapshots(env, bot, limit = 10) {
   let failed = 0;
   for (const row of rows.results || []) {
     try {
-      const remote = await servicePanelRequest(env, agency, "GET", "/api/user/" + encodeURIComponent(row.remote_username));
+      const remote = await servicePanelRequestForProvider(env, agency, "marzban", "GET", "/api/user/" + encodeURIComponent(row.remote_username));
       const snapshot = salesRemoteSnapshot(remote, { remote_username: row.remote_username });
       let subscriptionUrl = snapshot.subscriptionUrl || "";
       if (subscriptionUrl && subscriptionUrl.startsWith("/")) subscriptionUrl = cfg.panelUrl + subscriptionUrl;
@@ -9718,7 +9736,7 @@ function sharedMarzbanSnapshotUpdate(env, bot, item, eventKey = "", token = "") 
     const stmt = env.PASARGUARD_DB.prepare(`UPDATE sales_trials SET
       subscription_url=CASE WHEN ?<>'' THEN ? ELSE subscription_url END,
       remote_status=?,remote_data_limit=?,remote_used_traffic=?,remote_expire=?,remote_online_at=?,remote_last_synced_at=?,updated_at=?
-      WHERE id=? AND bot_id=? AND customer_id=? AND LOWER(remote_username)=LOWER(?) AND status='delivered'${guard}`);
+      WHERE id=? AND bot_id=? AND customer_id=? AND LOWER(remote_username)=LOWER(?) AND COALESCE(service_provider,'pasarguard')='marzban' AND status='delivered'${guard}`);
     const args = [item.subscriptionUrl,item.subscriptionUrl,item.snapshot.status,item.snapshot.dataLimit,item.current,
       item.snapshot.expire,item.snapshot.onlineAt,item.snapshot.syncedAt,item.snapshot.syncedAt,item.recordId,bot.id,item.customerId,item.username];
     if (eventKey) args.push(eventKey,token);
@@ -9727,7 +9745,7 @@ function sharedMarzbanSnapshotUpdate(env, bot, item, eventKey = "", token = "") 
   const stmt = env.PASARGUARD_DB.prepare(`UPDATE sales_orders SET
     subscription_url=CASE WHEN ?<>'' THEN ? ELSE subscription_url END,
     remote_status=?,remote_data_limit=?,remote_used_traffic=?,remote_expire=?,remote_online_at=?,remote_last_synced_at=?
-    WHERE bot_id=? AND customer_id=? AND LOWER(remote_username)=LOWER(?) AND status='delivered'${guard}`);
+    WHERE bot_id=? AND customer_id=? AND LOWER(remote_username)=LOWER(?) AND COALESCE(service_provider,'pasarguard')='marzban' AND status='delivered'${guard}`);
   const args = [item.subscriptionUrl,item.subscriptionUrl,item.snapshot.status,item.snapshot.dataLimit,item.current,
     item.snapshot.expire,item.snapshot.onlineAt,item.snapshot.syncedAt,bot.id,item.customerId,item.username];
   if (eventKey) args.push(eventKey,token);
@@ -9849,12 +9867,12 @@ async function syncSharedMarzbanUsage(env, parentBotId = null, limit = 100, opti
   const cfg = sharedMarzbanConfig(settings, env);
   const sql = parentBotId
     ? `SELECT rb.id FROM reseller_bots rb WHERE rb.parent_bot_id=? AND (
-         EXISTS(SELECT 1 FROM sales_orders o WHERE o.bot_id=rb.id AND o.status='delivered' AND o.remote_username IS NOT NULL) OR
-         EXISTS(SELECT 1 FROM sales_trials t WHERE t.bot_id=rb.id AND t.status='delivered' AND t.remote_username IS NOT NULL)
+         EXISTS(SELECT 1 FROM sales_orders o WHERE o.bot_id=rb.id AND o.status='delivered' AND o.remote_username IS NOT NULL AND COALESCE(o.service_provider,'pasarguard')='marzban') OR
+         EXISTS(SELECT 1 FROM sales_trials t WHERE t.bot_id=rb.id AND t.status='delivered' AND t.remote_username IS NOT NULL AND COALESCE(t.service_provider,'pasarguard')='marzban')
        ) ORDER BY rb.updated_at LIMIT ?`
     : `SELECT rb.id FROM reseller_bots rb WHERE
-         EXISTS(SELECT 1 FROM sales_orders o WHERE o.bot_id=rb.id AND o.status='delivered' AND o.remote_username IS NOT NULL) OR
-         EXISTS(SELECT 1 FROM sales_trials t WHERE t.bot_id=rb.id AND t.status='delivered' AND t.remote_username IS NOT NULL)
+         EXISTS(SELECT 1 FROM sales_orders o WHERE o.bot_id=rb.id AND o.status='delivered' AND o.remote_username IS NOT NULL AND COALESCE(o.service_provider,'pasarguard')='marzban') OR
+         EXISTS(SELECT 1 FROM sales_trials t WHERE t.bot_id=rb.id AND t.status='delivered' AND t.remote_username IS NOT NULL AND COALESCE(t.service_provider,'pasarguard')='marzban')
        ORDER BY rb.updated_at LIMIT ?`;
   const query = env.PASARGUARD_DB.prepare(sql);
   const safeLimit = Math.max(1,Math.min(500,Number(limit||100)));
@@ -9964,7 +9982,9 @@ async function billDownlineResellerBot(env, childBot, options = {}) {
 
 async function syncDownlineUsage(env, parentBotId = null, limit = 100, options = {}) {
   const backendSettings = await getSettings(env);
-  if (sharedMarzbanEnabled(backendSettings, env)) return syncSharedMarzbanUsage(env,parentBotId,limit,options);
+  const marzbanResult=sharedMarzbanEnabled(backendSettings,env)
+    ? await syncSharedMarzbanUsage(env,parentBotId,limit,options)
+    : {processed:0,charged:0,collected:0,unpaid:0,parent_profit:0,failed:0};
   const sql = parentBotId
     ? "SELECT id FROM reseller_bots WHERE parent_bot_id=? ORDER BY updated_at LIMIT ?"
     : "SELECT id FROM reseller_bots WHERE parent_bot_id IS NOT NULL ORDER BY updated_at LIMIT ?";
@@ -9983,7 +10003,15 @@ async function syncDownlineUsage(env, parentBotId = null, limit = 100, options =
       try { await audit(env,null,"downline_usage_sync_failed",{botId:row.id,message:String(error?.message||error)}); } catch (_) {}
     }
   }
-  return {processed,charged,collected,unpaid,failed};
+  return {
+    processed:processed+Number(marzbanResult.processed||0),
+    charged:charged+Number(marzbanResult.charged||0),
+    collected:collected+Number(marzbanResult.collected||0),
+    unpaid:unpaid+Number(marzbanResult.unpaid||0),
+    failed:failed+Number(marzbanResult.failed||0),
+    pasarguard:{processed,charged,collected,unpaid,failed},
+    marzban:marzbanResult
+  };
 }
 
 async function resellerBotToken(env, bot) {
@@ -10315,6 +10343,41 @@ async function agencyPasarguardRequest(env, agency, method, path, body, retry = 
 }
 const sharedMarzbanTokenCache = new Map();
 
+
+function normalizeServiceProvider(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  return ["marzban","marzban_shared"].includes(raw) ? "marzban" : "pasarguard";
+}
+
+function serviceProviderLabel(value) {
+  return normalizeServiceProvider(value) === "marzban" ? "مرزبان" : "PasarGuard";
+}
+
+function locationServiceProvider(location, settings = {}, env = {}) {
+  const provider = normalizeServiceProvider(location?.backend_provider || location?.service_provider || "pasarguard");
+  if (provider === "marzban" && !sharedMarzbanEnabled(settings, env)) {
+    throw new Error("مرزبان مشترک مرکزی فعال یا کامل تنظیم نشده است");
+  }
+  return provider;
+}
+
+function serviceBaseUrlForProvider(settings, env, provider) {
+  return normalizeServiceProvider(provider) === "marzban"
+    ? sharedMarzbanConfig(settings, env).panelUrl
+    : pasarguardBaseUrl(settings);
+}
+
+async function servicePanelRequestForProvider(env, agency, provider, method, path, body, retry = true) {
+  const selected = normalizeServiceProvider(provider);
+  if (selected === "marzban") {
+    const settings = await getSettings(env);
+    if (!sharedMarzbanEnabled(settings, env)) throw new Error("مرزبان مشترک مرکزی فعال نیست");
+    return sharedMarzbanRequest(env, method, path, body, retry);
+  }
+  if (!agency?.id || !agency?.panel_username) throw new Error("پنل PasarGuard متصل برای این ربات پیدا نشد");
+  return agencyPasarguardRequest(env, agency, method, path, body, retry);
+}
+
 function sharedMarzbanEnabled(settings, env = {}) {
   const raw = env.MARZBAN_SHARED_ENABLED !== undefined
     ? env.MARZBAN_SHARED_ENABLED
@@ -10373,8 +10436,8 @@ function sharedMarzbanConfig(settings, env = {}) {
 }
 
 function sharedServiceBaseUrl(settings, env = {}) {
-  const cfg = sharedMarzbanConfig(settings, env);
-  return cfg.enabled ? cfg.panelUrl : pasarguardBaseUrl(settings);
+  // Legacy helper is intentionally PasarGuard-only in dual-panel mode.
+  return pasarguardBaseUrl(settings);
 }
 
 async function getSharedMarzbanToken(env, settings, force = false) {
@@ -10522,8 +10585,7 @@ async function sharedMarzbanRequest(env, method, path, body, retry = true) {
 }
 
 async function servicePanelRequest(env, agency, method, path, body, retry = true) {
-  const settings = await getSettings(env);
-  if (sharedMarzbanEnabled(settings, env)) return sharedMarzbanRequest(env, method, path, body, retry);
+  // Backward-compatible PasarGuard request. Provider-aware paths must use servicePanelRequestForProvider.
   return agencyPasarguardRequest(env, agency, method, path, body, retry);
 }
 
@@ -10583,9 +10645,10 @@ async function ensureSharedBackendAccount(env, botId, activate = false) {
   return env.PASARGUARD_DB.prepare("SELECT * FROM shared_backend_accounts WHERE bot_id=?").bind(botId).first();
 }
 
-async function claimSharedServiceOwnership(env, botId, customerId, orderId, username) {
+async function claimSharedServiceOwnership(env, botId, customerId, orderId, username, provider = "marzban") {
+  if(normalizeServiceProvider(provider)!=="marzban") return { claimed:false };
   const settings = await getSettings(env);
-  if (!sharedMarzbanEnabled(settings, env)) return { claimed: false };
+  if (!sharedMarzbanEnabled(settings, env)) throw new Error("مرزبان مشترک مرکزی فعال نیست");
   await ensureSharedMarzbanTables(env);
   const cfg = sharedMarzbanConfig(settings, env);
   const scope = cfg.panelUrl.toLowerCase();
@@ -10651,21 +10714,23 @@ async function getSalesServiceOrder(env, bot, customer, serviceId) {
 
 async function syncSalesService(env, bot, customer, serviceId) {
   const target = await getSalesServiceOrder(env, bot, customer, serviceId);
-  if (bot.agency_status !== "active") throw new Error("پنل متصل نماینده فعال نیست");
+  const provider=normalizeServiceProvider(target.service_provider);
+  if(provider==="pasarguard"&&bot.agency_status!=="active") throw new Error("پنل PasarGuard متصل نماینده فعال نیست");
+  if(provider==="marzban"&&!sharedMarzbanEnabled(await getSettings(env),env)) throw new Error("مرزبان مشترک مرکزی فعال نیست");
   const agency = { id: bot.agency_id, panel_username: bot.panel_username, panel_password_enc: bot.panel_password_enc };
-  const remote = await servicePanelRequest(env, agency, "GET", "/api/user/" + encodeURIComponent(target.remote_username));
+  const remote = await servicePanelRequestForProvider(env, agency, provider, "GET", "/api/user/" + encodeURIComponent(target.remote_username));
   const snapshot = salesRemoteSnapshot(remote, target);
   let subscriptionUrl = snapshot.subscriptionUrl;
   if (subscriptionUrl && subscriptionUrl.startsWith("/")) {
     const settings = await getSettings(env);
-    subscriptionUrl = sharedServiceBaseUrl(settings, env) + subscriptionUrl;
+    subscriptionUrl = serviceBaseUrlForProvider(settings, env, provider) + subscriptionUrl;
   }
   await env.PASARGUARD_DB.prepare(`
     UPDATE sales_orders SET subscription_url=CASE WHEN ?<>'' THEN ? ELSE subscription_url END,
       remote_status=?,remote_data_limit=?,remote_used_traffic=?,remote_expire=?,remote_online_at=?,remote_last_synced_at=?,updated_at=updated_at
-    WHERE bot_id=? AND customer_id=? AND remote_username=? AND status='delivered'
+    WHERE bot_id=? AND customer_id=? AND remote_username=? AND service_provider=? AND status='delivered'
   `).bind(subscriptionUrl, subscriptionUrl, snapshot.status, snapshot.dataLimit, snapshot.usedTraffic,
-    snapshot.expire, snapshot.onlineAt, snapshot.syncedAt, bot.id, customer.id, target.remote_username).run();
+    snapshot.expire, snapshot.onlineAt, snapshot.syncedAt, bot.id, customer.id, target.remote_username, provider).run();
   await salesEvent(env, bot.id, customer.id, "service_synced", { serviceId: target.id, username: target.remote_username });
   return {
     id: target.id,
@@ -10840,11 +10905,11 @@ async function agencyActivePasarguardGroupIds(env, agency) {
   let response;
   try {
     // PasarGuard v5 exposes this lightweight endpoint to both sudo and operator admins.
-    response = await servicePanelRequest(env, agency, "GET", "/api/groups/simple");
+    response = await agencyPasarguardRequest(env, agency, "GET", "/api/groups/simple");
   } catch (simpleError) {
     try {
       // Compatibility fallback for older installations that only expose the full groups endpoint.
-      response = await servicePanelRequest(env, agency, "GET", "/api/groups");
+      response = await agencyPasarguardRequest(env, agency, "GET", "/api/groups");
     } catch (fullError) {
       throw new Error("دریافت گروه‌های فعال پنل پاسارگارد ناموفق بود: " + cleanText(fullError?.message || simpleError?.message || "خطای نامشخص", 300));
     }
@@ -10855,9 +10920,8 @@ async function agencyActivePasarguardGroupIds(env, agency) {
   return [...ids];
 }
 
-async function resolveSalesGroupIds(env, agency, location) {
-  const backendSettings = await getSettings(env);
-  if (sharedMarzbanEnabled(backendSettings, env)) return [];
+async function resolveSalesGroupIds(env, agency, location, provider = "pasarguard") {
+  if(normalizeServiceProvider(provider)==="marzban") return [];
   const explicitlySelected = salesGroupIds(location);
   if (explicitlySelected.length) return explicitlySelected;
   return agencyActivePasarguardGroupIds(env, agency);
@@ -11016,7 +11080,7 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
            rb.user_id AS owner_user_id,rb.brand_name,rb.bot_token_enc,rb.bot_username,rb.webhook_secret,rb.id AS reseller_bot_id,
            rb.referral_reward_toman,rb.forward_enabled,
            a.id AS agency_id,a.panel_username,a.panel_password_enc,a.status AS agency_status,
-           l.group_ids_json
+           l.group_ids_json,COALESCE(o.service_provider,l.backend_provider,'pasarguard') AS resolved_service_provider
     FROM sales_orders o
     JOIN sales_plans p ON p.id=o.plan_id
     JOIN sales_customers c ON c.id=o.customer_id
@@ -11030,7 +11094,14 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
   const staleProvisioning = order.status === "provisioning" && Date.now() - new Date(order.updated_at).getTime() > 2 * 60 * 1000;
   if (!["pending_review", "provision_failed"].includes(String(order.status)) && !staleProvisioning) throw new Error("این سفارش قابل تأیید نیست");
   const provisionSettings = await getSettings(env);
-  if (!sharedMarzbanEnabled(provisionSettings, env) && order.agency_status !== "active") throw new Error("پنل متصل فعال نیست");
+  let serviceProvider=normalizeServiceProvider(order.resolved_service_provider);
+  if(order.order_type==="renewal"||order.order_type==="volume"){
+    const targetProvider=await env.PASARGUARD_DB.prepare("SELECT service_provider FROM sales_orders WHERE id=? AND bot_id=? AND customer_id=? AND status='delivered'").bind(order.target_order_id,order.bot_id,order.customer_id).first();
+    if(targetProvider) serviceProvider=normalizeServiceProvider(targetProvider.service_provider);
+  }
+  if(serviceProvider==="marzban"){
+    if(!sharedMarzbanEnabled(provisionSettings,env)) throw new Error("مرزبان مشترک مرکزی فعال نیست");
+  }else if(order.agency_status!=="active") throw new Error("پنل PasarGuard متصل فعال نیست");
   const claim = await env.PASARGUARD_DB.prepare(`
     UPDATE sales_orders SET status='provisioning',error_message=NULL,updated_at=?,reviewed_at=?,reviewed_by=?
     WHERE id=? AND (status IN ('pending_review','provision_failed') OR (status='provisioning' AND updated_at<?))
@@ -11046,7 +11117,7 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
       `).bind(order.target_order_id, order.bot_id, order.customer_id).first();
       if (!target?.remote_username) throw new Error(order.order_type === "volume" ? "سرویس مقصد افزایش حجم پیدا نشد" : "سرویس مقصد تمدید پیدا نشد");
       username = target.remote_username;
-      const current = await servicePanelRequest(env, agency, "GET", "/api/user/" + encodeURIComponent(username));
+      const current = await servicePanelRequestForProvider(env, agency, serviceProvider, "GET", "/api/user/" + encodeURIComponent(username));
       const payload = {
         status: "active",
         data_limit: Math.max(0, Number(current?.data_limit || 0)) + Math.max(0, Number(order.data_limit_bytes || 0)),
@@ -11058,7 +11129,7 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
         const baseTime = Math.max(Date.now(), Number.isFinite(currentExpireTime) ? currentExpireTime : 0);
         payload.expire = new Date(baseTime + Number(order.duration_days) * 86400000).toISOString();
       }
-      created = await servicePanelRequest(env, agency, "PUT", "/api/user/" + encodeURIComponent(username), payload);
+      created = await servicePanelRequestForProvider(env, agency, serviceProvider, "PUT", "/api/user/" + encodeURIComponent(username), payload);
       subscriptionUrl = cleanText(created.subscription_url || current.subscription_url || created?.data?.subscription_url, 2000);
     } else {
       username = order.remote_username ? normalizeUsername(order.remote_username) : normalizeUsername("r" + String(order.reseller_bot_id || order.bot_id || "bot").replace(/[^a-zA-Z0-9]/g, "").slice(-8) + "_" + String(order.id).replace(/[^a-zA-Z0-9]/g, "").slice(-18));
@@ -11071,13 +11142,13 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
         data_limit_reset_strategy: "no_reset",
         note: "Telegram sales order " + order.id + " / customer " + order.customer_telegram_id
       };
-      const groups = await resolveSalesGroupIds(env, agency, order);
+      const groups = await resolveSalesGroupIds(env, agency, order, serviceProvider);
       if (groups.length) payload.group_ids = groups;
       for (let attempt = 0; attempt < 3 && !created; attempt++) {
-        try { created = await servicePanelRequest(env, agency, "POST", "/api/user", payload); }
+        try { created = await servicePanelRequestForProvider(env, agency, serviceProvider, "POST", "/api/user", payload); }
         catch (error) {
           if (error.status === 409 || /username|already|وجود|تکرار/i.test(String(error.message || ""))) {
-            created = await servicePanelRequest(env, agency, "GET", "/api/user/" + encodeURIComponent(username));
+            created = await servicePanelRequestForProvider(env, agency, serviceProvider, "GET", "/api/user/" + encodeURIComponent(username));
             break;
           }
           if (attempt < 2 && (!error.status || error.status >= 500)) continue;
@@ -11089,26 +11160,26 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
     }
     if (subscriptionUrl && subscriptionUrl.startsWith("/")) {
       const settings = await getSettings(env);
-      subscriptionUrl = sharedServiceBaseUrl(settings, env) + subscriptionUrl;
+      subscriptionUrl = serviceBaseUrlForProvider(settings, env, serviceProvider) + subscriptionUrl;
     }
     const remoteId = created?.id || created?.data?.id || "";
     let remoteForSnapshot = created || {};
-    try { remoteForSnapshot = await servicePanelRequest(env, agency, "GET", "/api/user/" + encodeURIComponent(username)); } catch (_) {}
+    try { remoteForSnapshot = await servicePanelRequestForProvider(env, agency, serviceProvider, "GET", "/api/user/" + encodeURIComponent(username)); } catch (_) {}
     const snapshot = salesRemoteSnapshot(remoteForSnapshot, { subscription_url: subscriptionUrl });
     if (!subscriptionUrl) subscriptionUrl = snapshot.subscriptionUrl;
-    await claimSharedServiceOwnership(env, order.bot_id, order.customer_id, order.id, username);
+    await claimSharedServiceOwnership(env, order.bot_id, order.customer_id, order.id, username, serviceProvider);
     await env.PASARGUARD_DB.prepare(`
       UPDATE sales_orders SET status='delivered',remote_user_id=?,remote_username=?,subscription_url=?,
         remote_status=?,remote_data_limit=?,remote_used_traffic=?,remote_expire=?,remote_online_at=?,remote_last_synced_at=?,
-        error_message=NULL,updated_at=? WHERE id=?
+        service_provider=?,error_message=NULL,updated_at=? WHERE id=?
     `).bind(String(remoteId || ""), username, subscriptionUrl, snapshot.status, snapshot.dataLimit,
-      snapshot.usedTraffic, snapshot.expire, snapshot.onlineAt, snapshot.syncedAt, nowIso(), order.id).run();
+      snapshot.usedTraffic, snapshot.expire, snapshot.onlineAt, snapshot.syncedAt, serviceProvider, nowIso(), order.id).run();
     await env.PASARGUARD_DB.prepare(`
       UPDATE sales_orders SET subscription_url=?,remote_status=?,remote_data_limit=?,remote_used_traffic=?,
         remote_expire=?,remote_online_at=?,remote_last_synced_at=?
-      WHERE bot_id=? AND customer_id=? AND remote_username=? AND status='delivered'
+      WHERE bot_id=? AND customer_id=? AND remote_username=? AND service_provider=? AND status='delivered'
     `).bind(subscriptionUrl, snapshot.status, snapshot.dataLimit, snapshot.usedTraffic, snapshot.expire,
-      snapshot.onlineAt, snapshot.syncedAt, order.bot_id, order.customer_id, username).run();
+      snapshot.onlineAt, snapshot.syncedAt, order.bot_id, order.customer_id, username, serviceProvider).run();
     await salesFinalizePromoForOrder(env, order.id);
     if (order.origin !== "miniapp") {
       await sendSalesServiceDelivery(env, bot, order.customer_telegram_id, {
@@ -12026,19 +12097,27 @@ async function botSalesOrdersView(env, account) {
 }
 
 async function botSalesCatalogView(env, account) {
-  const bot=await getResellerBotForUser(env,account.user.id); if(!bot) throw new Error("ربات پیدا نشد");
+  const bot=await getResellerBotForUser(env,account.user.id); if(!bot) throw new Error('ربات پیدا نشد');
   const [cats,locs]=await Promise.all([
-    env.PASARGUARD_DB.prepare("SELECT * FROM sales_categories WHERE bot_id=? ORDER BY sort_order,created_at LIMIT 15").bind(bot.id).all(),
-    env.PASARGUARD_DB.prepare("SELECT * FROM sales_locations WHERE bot_id=? ORDER BY sort_order,created_at LIMIT 15").bind(bot.id).all()
+    env.PASARGUARD_DB.prepare('SELECT * FROM sales_categories WHERE bot_id=? ORDER BY sort_order,created_at LIMIT 15').bind(bot.id).all(),
+    env.PASARGUARD_DB.prepare('SELECT * FROM sales_locations WHERE bot_id=? ORDER BY sort_order,created_at LIMIT 15').bind(bot.id).all()
   ]);
   const c=(cats.results||[]),l=(locs.results||[]);
-  const text="📂 <b>دسته‌بندی‌ها</b>\n"+(c.map((x,i)=>(x.status==='active'?'🟢':'⚪️')+" "+(i+1)+". "+botEscape((x.emoji||'📁')+' '+x.title)).join('\n')||'ثبت نشده')+
-    "\n\n🌍 <b>لوکیشن‌ها</b>\n"+(l.map((x,i)=>(x.status==='active'?'🟢':'⚪️')+" "+(i+1)+". "+botEscape((x.emoji||'🌍')+' '+x.title)).join('\n')||'ثبت نشده');
-  const buttons=[[{text:"➕ دسته‌بندی",callback_data:"bot:sales:category:new"},{text:"➕ لوکیشن",callback_data:"bot:sales:location:new"}]];
-  c.slice(0,6).forEach((x,i)=>buttons.push([{text:"تغییر وضعیت دسته "+(i+1),callback_data:"bot:sales:category:toggle:"+x.id}]));
-  l.slice(0,6).forEach((x,i)=>buttons.push([{text:"تغییر وضعیت لوکیشن "+(i+1),callback_data:"bot:sales:location:toggle:"+x.id}]));
-  buttons.push([{text:"📦 پلن‌ها",callback_data:"bot:sales:plans"},{text:"↩️ ربات",callback_data:"bot:sales"}]);
-  return {text:"🗂 <b>مدیریت دسته‌بندی و لوکیشن</b>\n━━━━━━━━━━━━━━\n"+text,reply_markup:{inline_keyboard:buttons}};
+  const text='📂 <b>دسته‌بندی‌ها</b>\n'+(c.map((x,i)=>(x.status==='active'?'🟢':'⚪️')+' '+(i+1)+'. '+botEscape((x.emoji||'📁')+' '+x.title)).join('\n')||'ثبت نشده')+
+    '\n\n🌍 <b>لوکیشن‌ها</b>\n'+(l.map((x,i)=>(x.status==='active'?'🟢':'⚪️')+' '+(i+1)+'. '+botEscape((x.emoji||'🌍')+' '+x.title)+' · '+botEscape(serviceProviderLabel(x.backend_provider))).join('\n')||'ثبت نشده');
+  const buttons=[[{text:'➕ دسته‌بندی',callback_data:'bot:sales:category:new'},{text:'➕ لوکیشن',callback_data:'bot:sales:location:new'}]];
+  c.slice(0,6).forEach((x,i)=>buttons.push([
+    {text:'✏️ دسته '+(i+1),callback_data:'bot:sales:category:edit:'+x.id},
+    {text:x.status==='active'?'⏸':'▶️',callback_data:'bot:sales:category:toggle:'+x.id},
+    {text:'🗑',callback_data:'bot:sales:category:delete:'+x.id}
+  ]));
+  l.slice(0,6).forEach((x,i)=>buttons.push([
+    {text:'✏️ لوکیشن '+(i+1),callback_data:'bot:sales:location:edit:'+x.id},
+    {text:x.status==='active'?'⏸':'▶️',callback_data:'bot:sales:location:toggle:'+x.id},
+    {text:'🗑',callback_data:'bot:sales:location:delete:'+x.id}
+  ]));
+  buttons.push([{text:'📦 پلن‌ها',callback_data:'bot:sales:plans'},{text:'↩️ ربات',callback_data:'bot:sales'}]);
+  return {text:'🗂 <b>مدیریت دسته‌بندی و لوکیشن</b>\n━━━━━━━━━━━━━━\n'+text,reply_markup:{inline_keyboard:buttons}};
 }
 
 async function botSalesWalletRequestsView(env,account){
@@ -13629,9 +13708,74 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
   }
   if (data === "bot:sales:location:new") {
     const bot=await getResellerBotForUser(env,account.user.id);if(!bot)throw new Error("ربات پیدا نشد");
-    await botSetSession(env,account.user.telegram_id,"sales_location_title",{botId:bot.id});
-    await botPrompt(env,chatId,"🌍 نام لوکیشن را ارسال کنید.\nمثال: <b>🇩🇪 آلمان</b>");
+    const settings=await getSettings(env);
+    const rows=[[{text:"🛡 PasarGuard",callback_data:"bot:sales:location:provider:pasarguard"}]];
+    if(sharedMarzbanEnabled(settings,env)) rows[0].push({text:"🌐 مرزبان",callback_data:"bot:sales:location:provider:marzban"});
+    rows.push([{text:"لغو",callback_data:"bot:cancel"}]);
+    await botSetSession(env,account.user.telegram_id,"sales_location_provider",{botId:bot.id});
+    await botPrompt(env,chatId,"🔀 <b>پنل مقصد این لوکیشن را انتخاب کنید</b>\n\nهر سفارشی که از این لوکیشن ثبت شود فقط روی پنل انتخاب‌شده ساخته می‌شود.",rows);
     return;
+  }
+  if (data.startsWith("bot:sales:location:provider:")) {
+    const provider=normalizeServiceProvider(data.slice("bot:sales:location:provider:".length));
+    const session=await botGetSession(env,account.user.telegram_id);
+    if(!session||session.state!=="sales_location_provider") throw new Error("فرایند ساخت لوکیشن منقضی شده است");
+    if(provider==="marzban"&&!sharedMarzbanEnabled(await getSettings(env),env)) throw new Error("مرزبان مشترک مرکزی هنوز فعال نشده است");
+    await botSetSession(env,account.user.telegram_id,"sales_location_title",{...session.data,backendProvider:provider});
+    await botPrompt(env,chatId,"🌍 نام لوکیشن را ارسال کنید.\nمثال: <b>🇩🇪 آلمان</b>\nپنل مقصد: <b>"+botEscape(serviceProviderLabel(provider))+"</b>");
+    return;
+  }
+  if (data.startsWith('bot:sales:category:edit:')) {
+    const itemId=data.slice('bot:sales:category:edit:'.length);
+    const item=await env.PASARGUARD_DB.prepare(`SELECT c.* FROM sales_categories c JOIN reseller_bots rb ON rb.id=c.bot_id WHERE c.id=? AND rb.user_id=?`).bind(itemId,account.user.id).first();
+    if(!item)throw new Error('دسته پیدا نشد');
+    await botSetSession(env,account.user.telegram_id,'sales_category_edit_title',{botId:item.bot_id,itemId:item.id});
+    await botPrompt(env,chatId,'✏️ نام جدید دسته‌بندی را ارسال کنید.\nنام فعلی: <b>'+botEscape((item.emoji||'📁')+' '+item.title)+'</b>');return;
+  }
+  if (data.startsWith('bot:sales:category:delok:')) {
+    const itemId=data.slice('bot:sales:category:delok:'.length);
+    const item=await env.PASARGUARD_DB.prepare(`SELECT c.* FROM sales_categories c JOIN reseller_bots rb ON rb.id=c.bot_id WHERE c.id=? AND rb.user_id=?`).bind(itemId,account.user.id).first();
+    if(!item)throw new Error('دسته پیدا نشد');
+    await env.PASARGUARD_DB.batch([
+      env.PASARGUARD_DB.prepare('UPDATE sales_plans SET category_id=NULL,updated_at=? WHERE bot_id=? AND category_id=?').bind(nowIso(),item.bot_id,item.id),
+      env.PASARGUARD_DB.prepare('DELETE FROM sales_categories WHERE id=? AND bot_id=?').bind(item.id,item.bot_id)
+    ]);
+    await botSendOrEdit(env,{account,chatId,messageId},'sales_catalog');return;
+  }
+  if (data.startsWith('bot:sales:category:delete:')) {
+    const itemId=data.slice('bot:sales:category:delete:'.length);
+    const item=await env.PASARGUARD_DB.prepare(`SELECT c.* FROM sales_categories c JOIN reseller_bots rb ON rb.id=c.bot_id WHERE c.id=? AND rb.user_id=?`).bind(itemId,account.user.id).first();
+    if(!item)throw new Error('دسته پیدا نشد');
+    await botPrompt(env,chatId,'⚠️ دسته‌بندی <b>'+botEscape(item.title)+'</b> حذف شود؟\nپلن‌ها بدون دسته باقی می‌مانند.',[[{text:'✅ حذف نهایی',callback_data:'bot:sales:category:delok:'+item.id}],[{text:'انصراف',callback_data:'bot:sales:catalog'}]]);return;
+  }
+  if (data.startsWith('bot:sales:location:edit:')) {
+    const itemId=data.slice('bot:sales:location:edit:'.length);
+    const item=await env.PASARGUARD_DB.prepare(`SELECT l.* FROM sales_locations l JOIN reseller_bots rb ON rb.id=l.bot_id WHERE l.id=? AND rb.user_id=?`).bind(itemId,account.user.id).first();
+    if(!item)throw new Error('لوکیشن پیدا نشد');
+    const settings=await getSettings(env);const rows=[[{text:'🛡 PasarGuard',callback_data:'bot:sales:location:editprovider:pasarguard'}]];
+    if(sharedMarzbanEnabled(settings,env))rows[0].push({text:'🌐 مرزبان',callback_data:'bot:sales:location:editprovider:marzban'});rows.push([{text:'انصراف',callback_data:'bot:sales:catalog'}]);
+    await botSetSession(env,account.user.telegram_id,'sales_location_edit_provider',{botId:item.bot_id,itemId:item.id});
+    await botPrompt(env,chatId,'✏️ پنل مقصد جدید لوکیشن <b>'+botEscape((item.emoji||'🌍')+' '+item.title)+'</b> را انتخاب کنید.\nپنل فعلی: <b>'+botEscape(serviceProviderLabel(item.backend_provider))+'</b>',rows);return;
+  }
+  if (data.startsWith('bot:sales:location:editprovider:')) {
+    const provider=normalizeServiceProvider(data.slice('bot:sales:location:editprovider:'.length));const session=await botGetSession(env,account.user.telegram_id);
+    if(!session||session.state!=='sales_location_edit_provider')throw new Error('فرایند ویرایش لوکیشن منقضی شده است');
+    const item=await env.PASARGUARD_DB.prepare('SELECT * FROM sales_locations WHERE id=? AND bot_id=?').bind(session.data.itemId,session.data.botId).first();if(!item)throw new Error('لوکیشن پیدا نشد');
+    await botSetSession(env,account.user.telegram_id,'sales_location_edit_title',{...session.data,backendProvider:provider});
+    await botPrompt(env,chatId,'✏️ نام جدید لوکیشن را ارسال کنید.\nنام فعلی: <b>'+botEscape((item.emoji||'🌍')+' '+item.title)+'</b>\nپنل مقصد: <b>'+botEscape(serviceProviderLabel(provider))+'</b>');return;
+  }
+  if (data.startsWith('bot:sales:location:delok:')) {
+    const itemId=data.slice('bot:sales:location:delok:'.length);
+    const item=await env.PASARGUARD_DB.prepare(`SELECT l.* FROM sales_locations l JOIN reseller_bots rb ON rb.id=l.bot_id WHERE l.id=? AND rb.user_id=?`).bind(itemId,account.user.id).first();if(!item)throw new Error('لوکیشن پیدا نشد');
+    await env.PASARGUARD_DB.batch([
+      env.PASARGUARD_DB.prepare("UPDATE sales_plans SET status='inactive',location_id=NULL,updated_at=? WHERE bot_id=? AND location_id=?").bind(nowIso(),item.bot_id,item.id),
+      env.PASARGUARD_DB.prepare('DELETE FROM sales_locations WHERE id=? AND bot_id=?').bind(item.id,item.bot_id)
+    ]);await botSendOrEdit(env,{account,chatId,messageId},'sales_catalog');return;
+  }
+  if (data.startsWith('bot:sales:location:delete:')) {
+    const itemId=data.slice('bot:sales:location:delete:'.length);
+    const item=await env.PASARGUARD_DB.prepare(`SELECT l.* FROM sales_locations l JOIN reseller_bots rb ON rb.id=l.bot_id WHERE l.id=? AND rb.user_id=?`).bind(itemId,account.user.id).first();if(!item)throw new Error('لوکیشن پیدا نشد');
+    await botPrompt(env,chatId,'⚠️ لوکیشن <b>'+botEscape(item.title)+'</b> حذف شود؟\nسرویس‌های قبلی پنل اصلی خود را حفظ می‌کنند؛ پلن‌های متصل برای جلوگیری از فروش اشتباه غیرفعال می‌شوند.',[[{text:'✅ حذف نهایی',callback_data:'bot:sales:location:delok:'+item.id}],[{text:'انصراف',callback_data:'bot:sales:catalog'}]]);return;
   }
   if (data.startsWith("bot:sales:category:toggle:")) {
     const itemId=data.slice("bot:sales:category:toggle:".length);
@@ -14238,6 +14382,24 @@ async function botHandleSessionMessage(env, account, message, session, origin, c
     await botPrompt(env, chatId, "🔐 تنظیمات ربات نماینده فقط داخل ربات خودش قابل مدیریت است. فرمان <code>/manage</code> را در ربات نماینده ارسال کنید.", rows);
     return true;
   }
+  if (session.state === 'sales_category_edit_title') {
+    const raw=cleanText(text,100);if(raw.length<2)throw new Error('نام دسته‌بندی کوتاه است');const match=raw.match(/^(\p{Extended_Pictographic}|\p{Regional_Indicator}{2})\s*(.*)$/u);const emoji=match?.[1]||'📁';const title=cleanText(match?.[2]||raw,90);
+    await env.PASARGUARD_DB.prepare('UPDATE sales_categories SET title=?,emoji=?,updated_at=? WHERE id=? AND bot_id=?').bind(title,emoji,nowIso(),session.data.itemId,session.data.botId).run();
+    await botClearSession(env,account.user.telegram_id);await botSendOrEdit(env,{account,chatId},'sales_catalog');return true;
+  }
+  if (session.state === 'sales_location_edit_title') {
+    const raw=cleanText(text,100);if(raw.length<2)throw new Error('نام لوکیشن کوتاه است');const match=raw.match(/^(\p{Extended_Pictographic}|\p{Regional_Indicator}{2})\s*(.*)$/u);const emoji=match?.[1]||'🌍';const title=cleanText(match?.[2]||raw,90);const provider=normalizeServiceProvider(session.data.backendProvider);
+    if(provider==='marzban'){
+      await env.PASARGUARD_DB.prepare("UPDATE sales_locations SET title=?,emoji=?,backend_provider='marzban',group_ids_json='[]',updated_at=? WHERE id=? AND bot_id=?").bind(title,emoji,nowIso(),session.data.itemId,session.data.botId).run();
+      await botClearSession(env,account.user.telegram_id);await botSendOrEdit(env,{account,chatId},'sales_catalog');return true;
+    }
+    await botSetSession(env,account.user.telegram_id,'sales_location_edit_groups',{...session.data,title,emoji});await botPrompt(env,chatId,'شناسه Groupهای PasarGuard را با کاما ارسال کنید یا برای همه گروه‌های فعال عدد <code>0</code> را بفرستید.');return true;
+  }
+  if (session.state === 'sales_location_edit_groups') {
+    const groups=text==='0'?[]:text.split(/[,،\s]+/).map(Number).filter(Number.isInteger).filter(x=>x>0);if(text!=='0'&&!groups.length)throw new Error('شناسه گروه معتبر یا عدد ۰ وارد کنید');
+    await env.PASARGUARD_DB.prepare("UPDATE sales_locations SET title=?,emoji=?,backend_provider='pasarguard',group_ids_json=?,updated_at=? WHERE id=? AND bot_id=?").bind(session.data.title,session.data.emoji,JSON.stringify(groups),nowIso(),session.data.itemId,session.data.botId).run();
+    await botClearSession(env,account.user.telegram_id);await botSendOrEdit(env,{account,chatId},'sales_catalog');return true;
+  }
   if (session.state === "sales_category_title") {
     const raw=cleanText(text,100);if(raw.length<2)throw new Error("نام دسته‌بندی کوتاه است");
     const match=raw.match(/^(\p{Extended_Pictographic}|\p{Regional_Indicator}{2})\s*(.*)$/u);const emoji=match?.[1]||"📁";const title=cleanText(match?.[2]||raw,90);
@@ -14247,12 +14409,17 @@ async function botHandleSessionMessage(env, account, message, session, origin, c
   if (session.state === "sales_location_title") {
     const raw=cleanText(text,100);if(raw.length<2)throw new Error("نام لوکیشن کوتاه است");
     const match=raw.match(/^(\p{Extended_Pictographic}|\p{Regional_Indicator}{2})\s*(.*)$/u);const emoji=match?.[1]||"🌍";const title=cleanText(match?.[2]||raw,90);
-    await botSetSession(env,account.user.telegram_id,"sales_location_groups",{...session.data,title,emoji});
-    await botPrompt(env,chatId,"🔗 شناسه Groupهای پنل برای این لوکیشن را با ویرگول ارسال کنید.\nمثال: <code>1,2,3</code>\nبرای انتخاب خودکار همه گروه‌های فعال پنل، عدد <b>0</b> بفرستید.");return true;
+    const provider=normalizeServiceProvider(session.data.backendProvider);
+    if(provider==="marzban"){
+      await env.PASARGUARD_DB.prepare(`INSERT INTO sales_locations(id,bot_id,title,emoji,description,backend_provider,group_ids_json,status,sort_order,created_at,updated_at) VALUES(?,?,?,?,NULL,?,'[]','active',0,?,?)`).bind(id("loc"),session.data.botId,title,emoji,provider,nowIso(),nowIso()).run();
+      await botClearSession(env,account.user.telegram_id);await botSendOrEdit(env,{account,chatId},"sales_catalog");return true;
+    }
+    await botSetSession(env,account.user.telegram_id,"sales_location_groups",{...session.data,title,emoji,backendProvider:provider});
+    await botPrompt(env,chatId,"🔗 شناسه Groupهای PasarGuard را با ویرگول ارسال کنید.\nمثال: <code>1,2,3</code>\nبرای انتخاب خودکار همه گروه‌های فعال، عدد <b>0</b> بفرستید.");return true;
   }
   if (session.state === "sales_location_groups") {
     const groups=text==='0'?[]:text.split(/[,،\s]+/).map(Number).filter(Number.isInteger);if(text!=='0'&&!groups.length)throw new Error("شناسه گروه معتبر یا عدد ۰ برای همه گروه‌های فعال وارد کنید");
-    await env.PASARGUARD_DB.prepare(`INSERT INTO sales_locations(id,bot_id,title,emoji,description,group_ids_json,status,sort_order,created_at,updated_at) VALUES(?,?,?,?,NULL,?,'active',0,?,?)`).bind(id("loc"),session.data.botId,session.data.title,session.data.emoji,JSON.stringify(groups),nowIso(),nowIso()).run();
+    await env.PASARGUARD_DB.prepare(`INSERT INTO sales_locations(id,bot_id,title,emoji,description,backend_provider,group_ids_json,status,sort_order,created_at,updated_at) VALUES(?,?,?,?,NULL,?,?,'active',0,?,?)`).bind(id("loc"),session.data.botId,session.data.title,session.data.emoji,normalizeServiceProvider(session.data.backendProvider),JSON.stringify(groups),nowIso(),nowIso()).run();
     await botClearSession(env,account.user.telegram_id);await botSendOrEdit(env,{account,chatId},"sales_catalog");return true;
   }
   if (session.state === "sales_text_edit") {

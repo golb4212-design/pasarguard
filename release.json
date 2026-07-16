@@ -1,55 +1,53 @@
 {
-  "version": "3.3.25",
-  "release_id": "3.3.25-20260716-reseller-control-bytes-render-login-fix",
-  "architecture": "fully-split-three-worker-shared-marzban-reseller-control-render-safe",
+  "version": "3.3.26",
+  "release_id": "3.3.26-dual-panel-location-provider-catalog-edit-delete",
+  "architecture": "fully-split-three-worker-dual-pasarguard-marzban-per-location",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
     "processor": "processor/worker.js",
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
-  "roles": {
-    "core": "central bot, D1 authority, Marzban credential isolation, inbound tag resolution, ownership ledger and update controller",
-    "edge": "central web dashboard plus reseller bots and shared Marzban service lifecycle",
-    "processor": "scheduled shared Marzban usage polling, automatic debits, health, backups and background automation"
-  },
   "features": [
-    "fixes the reseller management runtime ReferenceError: bytes is not defined after successful login",
-    "adds a browser-side byte formatter for service usage, quota and remaining traffic",
-    "separates credential failures from post-login bootstrap or rendering failures",
-    "keeps shared Marzban, PasarGuard management identity and all per-reseller billing features unchanged",
+    "simultaneous sales from PasarGuard and shared Marzban",
+    "per-location destination panel selection during create and edit",
+    "persistent service_provider on each order and trial so renew, volume, sync, revoke and delete stay on the original panel",
+    "category and location edit/delete in reseller bot and web panel",
+    "safe location delete deactivates attached plans while existing delivered services retain their original provider",
+    "provider-aware scheduled notifications, auto-renew, health checks and usage synchronization",
     "README files are excluded"
   ],
   "deployment": {
-    "automatic_provisioning": "upload the ZIP through the central bot",
-    "db_schema_revision": "3.3.25",
-    "marzban_url_input": "accepts https://host or https://host/dashboard and stores normalized API base",
-    "manager_dashboard": "normalized API base + /dashboard/; visible only in central management interfaces",
-    "template_input": "exact username of an existing Marzban account whose proxies/inbounds should be used as the service template",
-    "management_identity": "PasarGuard agency fields remain attached to each direct reseller bot even when Marzban is the active service backend"
+    "automatic_provisioning": "upload ZIP through the central bot",
+    "db_schema_revision": "3.3.26",
+    "default_existing_locations": "pasarguard"
   },
   "validation": {
-    "worker_node_syntax": "passed for core, edge and processor",
-    "embedded_browser_scripts": "all script blocks extracted and passed node --check",
-    "reseller_service_card_runtime": "service card rendered with zero, megabyte and gigabyte usage values without ReferenceError",
-    "login_error_isolation": "successful authentication is no longer caught as a credential error when bootstrap/render follows",
-    "readme_excluded": true,
-    "live_pasarguard_login": "not run because production credentials were not provided"
+    "worker_syntax": "passed: core, edge, processor (node --check)",
+    "embedded_panel_scripts": "passed: 10/10 scripts (node --check)",
+    "schema": "passed: SCHEMA_SQL executed in SQLite; backend_provider/service_provider columns present",
+    "catalog_operations": "passed: category edit/delete and location edit/safe-delete paths present in central bot, reseller bot and web panel",
+    "provider_persistence": "passed: service_provider is stored on each order/trial and used by create, renew, volume, sync, revoke and delete paths",
+    "telegram_callback_limit": "passed: all new confirm callbacks <= 64 bytes with 36-character IDs",
+    "archive_readme": "passed: README/Markdown files excluded",
+    "live_api_calls": "not run: production PasarGuard and Marzban credentials unavailable",
+    "provider_hardening": "passed: imported services, auto-renew, health checks and Marzban snapshot updates are provider-scoped",
+    "safe_location_delete": "passed: attached plans become inactive before location removal",
+    "dual_usage_sync": "passed: PasarGuard and Marzban usage paths execute independently without global backend override"
   },
   "limitations": [
-    "live validation still requires production PasarGuard credentials and the deployed D1 data",
-    "the Edge worker must actually be deployed because this fix is in the reseller management web runtime"
+    "live Marzban and PasarGuard API calls require production credentials"
   ],
   "sha256": {
-    "core/worker.js": "bae4f4c6f80dc1e8ca1a0ab4b70a5bd749172f354c319dd6b834643dc9c28540",
-    "edge/worker.js": "236f8dff526956791c0579d454c3af6ea4e030eaba6c887aecdaf23a93bf5736",
-    "processor/worker.js": "27979896bb718b70b6ae93084991e6d79fe3c6a31ceca4a11fec08d325727be6",
+    "core/worker.js": "e023eeea634f86f930fc34e72baf1dace26b6922f5b1eebda42c3aa6a3878136",
+    "edge/worker.js": "8ccb482f0ff4290a55ef4dd67676e2b800b49f00233a8b6e466498691b804eb9",
+    "processor/worker.js": "bcb4a3839b34085fccb57b150cf2196675579f6c386d312fee21acfd24cdaad4",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "bae4f4c6f80dc1e8ca1a0ab4b70a5bd749172f354c319dd6b834643dc9c28540",
-    "edge/worker.js": "236f8dff526956791c0579d454c3af6ea4e030eaba6c887aecdaf23a93bf5736",
-    "processor/worker.js": "27979896bb718b70b6ae93084991e6d79fe3c6a31ceca4a11fec08d325727be6",
+    "core/worker.js": "e023eeea634f86f930fc34e72baf1dace26b6922f5b1eebda42c3aa6a3878136",
+    "edge/worker.js": "8ccb482f0ff4290a55ef4dd67676e2b800b49f00233a8b6e466498691b804eb9",
+    "processor/worker.js": "bcb4a3839b34085fccb57b150cf2196675579f6c386d312fee21acfd24cdaad4",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }
