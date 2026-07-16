@@ -1,7 +1,7 @@
 {
-  "version": "3.3.20",
-  "release_id": "3.3.20-20260716-backup-document-topic-delivery",
-  "architecture": "fully-split-three-worker-real-backup-document-delivery",
+  "version": "3.3.21",
+  "release_id": "3.3.21-20260716-shared-marzban-per-reseller-usage-billing",
+  "architecture": "fully-split-three-worker-shared-marzban-central-credentials-per-reseller-ledger",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -9,15 +9,15 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "roles": {
-    "core": "central bot, D1 authority, schema migration, update controller, payment callbacks, report outbox and Durable Object live usage engine",
-    "edge": "reseller bots, customer order/service UI, reseller web dashboard and PasarGuard service lifecycle",
-    "processor": "advanced schedules, auto-renewal, service health, reseller tiers, backups, campaigns and background reports"
+    "core": "central bot, D1 authority, schema migration, shared Marzban configuration, ownership ledger, update controller and financial reconciliation",
+    "edge": "reseller bots, customer sales/service UI, shared Marzban service lifecycle and reseller management",
+    "processor": "scheduled shared Marzban usage polling, automatic debits, service health, backups and background automation"
   },
   "bindings": {
     "core": [
       "PASARGUARD_DB",
       "EDGE_WORKER",
-      "PROCESSOR_WORKER (optional for direct Cloudflare deployment fallback)",
+      "PROCESSOR_WORKER (optional fallback)",
       "LIVE_USAGE_COORDINATOR -> class LiveUsageCoordinator"
     ],
     "edge": [
@@ -32,61 +32,71 @@
     ]
   },
   "features": [
-    "sends the actual reseller backup JSON file with Telegram sendDocument instead of only a text notification",
-    "delivers manual backups created by Core or Edge and automatic backups created by Processor",
-    "sends to the configured backups topic in both the central report forum and the reseller report forum",
-    "automatically recreates a missing, closed or invalid backup topic and retries document delivery once",
-    "records per-destination delivery outcome in the backup report without marking a successfully stored D1 snapshot as failed",
-    "keeps all previous D1 column-limit, secure token rotation, active-group defaults and error-center fixes",
+    "one central Marzban administrator account serves every reseller bot without exposing its username, password or bearer token to resellers",
+    "central admin UI validates the Marzban login before enabling the shared backend",
+    "every created or imported Marzban username is mapped to exactly one reseller bot in D1",
+    "new, renewal, volume, revoke-subscription and delete operations are routed through the shared Marzban backend",
+    "usage is polled per remote username and only the positive byte delta is billed to the owning reseller",
+    "free-trial traffic is included in reseller consumption billing",
+    "usage reset is handled as a new billing cycle and never creates a negative credit",
+    "wallet debit, master margin credit and usage events are idempotent under concurrent, repeated or replayed runs",
+    "existing services receive a first-sync baseline when shared Marzban is enabled to avoid retroactive charging",
+    "bots with delivered services continue to be billed even when the bot is suspended or its license is inactive",
+    "shared Marzban credentials remain central-only and are removed from public settings and audit payloads",
+    "all previous backup delivery, D1 compatibility, token rotation, active-group and error-center fixes remain included",
     "README files are excluded"
   ],
   "deployment": {
-    "automatic_provisioning": "upload the ZIP through the central bot; it commits to GitHub and pins deployment to that exact commit",
-    "recovery": "unfinished stages resume on Cron and eligible panel/admin requests",
-    "db_schema_revision": "3.3.16 (unchanged; query-only compatibility fix)",
-    "error_center_schema": "partial unique index idx_error_center_open_key on scope,bot_id,error_code where status=open",
-    "staged_compatibility": "Processor uses INSERT OR IGNORE plus conditional UPDATE until Core migration is guaranteed",
-    "default_group_assignment": "explicit location group IDs override; otherwise all active/assignable PasarGuard groups are attached",
-    "reseller_token_rotation": "fresh webhook secret, Telegram validation, D1 identity switch, cache invalidation and old-webhook cleanup",
-    "d1_result_column_fix": "all reseller_bots JOIN projections are explicit and remain below the D1 100-column limit",
-    "backup_file_delivery": "real JSON document via Telegram sendDocument to central and reseller backup topics",
-    "backup_topic_recovery": "invalid or closed backup topics are recreated and document upload is retried once"
+    "automatic_provisioning": "upload the ZIP through the central bot; deployment remains pinned to the exact GitHub commit produced by the updater",
+    "db_schema_revision": "3.3.21",
+    "shared_backend_tables": [
+      "shared_backend_accounts",
+      "shared_backend_usage_events",
+      "shared_service_ownership"
+    ],
+    "staged_compatibility": "Core, Edge and Processor self-create shared tables/indexes and add missing trial-usage columns during staged deployment",
+    "credential_scope": "Marzban URL/admin username/admin password are configured only in central settings or Worker secrets",
+    "billing_scope": "one account per reseller bot, one ownership record per panel username, byte-delta accounting with integer remainder preservation",
+    "debt_policy": "optional automatic reseller suspension when usage debt remains after wallet collection",
+    "master_margin": "child reseller price can include the configured upstream markup; collected margin is credited to the parent wallet once per event"
   },
   "validation": {
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
+    "clean_schema_execution": "passed; 59 tables",
     "reseller_bots_schema_columns_in_clean_install": 98,
     "d1_max_columns_assumed": 100,
-    "unsafe_reseller_star_join_scan": "passed; zero rb.* JOIN projections remain",
-    "token_change_central_projection": "12 columns",
-    "token_change_downline_projection": "12 columns",
-    "report_delivery_projection": "12 to 14 columns",
-    "version_constants": "passed",
-    "release_manifest_hashes": "recalculated",
-    "live_cloudflare_deployment": "not run without production credentials",
-    "backup_document_helper_core": "added",
-    "backup_document_helper_edge": "added",
-    "backup_document_helper_processor": "added",
-    "manual_backup_paths": "Core and Edge",
-    "automatic_backup_path": "Processor",
-    "live_telegram_delivery": "not run without production bot tokens and group access",
-    "telegram_multipart_mock": "passed: sendDocument endpoint, chat_id, message_thread_id, filename and JSON bytes verified",
-    "readme_scan": "passed; no README files"
+    "shared_tables_present": "passed",
+    "old_sales_trials_schema_migration": "passed",
+    "sales_order_and_free_trial_usage_union": "passed",
+    "same_processing_token_replay": "passed; wallet and totals unchanged",
+    "different_processing_token_retry": "passed; wallet and totals unchanged",
+    "wallet_event_unique_index": "passed",
+    "embedded_central_admin_javascript": "passed",
+    "central_secret_exposure_static_scan": "passed",
+    "direct_pasarguard_service_call_scan": "passed; service lifecycle uses provider dispatcher",
+    "wrong_relative_subscription_base_scan": "passed",
+    "readme_scan": "passed; no README files",
+    "live_marzban_connection": "not run without production panel credentials",
+    "live_cloudflare_deployment": "not run without production Cloudflare credentials",
+    "live_wallet_debit": "not run against production D1"
   },
   "limitations": [
-    "production Cloudflare, Telegram, GitHub and PasarGuard calls were not executed without account credentials"
+    "Marzban Proxies and Inbounds JSON must match the configuration available on the connected Marzban installation",
+    "services created directly in Marzban outside the bot are not billed to a reseller until they are imported or assigned through the bot",
+    "production API compatibility depends on the Marzban version and permissions of the configured shared admin account"
   ],
   "sha256": {
-    "core": "7b3e8a14ee7e0ff3add1ad77badabedcd646cf5de86236b6d719c07a4431267b",
-    "edge": "a4a46126565d95091f48c8b5bcf104b4df6e4c2caa7de6491697880b79254e0b",
-    "processor": "afb6ae63cc7625e05184534af8335ab24375b1100945bcb6d9d97c81e966714f",
+    "core": "fd5021e0312dea289a3f6a6e3b9e7af266eede19f8f1cbd04b0d6353e6cbad69",
+    "edge": "f90c68d0356181118f6c7175e025d8f1fe60c91de2b8d74a4d324b9974526f15",
+    "processor": "200dbdce64f05d464c2d09eaf96cf773077b3b314c77ed25d1bed5d9cf206dbc",
     "durable_object_config": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "7b3e8a14ee7e0ff3add1ad77badabedcd646cf5de86236b6d719c07a4431267b",
-    "edge/worker.js": "a4a46126565d95091f48c8b5bcf104b4df6e4c2caa7de6491697880b79254e0b",
-    "processor/worker.js": "afb6ae63cc7625e05184534af8335ab24375b1100945bcb6d9d97c81e966714f",
+    "core/worker.js": "fd5021e0312dea289a3f6a6e3b9e7af266eede19f8f1cbd04b0d6353e6cbad69",
+    "edge/worker.js": "f90c68d0356181118f6c7175e025d8f1fe60c91de2b8d74a4d324b9974526f15",
+    "processor/worker.js": "200dbdce64f05d464c2d09eaf96cf773077b3b314c77ed25d1bed5d9cf206dbc",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }
