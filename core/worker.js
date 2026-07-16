@@ -1,15 +1,26 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.31
+ * Version: 3.3.32
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.31';
+const APP_VERSION = '3.3.32';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.32": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🗄", text: "مهاجرت اجباری ستون location_id دسته‌بندی‌ها روی دیتابیس‌های قدیمی" },
+      { emoji: "🛡", text: "اعتبارسنجی واقعی ساختار کاتالوگ حتی در صورت وجود نشانگر اشتباه نسخه دیتابیس" },
+      { emoji: "🌍", text: "حذف شمارنده داخلی پلن از کنار نام لوکیشن‌های خرید" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "✅", text: "رفع no such column: c.location_id هنگام انتخاب لوکیشن" },
+      { emoji: "🧹", text: "نمایش نام تمیز لوکیشن بدون اعداد داخلی داخل پرانتز" }
+    ])
+  }),
   "3.3.31": Object.freeze({
     central: Object.freeze([
       { emoji: "⌨️", text: "سازگاری کامل مسیرهای Reply Keyboard با ارسال پیام جدید به‌جای ویرایش پیام کاربر" },
@@ -501,7 +512,7 @@ let errorCenterSchemaPromise = null;
 
 // Persistent schema marker: avoids replaying the full D1 migration sweep whenever
 // Cloudflare starts a fresh isolate after an idle period.
-const DB_SCHEMA_REVISION = "3.3.29";
+const DB_SCHEMA_REVISION = "3.3.32-location-category-column";
 
 let settingsCache = null;
 
@@ -2159,8 +2170,15 @@ async function ensureDbInternal(env) {
         )
       `).first();
       if (Number(criticalTables?.c || 0) === 14) {
-        schemaReady = true;
-        return;
+        // Do not trust only the revision marker. Some 3.3.30/3.3.31 installs
+        // kept the older 3.3.29 marker and skipped the category-to-location
+        // migration, which later caused: no such column: c.location_id.
+        const categoryColumns = await env.PASARGUARD_DB.prepare("PRAGMA table_info(sales_categories)").all();
+        const hasCategoryLocation = (categoryColumns.results || []).some(row => String(row.name) === "location_id");
+        if (hasCategoryLocation) {
+          schemaReady = true;
+          return;
+        }
       }
       // The revision marker may have been written by an incomplete/older package.
       // Continue through the idempotent schema bootstrap to self-heal missing tables.

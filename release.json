@@ -1,6 +1,6 @@
 {
-  "version": "3.3.31",
-  "release_id": "3.3.31-reply-keyboard-message-edit-fallback",
+  "version": "3.3.32",
+  "release_id": "3.3.32-location-column-migration-clean-labels",
   "architecture": "fully-split-three-worker-dual-panel-cascading-ledger-native-reply-keyboard",
   "files": {
     "core": "core/worker.js",
@@ -9,45 +9,45 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "reply-keyboard selections never require editing a user message",
-    "Telegram message can't be edited automatically falls back to a fresh bot message",
-    "customer purchase, plan selection, payment and owner menus keep native reply keyboards",
-    "location-scoped catalog, all active locations and cascading billing from 3.3.30 are preserved",
+    "sales_categories.location_id is repaired before location-scoped catalog queries",
+    "database schema revision is bumped so legacy D1 databases cannot skip the migration",
+    "Edge can self-heal the missing column during staged deployments even before the new Core is active",
+    "customer-facing location buttons no longer show internal plan counts",
+    "all previous dual-panel, native keyboard and cascading billing capabilities are preserved",
     "README files are excluded"
   ],
   "deployment": {
     "automatic_provisioning": "upload ZIP through the central bot",
-    "db_schema_revision": "3.3.31-no-schema-change"
+    "db_schema_revision": "3.3.32-location-category-column"
   },
   "validation": {
     "worker_syntax": "passed: core, edge, processor",
     "embedded_browser_scripts": "passed: 10 scripts",
-    "reply_keyboard_edit_fallback": "passed: Telegram message can't be edited and message to edit not found both fall back to sendMessage",
-    "fallback_payload": "passed: original step text, parse mode, protection flag and native keyboard are preserved; message_id is removed",
-    "raw_error_leak": "passed: edit failure is handled before the customer callback error response",
-    "live_api": "not run; requires a real Telegram bot token"
+    "legacy_schema_migration": "passed: missing sales_categories.location_id was added and shared legacy category split safely",
+    "location_button_labels": "passed: internal plans_count removed from customer-facing location labels",
+    "live_api": "not run; requires real D1, Telegram and panel credentials"
   },
   "limitations": [
-    "Old Telegram messages already containing inline keyboards are not deleted; all new interactions use the updated native-keyboard flow."
+    "Live integration was not executed because real credentials and production D1 are unavailable in this environment."
   ],
-  "title": "رفع خطای ویرایش پیام در منوهای معمولی تلگرام",
-  "summary": "انتخاب پلن و سایر دکمه‌های Reply Keyboard دیگر تلاش نمی‌کنند پیام کاربر را ویرایش کنند؛ پیام غیرقابل‌ویرایش به‌صورت خودکار با یک پیام تازه از ربات جایگزین می‌شود.",
+  "title": "رفع مهاجرت کاتالوگ لوکیشن و حذف اعداد کنار لوکیشن",
+  "summary": "ستون location_id روی دیتابیس‌های قدیمی به‌صورت اجباری و دفاعی ساخته می‌شود و نام لوکیشن‌های خرید بدون شمارنده داخلی نمایش داده می‌شود.",
   "changes": [
-    "رفع Bad Request: message can't be edited هنگام انتخاب پلن و روش پرداخت.",
-    "افزودن fallback عمومی برای editMessageText و editMessageCaption در Core و Edge.",
-    "حفظ متن کامل مرحله و کیبورد معمولی در پیام جایگزین، بدون نمایش خطای خام تلگرام به کاربر.",
-    "عدم تغییر در دیتابیس، سفارش‌ها، پلن‌ها و حسابداری پلکانی."
+    "رفع D1_ERROR: no such column: c.location_id هنگام انتخاب لوکیشن.",
+    "افزایش نسخه ساختار دیتابیس و بررسی مستقیم PRAGMA قبل از اعتماد به schema marker.",
+    "افزودن self-heal در Edge برای ساخت ستون location_id در Deploy مرحله‌ای.",
+    "حذف تعداد پلن از کنار نام لوکیشن در کیبورد خرید."
   ],
   "sha256": {
-    "core/worker.js": "e0a59366e0177b8613273dc96d06aafc9554c075c05db5facd90ee68f0864938",
-    "edge/worker.js": "0cbfcb665215121c93493f34872659e9fa9e40591c21fc12546ec0d9a00a5b0b",
-    "processor/worker.js": "30c9d50819753b7a9291effa5e36222b210ce849f521fd1f038038086e08ca38",
+    "core/worker.js": "e6dbc211f5c40384e8cbb2da2f8781650a0f8cfb239b45d7b047862c4ef3959d",
+    "edge/worker.js": "252bf8d8f69e968929e779b4c57af73a7787f5da521ade412b3523a24316a7bf",
+    "processor/worker.js": "132d8c87dc24c6ed25dac1d8ef3720d4111bd46a07763dc8edd883d7a1ab4589",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "e0a59366e0177b8613273dc96d06aafc9554c075c05db5facd90ee68f0864938",
-    "edge/worker.js": "0cbfcb665215121c93493f34872659e9fa9e40591c21fc12546ec0d9a00a5b0b",
-    "processor/worker.js": "30c9d50819753b7a9291effa5e36222b210ce849f521fd1f038038086e08ca38",
+    "core/worker.js": "e6dbc211f5c40384e8cbb2da2f8781650a0f8cfb239b45d7b047862c4ef3959d",
+    "edge/worker.js": "252bf8d8f69e968929e779b4c57af73a7787f5da521ade412b3523a24316a7bf",
+    "processor/worker.js": "132d8c87dc24c6ed25dac1d8ef3720d4111bd46a07763dc8edd883d7a1ab4589",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }
