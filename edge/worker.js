@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.26
+ * Version: 3.3.27
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = '3.3.26';
+const APP_VERSION = '3.3.27';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -2212,7 +2212,8 @@ async function replaceResellerBotToken(env, bot, rawToken, options = {}) {
     bot_name: cleanText(me.first_name || me.username, 120),
     webhook_secret: webhookSecret,
     bot_version: RESELLER_BOT_VERSION,
-    miniapp_enabled: 1
+    miniapp_enabled: 1,
+    __cleanup_legacy_keyboard: true
   };
 
   // The new bot receives a fresh secret before the database switch. Until the DB update,
@@ -2269,49 +2270,73 @@ async function configureResellerBot(env, bot, origin = "") {
     allowed_updates: ["message", "callback_query"],
     drop_pending_updates: false
   });
-  try {
-    await telegramApiWithToken(token, "setMyCommands", {
-      scope: { type: "all_group_chats" },
-      commands: [
-        { command: "setup_reports", description: "ساخت موضوع‌های گروه گزارش این ربات" },
-        { command: "reports_status", description: "نمایش وضعیت گروه گزارش" },
-        { command: "test_reports", description: "ارسال گزارش آزمایشی فوری" },
-        { command: "test_all_topics", description: "آزمایش همه Topicهای گزارش" },
-        { command: "flush_reports", description: "پردازش صف گزارش‌ها" },
-        { command: "reset_reports", description: "بازسازی موضوع‌های گزارش" },
-        { command: "disable_reports", description: "توقف ارسال گزارش به گروه" }
-      ]
-    });
-  } catch (_) {}
 
-  const menuButton = {
-    type: "web_app",
-    text: "📱 مینی‌اپ",
-    web_app: { url: miniAppUrl }
-  };
-  await telegramApiWithToken(token, "setChatMenuButton", { menu_button: menuButton });
-  if (bot.owner_telegram_id) {
-    try {
-      await telegramApiWithToken(token, "setChatMenuButton", {
-        chat_id: Number(bot.owner_telegram_id),
-        menu_button: menuButton
-      });
-    } catch (_) {}
-  }
-
-  const commandScopes = [
+  const ownerChatId = String(bot.owner_telegram_id || "").trim();
+  const scopes = [
     { type: "default" },
     { type: "all_private_chats" },
     { type: "all_group_chats" },
     { type: "all_chat_administrators" }
   ];
-  if (bot.owner_telegram_id) {
-    commandScopes.push({ type: "chat", chat_id: Number(bot.owner_telegram_id) });
+  if (/^\d{5,20}$/.test(ownerChatId)) scopes.push({ type: "chat", chat_id: Number(ownerChatId) });
+  for (const scope of scopes) {
+    for (const languageCode of ["", "fa", "en", "ar"]) {
+      const payload = languageCode ? { scope, language_code: languageCode } : { scope };
+      try { await telegramApiWithToken(token, "deleteMyCommands", payload); } catch (_) {}
+    }
   }
-  for (const scope of commandScopes) {
-    try { await telegramApiWithToken(token, "deleteMyCommands", { scope }); } catch (_) {}
+
+  const customerCommands = [
+    { command: "start", description: "نمایش منوی اصلی" },
+    { command: "plans", description: "مشاهده و خرید پلن‌ها" },
+    { command: "orders", description: "سرویس‌ها و سفارش‌های من" },
+    { command: "renew", description: "تمدید یا افزایش حجم" },
+    { command: "wallet", description: "کیف پول و شارژ حساب" },
+    { command: "account", description: "حساب کاربری" },
+    { command: "support", description: "پشتیبانی" }
+  ];
+  const ownerCommands = [
+    { command: "start", description: "نمایش منوی ربات" },
+    { command: "manage", description: "مدیریت کامل ربات" },
+    ...(resellerBotCanCreateDownline(bot) ? [{ command: "newbot", description: "ساخت ربات زیرمجموعه" }] : []),
+    { command: "plans", description: "مدیریت پلن‌ها" },
+    { command: "orders", description: "مدیریت سفارش‌ها" },
+    { command: "broadcast", description: "ارسال همگانی" },
+    { command: "cancel", description: "لغو عملیات جاری" }
+  ];
+  const reportCommands = [
+    { command: "setup_reports", description: "ساخت موضوع‌های گروه گزارش این ربات" },
+    { command: "reports_status", description: "نمایش وضعیت گروه گزارش" },
+    { command: "test_reports", description: "ارسال گزارش آزمایشی فوری" },
+    { command: "test_all_topics", description: "آزمایش همه Topicهای گزارش" },
+    { command: "flush_reports", description: "پردازش صف گزارش‌ها" },
+    { command: "reset_reports", description: "بازسازی موضوع‌های گزارش" },
+    { command: "disable_reports", description: "توقف ارسال گزارش به گروه" }
+  ];
+  try { await telegramApiWithToken(token, "setMyCommands", { scope: { type: "default" }, commands: customerCommands }); } catch (_) {}
+  try { await telegramApiWithToken(token, "setMyCommands", { scope: { type: "all_private_chats" }, commands: customerCommands }); } catch (_) {}
+  try { await telegramApiWithToken(token, "setMyCommands", { scope: { type: "all_group_chats" }, commands: reportCommands }); } catch (_) {}
+  try { await telegramApiWithToken(token, "setMyCommands", { scope: { type: "all_chat_administrators" }, commands: reportCommands }); } catch (_) {}
+  if (/^\d{5,20}$/.test(ownerChatId)) {
+    try { await telegramApiWithToken(token, "setMyCommands", { scope: { type: "chat", chat_id: Number(ownerChatId) }, commands: ownerCommands }); } catch (_) {}
   }
-  // Telegram Bio and Description are configured manually by the bot owner.
+
+  const menuButton = { type: "web_app", text: "📱 مینی‌اپ", web_app: { url: miniAppUrl } };
+  await telegramApiWithToken(token, "setChatMenuButton", { menu_button: menuButton });
+  if (/^\d{5,20}$/.test(ownerChatId)) {
+    try { await telegramApiWithToken(token, "setChatMenuButton", { chat_id: Number(ownerChatId), menu_button: menuButton }); } catch (_) {}
+  }
+
+  const cleanupLegacyKeyboard = bot.__cleanup_legacy_keyboard === true || String(bot.bot_version || "") !== RESELLER_BOT_VERSION;
+  if (cleanupLegacyKeyboard && /^\d{5,20}$/.test(ownerChatId)) {
+    try {
+      await telegramApiWithToken(token, "sendMessage", {
+        chat_id: ownerChatId,
+        text: "✅ منو و فرمان‌های ارائه‌دهنده قبلی پاک شد. منوی جدید فعال است؛ برای مدیریت /manage را ارسال کنید.",
+        reply_markup: { remove_keyboard: true }
+      });
+    } catch (_) {}
+  }
   return webhookUrl;
 }
 
@@ -3848,7 +3873,13 @@ async function salesCustomerHomeView(env, bot, customer) {
   if (growthRow.length) rows.splice(1,0,growthRow);
   if (resellerFeatureEnabled(bot,"gift_service_enabled",true)) rows.splice(2,0,[{text:"🎁 هدیه‌دادن سرویس",callback_data:"sale:gift:start"}]);
   if (Number(bot.ticketing_enabled ?? 1) === 1) rows.push([{ text: "🎫 مرکز پشتیبانی", callback_data: "sale:support" }]);
-  if (String(customer.telegram_id) === String(bot.owner_telegram_id || "")) rows.push([{ text: "⚙️ مدیریت ربات", callback_data: "owner:home" }]);
+  if (String(customer.telegram_id) === String(bot.owner_telegram_id || "")) {
+    if (resellerBotCanCreateDownline(bot)) rows.push([
+      { text: "➕ ساخت ربات زیرمجموعه", callback_data: "owner:child:new" },
+      { text: "👑 زیرمجموعه‌های من", callback_data: "owner:children" }
+    ]);
+    rows.push([{ text: "⚙️ مدیریت ربات", callback_data: "owner:home" }]);
+  }
   if (supportUrl) rows.push([{ text: "🆘 ارتباط مستقیم", url: supportUrl }]);
   const name = customer.first_name || customer.username || "کاربر عزیز";
   const welcome = cleanText(welcomeRow?.text_value, 3500) || cleanText(bot.welcome_text, 1200) || "از منوی زیر سرویس بخرید، تمدید کنید یا حساب خود را مدیریت کنید.";
@@ -7877,6 +7908,30 @@ async function resellerOwnerHandleCallback(env, bot, callback) {
     await resellerOwnerReviewWallet(env, bot, account, requestId, approve);
     return resellerOwnerSendOrEdit(env, bot, { account, chatId }, "wallets");
   }
+  if (data.startsWith("owner:plan:edit:")) {
+    const planId = data.slice("owner:plan:edit:".length);
+    const plan = await env.PASARGUARD_DB.prepare("SELECT * FROM sales_plans WHERE id=? AND bot_id=?").bind(planId, bot.id).first();
+    if (!plan) throw new Error("پلن پیدا نشد");
+    if (plan.plan_type === "imported") throw new Error("پلن سیستمی قابل ویرایش نیست");
+    await salesSessionSet(env, bot.id, account.user.telegram_id, "owner_plan_setup", { planId: plan.id });
+    return resellerOwnerPrompt(env, bot, chatId, "✏️ <b>ویرایش پلن " + botEscape(plan.title) + "</b>\nنوع جدید پلن را انتخاب کنید. تمام مشخصات در مراحل بعد دوباره ثبت می‌شوند:", [[{ text: "🛒 فروش جدید", callback_data: "owner:plan:type:sale" }, { text: "♻️ مخصوص تمدید", callback_data: "owner:plan:type:renew" }], [{ text: "➕ افزایش حجم", callback_data: "owner:plan:type:volume" }], [{ text: "لغو", callback_data: "owner:plans" }]]);
+  }
+  if (data.startsWith("owner:plan:delete:")) {
+    const planId = data.slice("owner:plan:delete:".length);
+    const plan = await env.PASARGUARD_DB.prepare("SELECT * FROM sales_plans WHERE id=? AND bot_id=?").bind(planId, bot.id).first();
+    if (!plan) throw new Error("پلن پیدا نشد");
+    if (plan.plan_type === "imported") throw new Error("پلن سیستمی قابل حذف نیست");
+    const used = await env.PASARGUARD_DB.prepare("SELECT COUNT(*) AS c FROM sales_orders WHERE plan_id=? AND bot_id=?").bind(plan.id, bot.id).first();
+    if (Number(used?.c || 0) > 0) throw new Error("این پلن سابقه سفارش دارد؛ برای حفظ گزارش‌ها آن را غیرفعال کنید");
+    await env.PASARGUARD_DB.batch([
+      env.PASARGUARD_DB.prepare("UPDATE sales_plans SET upsell_plan_id=NULL,updated_at=? WHERE bot_id=? AND upsell_plan_id=?").bind(nowIso(), bot.id, plan.id),
+      env.PASARGUARD_DB.prepare("UPDATE sales_customers SET favorite_plan_id=NULL,updated_at=? WHERE bot_id=? AND favorite_plan_id=?").bind(nowIso(), bot.id, plan.id),
+      env.PASARGUARD_DB.prepare("UPDATE sales_service_preferences SET renewal_plan_id=NULL,updated_at=? WHERE bot_id=? AND renewal_plan_id=?").bind(nowIso(), bot.id, plan.id),
+      env.PASARGUARD_DB.prepare("DELETE FROM sales_plans WHERE id=? AND bot_id=?").bind(plan.id, bot.id)
+    ]);
+    await resellerAudit(env, bot, account, "plan_deleted", { planId: plan.id, title: plan.title, source: "telegram" });
+    return resellerOwnerSendOrEdit(env, bot, target, "plans");
+  }
   if (data === "owner:plan:new") {
     await salesSessionSet(env, bot.id, account.user.telegram_id, "owner_plan_setup", {});
     return resellerOwnerPrompt(env, bot, chatId, "📦 نوع پلن را انتخاب کنید:", [[{ text: "🛒 فروش جدید", callback_data: "owner:plan:type:sale" }, { text: "♻️ مخصوص تمدید", callback_data: "owner:plan:type:renew" }], [{ text: "➕ افزایش حجم", callback_data: "owner:plan:type:volume" }], [{ text: "لغو", callback_data: "owner:home" }]]);
@@ -7887,7 +7942,7 @@ async function resellerOwnerHandleCallback(env, bot, callback) {
     const rawType = data.slice("owner:plan:type:".length);
     const planType = ["sale", "renew", "volume"].includes(rawType) ? rawType : "sale";
     const categories = await env.PASARGUARD_DB.prepare("SELECT * FROM sales_categories WHERE bot_id=? AND status='active' ORDER BY sort_order,created_at LIMIT 15").bind(bot.id).all();
-    await salesSessionSet(env, bot.id, account.user.telegram_id, "owner_plan_category", { planType });
+    await salesSessionSet(env, bot.id, account.user.telegram_id, "owner_plan_category", { ...session.data, planType });
     const rows = (categories.results || []).map(item => [{ text: (item.emoji || "📁") + " " + item.title, callback_data: "owner:plan:cat:" + item.id }]);
     rows.push([{ text: "بدون دسته‌بندی", callback_data: "owner:plan:cat:none" }], [{ text: "لغو", callback_data: "owner:home" }]);
     return resellerOwnerPrompt(env, bot, chatId, "📂 دسته‌بندی پلن را انتخاب کنید:", rows);
@@ -8425,10 +8480,22 @@ async function resellerOwnerHandleSession(env, bot, account, message, session) {
   }
   if (session.state === "owner_plan_price") {
     const price = botParseInteger(text); if (!Number.isFinite(price) || price <= 0 || price > 1000000000000) throw new Error("قیمت معتبر وارد کنید");
+    const editing = Boolean(session.data.planId);
+    if (editing) {
+      const result = await env.PASARGUARD_DB.prepare(`
+        UPDATE sales_plans SET title=?,data_limit_bytes=?,duration_days=?,price_toman=?,category_id=?,location_id=?,plan_type=?,updated_at=?
+        WHERE id=? AND bot_id=? AND plan_type<>'imported'
+      `).bind(session.data.title, Number(session.data.gb) * GIB, session.data.days, price, session.data.categoryId || null, session.data.locationId || null, session.data.planType || "sale", nowIso(), session.data.planId, bot.id).run();
+      if (!Number(result?.meta?.changes || 0)) throw new Error("پلن برای ویرایش پیدا نشد");
+      await resellerAudit(env, bot, account, "plan_updated", { planId: session.data.planId, title: session.data.title, source: "telegram" });
+      return done("plans", "✅ پلن ویرایش شد.");
+    }
+    const planId = id("plan");
     await env.PASARGUARD_DB.prepare(`
       INSERT INTO sales_plans(id,bot_id,title,data_limit_bytes,duration_days,price_toman,status,sort_order,category_id,location_id,plan_type,created_at,updated_at)
       VALUES(?,?,?,?,?,?,'active',0,?,?,?,?,?)
-    `).bind(id("plan"), bot.id, session.data.title, Number(session.data.gb) * GIB, session.data.days, price, session.data.categoryId || null, session.data.locationId || null, session.data.planType || "sale", nowIso(), nowIso()).run();
+    `).bind(planId, bot.id, session.data.title, Number(session.data.gb) * GIB, session.data.days, price, session.data.categoryId || null, session.data.locationId || null, session.data.planType || "sale", nowIso(), nowIso()).run();
+    await resellerAudit(env, bot, account, "plan_created", { planId, title: session.data.title, source: "telegram" });
     return done("plans", "✅ پلن جدید ساخته شد.");
   }
   return false;
@@ -8444,16 +8511,32 @@ async function sendResellerManagementAccess(env, bot, account, chatId, fallbackO
   const credentialText = local
     ? "نام کاربری: <code>" + botEscape(bot.control_username || "") + "</code>\nرمز همان رمزی است که هنگام تحویل ربات از مستر دریافت کرده‌اید.\n\n🚫 برای این ربات پنل PasarGuard جداگانه صادر نشده است."
     : "نام کاربری: <code>" + botEscape(bot.panel_username || "") + "</code>\nرمز ورود همان رمز پنل نمایندگی PasarGuard است.\n\n✅ این ربات مستقیماً از ربات مرکزی خریداری شده و دسترسی پنل دارد.";
+  try {
+    await resellerTelegramApi(env, bot, "sendMessage", {
+      chat_id: chatId,
+      text: "✅ منوی قدیمی پاک‌سازی و منوی جدید ربات فعال شد.",
+      reply_markup: { remove_keyboard: true }
+    });
+  } catch (_) {}
+  const managementRows = [];
+  if (resellerBotCanCreateDownline(bot)) {
+    managementRows.push([
+      { text: "➕ ساخت ربات زیرمجموعه", callback_data: "owner:child:new" },
+      { text: "👑 مدیریت زیرمجموعه‌ها", callback_data: "owner:children" }
+    ]);
+  }
+  managementRows.push(
+    [{ text: "⚙️ مدیریت داخل ربات", callback_data: "owner:home" }],
+    [{ text: "🖥 ورود به پنل مدیریت", url: managementUrl }],
+    [{ text: "📋 کپی آدرس ورود", copy_text: { text: managementUrl } }],
+    [{ text: "🛒 مشاهده بخش مشتریان", callback_data: "sale:home" }]
+  );
   await resellerTelegramApi(env, bot, "sendMessage", {
     chat_id: chatId,
     text: "🖥 <b>ورود به پنل مدیریت " + botEscape(bot.brand_name || "BluePanel") + "</b>\n━━━━━━━━━━━━━━\nاز این صفحه می‌توانید سفارش‌ها، مشتریان، کیف پول، پلن‌ها، پرداخت و تنظیمات ربات خود را مدیریت کنید.\n\nآدرس ورود:\n<code>" + botEscape(managementUrl) + "</code>\n\n" + credentialText + "\n\n🔒 این صفحه مخصوص مالک ربات است و مینی‌اپ فقط برای مشتریان نمایش داده می‌شود.",
     parse_mode: "HTML",
     disable_web_page_preview: true,
-    reply_markup: { inline_keyboard: [
-      [{ text: "🖥 ورود به پنل مدیریت", url: managementUrl }],
-      [{ text: "📋 کپی آدرس ورود", copy_text: { text: managementUrl } }],
-      [{ text: "🛒 مشاهده بخش مشتریان", callback_data: "sale:home" }]
-    ] }
+    reply_markup: { inline_keyboard: managementRows }
   });
   await markManagementNoticeDelivered(env, "reseller", chatId, bot.id);
   return true;
@@ -8555,6 +8638,13 @@ async function resellerSalesWebhook(request, env, botId, ctx = null) {
       await salesSessionClear(env, bot.id, ownerAccount.user.telegram_id);
       if (isOwner) await sendResellerManagementAccess(env, bot, ownerAccount, message.chat.id, requestPublicOrigin(request), { force: true });
       else await resellerOwnerSendOrEdit(env, bot, { account: ownerAccount, chatId: message.chat.id }, "home");
+      return json({ ok: true });
+    }
+    if (isOwner && /^\/(?:newbot|createbot|downline)(?:@\w+)?$/i.test(text)) {
+      if (!resellerBotCanCreateDownline(bot)) throw new Error("این فرمان فقط برای ربات مستر نمایندگی فعال است");
+      if (Number(bot.downline_sales_enabled ?? 1) !== 1) throw new Error("ساخت ربات زیرمجموعه در تنظیمات مستر بسته است");
+      await salesSessionSet(env, bot.id, ownerAccount.user.telegram_id, "owner_child_telegram_id", {});
+      await resellerOwnerPrompt(env, bot, message.chat.id, "👤 شناسه عددی تلگرام نماینده جدید را ارسال کنید.\nنماینده فقط ربات و پنل مدیریت مستقل دریافت می‌کند و هیچ پنل PasarGuard به او تحویل نمی‌شود.");
       return json({ ok: true });
     }
     if (isManager && /^\/broadcast(?:@\w+)?$/i.test(text)) {
@@ -8813,7 +8903,10 @@ async function resellerOwnerDashboardView(env, account) {
     ...(can("health") ? [{ text: "🩺 سلامت سیستم", callback_data: "owner:health" }] : []),
     ...(can("backups") ? [{ text: "🗄 پشتیبان‌گیری", callback_data: "owner:backups" }] : [])
   ]);
-  if (resellerBotCanCreateDownline(bot) && can("owner")) rows.push([{ text: "👑 نمایندگان من و مدیریت مصرف", callback_data: "owner:children" }]);
+  if (resellerBotCanCreateDownline(bot) && can("owner")) rows.push([
+    { text: "➕ ساخت ربات زیرمجموعه", callback_data: "owner:child:new" },
+    { text: "👑 مدیریت زیرمجموعه‌ها", callback_data: "owner:children" }
+  ]);
   if (can("owner")) rows.push([{ text: "🔑 تغییر توکن ربات", callback_data: "owner:token" }]);
   if (can("settings")) {
     const settingsRow = [{ text: "⚙️ تنظیمات ربات", callback_data: "owner:settings" }];
@@ -8941,10 +9034,18 @@ async function botSalesPlansView(env, account) {
     " · <b>" + botMoney(plan.price_toman) + " تومان</b>\n   " +
     botEscape((plan.category_title || "بدون دسته") + " · " + (plan.location_title || "بدون لوکیشن"))
   ).join("\n\n") : "هنوز پلنی ثبت نشده است.";
-  const buttons = plans.slice(0,10).map((plan,index) => [{
-    text: (plan.status === "active" ? "⏸ غیرفعال " : "▶️ فعال ") + (index+1),
-    callback_data: "bot:sales:plan:toggle:" + plan.id
-  }]);
+  const buttons = [];
+  plans.slice(0,10).forEach((plan,index) => {
+    if (plan.plan_type === "imported") {
+      buttons.push([{ text: "🔒 پلن سیستمی " + (index+1), callback_data: "bot:sales:plans" }]);
+      return;
+    }
+    buttons.push([
+      { text: "✏️ ویرایش " + (index+1), callback_data: "bot:sales:plan:edit:" + plan.id },
+      { text: (plan.status === "active" ? "⏸ " : "▶️ ") + (index+1), callback_data: "bot:sales:plan:toggle:" + plan.id },
+      { text: "🗑 حذف " + (index+1), callback_data: "bot:sales:plan:delete:" + plan.id }
+    ]);
+  });
   buttons.push([{ text: "➕ افزودن پلن", callback_data: "bot:sales:plan:new" }]);
   buttons.push([{ text: "🗂 دسته‌بندی و لوکیشن", callback_data: "bot:sales:catalog" }, { text: "↩️ ربات", callback_data: "bot:sales" }]);
   return { text: "📦 <b>پلن‌های ربات نمایندگی</b>\n━━━━━━━━━━━━━━\n" + lines, reply_markup: { inline_keyboard: buttons } };
@@ -11458,7 +11559,12 @@ async function resellerAdminAction(request, env, botId) {
     if (action === "plan_delete") {
       const planId=cleanText(body.id,100);const protectedPlan=await env.PASARGUARD_DB.prepare("SELECT plan_type FROM sales_plans WHERE id=? AND bot_id=?").bind(planId,bot.id).first();if(protectedPlan?.plan_type==="imported")throw new Error("این رکورد سیستمی قابل حذف نیست");const used=await env.PASARGUARD_DB.prepare("SELECT COUNT(*) AS c FROM sales_orders WHERE plan_id=? AND bot_id=?").bind(planId,bot.id).first();
       if(Number(used?.c||0)>0)throw new Error("این پلن سابقه سفارش دارد و برای حفظ گزارش‌ها قابل حذف نیست؛ آن را غیرفعال کنید");
-      await env.PASARGUARD_DB.prepare("DELETE FROM sales_plans WHERE id=? AND bot_id=?").bind(planId,bot.id).run();await resellerAudit(env,bot,account,"web_plan_deleted",{planId});return json({success:true,message:"پلن حذف شد"});
+      await env.PASARGUARD_DB.batch([
+        env.PASARGUARD_DB.prepare("UPDATE sales_plans SET upsell_plan_id=NULL,updated_at=? WHERE bot_id=? AND upsell_plan_id=?").bind(nowIso(),bot.id,planId),
+        env.PASARGUARD_DB.prepare("UPDATE sales_customers SET favorite_plan_id=NULL,updated_at=? WHERE bot_id=? AND favorite_plan_id=?").bind(nowIso(),bot.id,planId),
+        env.PASARGUARD_DB.prepare("UPDATE sales_service_preferences SET renewal_plan_id=NULL,updated_at=? WHERE bot_id=? AND renewal_plan_id=?").bind(nowIso(),bot.id,planId),
+        env.PASARGUARD_DB.prepare("DELETE FROM sales_plans WHERE id=? AND bot_id=?").bind(planId,bot.id)
+      ]);await resellerAudit(env,bot,account,"web_plan_deleted",{planId});return json({success:true,message:"پلن حذف شد"});
     }
     if (action === "ticket_detail") {
       const ticketId=cleanText(body.id||body.ticket_id,100);const ticket=await env.PASARGUARD_DB.prepare(`SELECT t.*,c.telegram_id,c.username,c.first_name,c.last_name FROM sales_tickets t JOIN sales_customers c ON c.id=t.customer_id WHERE t.id=? AND t.bot_id=?`).bind(ticketId,bot.id).first();

@@ -1,7 +1,7 @@
 {
-  "version": "3.3.26",
-  "release_id": "3.3.26-dual-panel-location-provider-catalog-edit-delete",
-  "architecture": "fully-split-three-worker-dual-pasarguard-marzban-per-location",
+  "version": "3.3.27",
+  "release_id": "3.3.27-master-downline-legacy-menu-plan-edit-delete",
+  "architecture": "fully-split-three-worker-dual-panel-master-downline-management",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -9,45 +9,37 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "simultaneous sales from PasarGuard and shared Marzban",
-    "per-location destination panel selection during create and edit",
-    "persistent service_provider on each order and trial so renew, volume, sync, revoke and delete stay on the original panel",
-    "category and location edit/delete in reseller bot and web panel",
-    "safe location delete deactivates attached plans while existing delivered services retain their original provider",
-    "provider-aware scheduled notifications, auto-renew, health checks and usage synchronization",
+    "direct downline bot creation button and /newbot command in master reseller bots",
+    "legacy provider command menu and persistent reply keyboard cleanup during token migration and runtime repair",
+    "Telegram commands restored after cleaning default, private, group, administrator and owner scopes",
+    "plan edit and safe delete in central bot, reseller bot and web control panel",
+    "plans with order history remain protected and can be disabled instead of deleted",
     "README files are excluded"
   ],
   "deployment": {
     "automatic_provisioning": "upload ZIP through the central bot",
-    "db_schema_revision": "3.3.26",
-    "default_existing_locations": "pasarguard"
+    "db_schema_revision": "3.3.27"
   },
   "validation": {
-    "worker_syntax": "passed: core, edge, processor (node --check)",
-    "embedded_panel_scripts": "passed: 10/10 scripts (node --check)",
-    "schema": "passed: SCHEMA_SQL executed in SQLite; backend_provider/service_provider columns present",
-    "catalog_operations": "passed: category edit/delete and location edit/safe-delete paths present in central bot, reseller bot and web panel",
-    "provider_persistence": "passed: service_provider is stored on each order/trial and used by create, renew, volume, sync, revoke and delete paths",
-    "telegram_callback_limit": "passed: all new confirm callbacks <= 64 bytes with 36-character IDs",
-    "archive_readme": "passed: README/Markdown files excluded",
-    "live_api_calls": "not run: production PasarGuard and Marzban credentials unavailable",
-    "provider_hardening": "passed: imported services, auto-renew, health checks and Marzban snapshot updates are provider-scoped",
-    "safe_location_delete": "passed: attached plans become inactive before location removal",
-    "dual_usage_sync": "passed: PasarGuard and Marzban usage paths execute independently without global backend override"
+    "worker_syntax": "passed: core, edge, processor",
+    "embedded_browser_scripts": "passed: 10 scripts",
+    "database_schema": "passed in SQLite memory",
+    "plan_update_and_safe_delete_sql": "passed",
+    "telegram_live_api": "not run; requires a real bot token"
   },
   "limitations": [
-    "live Marzban and PasarGuard API calls require production credentials"
+    "Telegram bots still require a token created in BotFather; Telegram does not provide an API for one bot to create another bot"
   ],
   "sha256": {
-    "core/worker.js": "e023eeea634f86f930fc34e72baf1dace26b6922f5b1eebda42c3aa6a3878136",
-    "edge/worker.js": "8ccb482f0ff4290a55ef4dd67676e2b800b49f00233a8b6e466498691b804eb9",
-    "processor/worker.js": "bcb4a3839b34085fccb57b150cf2196675579f6c386d312fee21acfd24cdaad4",
+    "core/worker.js": "abc76c1c7566be4a5fe289708daaa3ea3a9bdade1da1dd633a511a08f2bb4add",
+    "edge/worker.js": "a0caa9e943c01f924554d4aea75d17360d327afd8a92677d4f15a21a49ecb57e",
+    "processor/worker.js": "bf4cd25cd5615a54260f0ab2e7d644a950efb000650e4a6e5cc59de3eb75297f",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "e023eeea634f86f930fc34e72baf1dace26b6922f5b1eebda42c3aa6a3878136",
-    "edge/worker.js": "8ccb482f0ff4290a55ef4dd67676e2b800b49f00233a8b6e466498691b804eb9",
-    "processor/worker.js": "bcb4a3839b34085fccb57b150cf2196675579f6c386d312fee21acfd24cdaad4",
+    "core/worker.js": "abc76c1c7566be4a5fe289708daaa3ea3a9bdade1da1dd633a511a08f2bb4add",
+    "edge/worker.js": "a0caa9e943c01f924554d4aea75d17360d327afd8a92677d4f15a21a49ecb57e",
+    "processor/worker.js": "bf4cd25cd5615a54260f0ab2e7d644a950efb000650e4a6e5cc59de3eb75297f",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }

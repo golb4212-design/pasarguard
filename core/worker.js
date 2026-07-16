@@ -1,15 +1,27 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.26
+ * Version: 3.3.27
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.26';
+const APP_VERSION = '3.3.27';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.27": Object.freeze({
+    central: Object.freeze([
+      { emoji: "👑", text: "افزودن مسیر مستقیم ساخت ربات زیرمجموعه در ربات مستر و فرمان /newbot" },
+      { emoji: "🧹", text: "پاک‌سازی منو، فرمان‌ها، Webhook و کیبورد باقی‌مانده از ارائه‌دهنده قبلی هنگام انتقال توکن" },
+      { emoji: "✏️", text: "ویرایش و حذف امن پلن‌ها از ربات مرکزی، ربات نماینده و پنل وب" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "➕", text: "نمایش مستقیم ساخت ربات زیرمجموعه در صفحه شروع و مدیریت ربات مستر" },
+      { emoji: "📋", text: "ثبت فرمان‌های جدید مدیریت، خرید و گزارش پس از حذف فرمان‌های قبلی تلگرام" },
+      { emoji: "🗑", text: "حذف پلن بدون سابقه سفارش و جلوگیری از حذف پلن‌های سیستمی یا دارای سفارش" }
+    ])
+  }),
   "3.3.26": Object.freeze({
     central: Object.freeze([
       { emoji: "🔀", text: "فروش هم‌زمان از PasarGuard و مرزبان با انتخاب پنل مقصد برای هر لوکیشن" },
@@ -454,7 +466,7 @@ let errorCenterSchemaPromise = null;
 
 // Persistent schema marker: avoids replaying the full D1 migration sweep whenever
 // Cloudflare starts a fresh isolate after an idle period.
-const DB_SCHEMA_REVISION = "3.3.26";
+const DB_SCHEMA_REVISION = "3.3.27";
 
 let settingsCache = null;
 
@@ -7835,26 +7847,12 @@ async function triggerProcessorBusinessJobs(env, source = "core") {
 async function configureResellerRoutingOnly(env, bot, fallbackOrigin = "") {
   const settings = await getSettings(env);
   const publicOrigin = resellerBotOrigin(settings, fallbackOrigin);
-  const token = await resellerBotToken(env, bot);
-  const webhookUrl = publicOrigin + "/sales-bot/" + encodeURIComponent(bot.id) + "/webhook";
-  const miniAppUrl = publicOrigin + "/sales-app/" + encodeURIComponent(bot.id);
-  await Promise.all([
-    telegramApiWithToken(token, "setWebhook", { url: webhookUrl, secret_token: bot.webhook_secret, allowed_updates: ["message", "callback_query"], drop_pending_updates: false }),
-    telegramApiWithToken(token, "setChatMenuButton", { menu_button: { type: "web_app", text: "📱 مینی‌اپ", web_app: { url: miniAppUrl } } }).catch(() => null),
-    telegramApiWithToken(token, "setMyCommands", {
-      scope: { type: "all_group_chats" },
-      commands: [
-        { command: "setup_reports", description: "ساخت موضوع‌های گروه گزارش این ربات" },
-        { command: "reports_status", description: "نمایش وضعیت گروه گزارش" },
-        { command: "test_reports", description: "ارسال گزارش آزمایشی فوری" },
-        { command: "test_all_topics", description: "آزمایش همه Topicهای گزارش" },
-        { command: "flush_reports", description: "پردازش صف گزارش‌ها" },
-        { command: "reset_reports", description: "بازسازی موضوع‌های گزارش" },
-        { command: "disable_reports", description: "توقف ارسال گزارش به گروه" }
-      ]
-    }).catch(() => null)
-  ]);
-  return { webhook_url: webhookUrl, miniapp_url: miniAppUrl };
+  const prepared = { ...bot, __cleanup_legacy_keyboard: true };
+  const webhookUrl = await configureResellerBot(env, prepared, publicOrigin);
+  return {
+    webhook_url: webhookUrl,
+    miniapp_url: publicOrigin + "/sales-app/" + encodeURIComponent(bot.id)
+  };
 }
 
 async function reconfigureAllResellerBots(env, fallbackOrigin = "", limit = 500) {
@@ -10065,7 +10063,8 @@ async function replaceResellerBotToken(env, bot, rawToken, options = {}) {
     bot_name: cleanText(me.first_name || me.username, 120),
     webhook_secret: webhookSecret,
     bot_version: RESELLER_BOT_VERSION,
-    miniapp_enabled: 1
+    miniapp_enabled: 1,
+    __cleanup_legacy_keyboard: true
   };
 
   // The new bot receives a fresh secret before the database switch. Until the DB update,
@@ -10123,35 +10122,72 @@ async function configureResellerBot(env, bot, origin = "") {
     drop_pending_updates: false
   });
 
-  const menuButton = {
-    type: "web_app",
-    text: "📱 مینی‌اپ",
-    web_app: { url: miniAppUrl }
-  };
-  await telegramApiWithToken(token, "setChatMenuButton", { menu_button: menuButton });
-  if (bot.owner_telegram_id) {
-    try {
-      await telegramApiWithToken(token, "setChatMenuButton", {
-        chat_id: Number(bot.owner_telegram_id),
-        menu_button: menuButton
-      });
-    } catch (_) {}
-  }
-
-  const commandScopes = [
+  const ownerChatId = String(bot.owner_telegram_id || "").trim();
+  const scopes = [
     { type: "default" },
     { type: "all_private_chats" },
     { type: "all_group_chats" },
     { type: "all_chat_administrators" }
   ];
-  if (bot.owner_telegram_id) {
-    commandScopes.push({ type: "chat", chat_id: Number(bot.owner_telegram_id) });
-  }
-  for (const scope of commandScopes) {
-    try { await telegramApiWithToken(token, "deleteMyCommands", { scope }); } catch (_) {}
+  if (/^\d{5,20}$/.test(ownerChatId)) scopes.push({ type: "chat", chat_id: Number(ownerChatId) });
+  for (const scope of scopes) {
+    for (const languageCode of ["", "fa", "en", "ar"]) {
+      const payload = languageCode ? { scope, language_code: languageCode } : { scope };
+      try { await telegramApiWithToken(token, "deleteMyCommands", payload); } catch (_) {}
+    }
   }
 
-  // Bot profile Bio/Description are intentionally left for the owner to configure manually.
+  const customerCommands = [
+    { command: "start", description: "نمایش منوی اصلی" },
+    { command: "plans", description: "مشاهده و خرید پلن‌ها" },
+    { command: "orders", description: "سرویس‌ها و سفارش‌های من" },
+    { command: "renew", description: "تمدید یا افزایش حجم" },
+    { command: "wallet", description: "کیف پول و شارژ حساب" },
+    { command: "account", description: "حساب کاربری" },
+    { command: "support", description: "پشتیبانی" }
+  ];
+  const ownerCommands = [
+    { command: "start", description: "نمایش منوی ربات" },
+    { command: "manage", description: "مدیریت کامل ربات" },
+    ...(resellerBotCanCreateDownline(bot) ? [{ command: "newbot", description: "ساخت ربات زیرمجموعه" }] : []),
+    { command: "plans", description: "مدیریت پلن‌ها" },
+    { command: "orders", description: "مدیریت سفارش‌ها" },
+    { command: "broadcast", description: "ارسال همگانی" },
+    { command: "cancel", description: "لغو عملیات جاری" }
+  ];
+  const reportCommands = [
+    { command: "setup_reports", description: "ساخت موضوع‌های گروه گزارش این ربات" },
+    { command: "reports_status", description: "نمایش وضعیت گروه گزارش" },
+    { command: "test_reports", description: "ارسال گزارش آزمایشی فوری" },
+    { command: "test_all_topics", description: "آزمایش همه Topicهای گزارش" },
+    { command: "flush_reports", description: "پردازش صف گزارش‌ها" },
+    { command: "reset_reports", description: "بازسازی موضوع‌های گزارش" },
+    { command: "disable_reports", description: "توقف ارسال گزارش به گروه" }
+  ];
+  try { await telegramApiWithToken(token, "setMyCommands", { scope: { type: "default" }, commands: customerCommands }); } catch (_) {}
+  try { await telegramApiWithToken(token, "setMyCommands", { scope: { type: "all_private_chats" }, commands: customerCommands }); } catch (_) {}
+  try { await telegramApiWithToken(token, "setMyCommands", { scope: { type: "all_group_chats" }, commands: reportCommands }); } catch (_) {}
+  try { await telegramApiWithToken(token, "setMyCommands", { scope: { type: "all_chat_administrators" }, commands: reportCommands }); } catch (_) {}
+  if (/^\d{5,20}$/.test(ownerChatId)) {
+    try { await telegramApiWithToken(token, "setMyCommands", { scope: { type: "chat", chat_id: Number(ownerChatId) }, commands: ownerCommands }); } catch (_) {}
+  }
+
+  const menuButton = { type: "web_app", text: "📱 مینی‌اپ", web_app: { url: miniAppUrl } };
+  await telegramApiWithToken(token, "setChatMenuButton", { menu_button: menuButton });
+  if (/^\d{5,20}$/.test(ownerChatId)) {
+    try { await telegramApiWithToken(token, "setChatMenuButton", { chat_id: Number(ownerChatId), menu_button: menuButton }); } catch (_) {}
+  }
+
+  const cleanupLegacyKeyboard = bot.__cleanup_legacy_keyboard === true || String(bot.bot_version || "") !== RESELLER_BOT_VERSION;
+  if (cleanupLegacyKeyboard && /^\d{5,20}$/.test(ownerChatId)) {
+    try {
+      await telegramApiWithToken(token, "sendMessage", {
+        chat_id: ownerChatId,
+        text: "✅ منو و فرمان‌های ارائه‌دهنده قبلی پاک شد. منوی جدید فعال است؛ برای مدیریت /manage را ارسال کنید.",
+        reply_markup: { remove_keyboard: true }
+      });
+    } catch (_) {}
+  }
   return webhookUrl;
 }
 
@@ -12061,10 +12097,18 @@ async function botSalesPlansView(env, account) {
     " · <b>" + botMoney(plan.price_toman) + " تومان</b>\n   " +
     botEscape((plan.category_title || "بدون دسته") + " · " + (plan.location_title || "بدون لوکیشن"))
   ).join("\n\n") : "هنوز پلنی ثبت نشده است.";
-  const buttons = plans.slice(0,10).map((plan,index) => [{
-    text: (plan.status === "active" ? "⏸ غیرفعال " : "▶️ فعال ") + (index+1),
-    callback_data: "bot:sales:plan:toggle:" + plan.id
-  }]);
+  const buttons = [];
+  plans.slice(0,10).forEach((plan,index) => {
+    if (plan.plan_type === "imported") {
+      buttons.push([{ text: "🔒 پلن سیستمی " + (index+1), callback_data: "bot:sales:plans" }]);
+      return;
+    }
+    buttons.push([
+      { text: "✏️ ویرایش " + (index+1), callback_data: "bot:sales:plan:edit:" + plan.id },
+      { text: (plan.status === "active" ? "⏸ " : "▶️ ") + (index+1), callback_data: "bot:sales:plan:toggle:" + plan.id },
+      { text: "🗑 حذف " + (index+1), callback_data: "bot:sales:plan:delete:" + plan.id }
+    ]);
+  });
   buttons.push([{ text: "➕ افزودن پلن", callback_data: "bot:sales:plan:new" }]);
   buttons.push([{ text: "🗂 دسته‌بندی و لوکیشن", callback_data: "bot:sales:catalog" }, { text: "↩️ ربات", callback_data: "bot:sales" }]);
   return { text: "📦 <b>پلن‌های ربات نمایندگی</b>\n━━━━━━━━━━━━━━\n" + lines, reply_markup: { inline_keyboard: buttons } };
@@ -13881,6 +13925,38 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
     }
     await botSendOrEdit(env,{account,chatId},"sales_wallets");return;
   }
+  if (data.startsWith("bot:sales:plan:edit:")) {
+    const planId = data.slice("bot:sales:plan:edit:".length);
+    const plan = await env.PASARGUARD_DB.prepare(`
+      SELECT p.* FROM sales_plans p JOIN reseller_bots rb ON rb.id=p.bot_id
+      WHERE p.id=? AND rb.user_id=?
+    `).bind(planId, account.user.id).first();
+    if (!plan) throw new Error("پلن پیدا نشد");
+    if (plan.plan_type === "imported") throw new Error("پلن سیستمی قابل ویرایش نیست");
+    await botSetSession(env, account.user.telegram_id, "sales_plan_setup", { botId: plan.bot_id, planId: plan.id });
+    await botPrompt(env, chatId, "✏️ <b>ویرایش پلن " + botEscape(plan.title) + "</b>\nنوع جدید پلن را انتخاب کنید. در مراحل بعد تمام مشخصات دوباره ثبت می‌شوند:", [[{text:"🛒 فروش جدید",callback_data:"bot:sales:plan:type:sale"},{text:"♻️ مخصوص تمدید",callback_data:"bot:sales:plan:type:renew"}],[{text:"➕ افزایش حجم",callback_data:"bot:sales:plan:type:volume"}],[{text:"لغو",callback_data:"bot:cancel"}]]);
+    return;
+  }
+  if (data.startsWith("bot:sales:plan:delete:")) {
+    const planId = data.slice("bot:sales:plan:delete:".length);
+    const plan = await env.PASARGUARD_DB.prepare(`
+      SELECT p.* FROM sales_plans p JOIN reseller_bots rb ON rb.id=p.bot_id
+      WHERE p.id=? AND rb.user_id=?
+    `).bind(planId, account.user.id).first();
+    if (!plan) throw new Error("پلن پیدا نشد");
+    if (plan.plan_type === "imported") throw new Error("پلن سیستمی قابل حذف نیست");
+    const used = await env.PASARGUARD_DB.prepare("SELECT COUNT(*) AS c FROM sales_orders WHERE plan_id=? AND bot_id=?").bind(plan.id, plan.bot_id).first();
+    if (Number(used?.c || 0) > 0) throw new Error("این پلن سابقه سفارش دارد؛ برای حفظ گزارش‌ها آن را غیرفعال کنید");
+    await env.PASARGUARD_DB.batch([
+      env.PASARGUARD_DB.prepare("UPDATE sales_plans SET upsell_plan_id=NULL,updated_at=? WHERE bot_id=? AND upsell_plan_id=?").bind(nowIso(), plan.bot_id, plan.id),
+      env.PASARGUARD_DB.prepare("UPDATE sales_customers SET favorite_plan_id=NULL,updated_at=? WHERE bot_id=? AND favorite_plan_id=?").bind(nowIso(), plan.bot_id, plan.id),
+      env.PASARGUARD_DB.prepare("UPDATE sales_service_preferences SET renewal_plan_id=NULL,updated_at=? WHERE bot_id=? AND renewal_plan_id=?").bind(nowIso(), plan.bot_id, plan.id),
+      env.PASARGUARD_DB.prepare("DELETE FROM sales_plans WHERE id=? AND bot_id=?").bind(plan.id, plan.bot_id)
+    ]);
+    await audit(env, account.user.id, "sales_plan_deleted", { planId: plan.id, botId: plan.bot_id, title: plan.title });
+    await botSendOrEdit(env, { account, chatId, messageId }, "sales_plans");
+    return;
+  }
   if (data === "bot:sales:plan:new") {
     const bot = await getResellerBotForUser(env, account.user.id);
     if (!bot) throw new Error("ابتدا ربات نمایندگی را بسازید");
@@ -13914,6 +13990,7 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
       WHERE p.id=? AND rb.user_id=?
     `).bind(planId, account.user.id).first();
     if (!plan) throw new Error("پلن پیدا نشد");
+    if (plan.plan_type === "imported") throw new Error("پلن سیستمی قابل تغییر نیست");
     const next = plan.status === "active" ? "inactive" : "active";
     await env.PASARGUARD_DB.prepare("UPDATE sales_plans SET status=?,updated_at=? WHERE id=?")
       .bind(next, nowIso(), plan.id).run();
@@ -14673,18 +14750,28 @@ async function botHandleSessionMessage(env, account, message, session, origin, c
     if (!Number.isFinite(price) || price <= 0 || price > 1000000000000) throw new Error("قیمت معتبر وارد کنید");
     const bot = await getResellerBotForUser(env, account.user.id);
     if (!bot || bot.id !== session.data.botId) throw new Error("ربات فروش پیدا نشد");
-    const planId = id("plan");
+    const editing = Boolean(session.data.planId);
+    const planId = editing ? String(session.data.planId) : id("plan");
     const ts = nowIso();
-    await env.PASARGUARD_DB.prepare(`
-      INSERT INTO sales_plans(id,bot_id,title,data_limit_bytes,duration_days,price_toman,status,sort_order,category_id,location_id,plan_type,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,'active',0,?,?,?,?,?)
-    `).bind(planId, bot.id, session.data.title, Number(session.data.gb) * GIB, session.data.days, price,
-      session.data.categoryId || null, session.data.locationId || null, session.data.planType || 'sale', ts, ts).run();
+    if (editing) {
+      const result = await env.PASARGUARD_DB.prepare(`
+        UPDATE sales_plans SET title=?,data_limit_bytes=?,duration_days=?,price_toman=?,category_id=?,location_id=?,plan_type=?,updated_at=?
+        WHERE id=? AND bot_id=? AND plan_type<>'imported'
+      `).bind(session.data.title, Number(session.data.gb) * GIB, session.data.days, price,
+        session.data.categoryId || null, session.data.locationId || null, session.data.planType || 'sale', ts, planId, bot.id).run();
+      if (!Number(result?.meta?.changes || 0)) throw new Error("پلن برای ویرایش پیدا نشد");
+    } else {
+      await env.PASARGUARD_DB.prepare(`
+        INSERT INTO sales_plans(id,bot_id,title,data_limit_bytes,duration_days,price_toman,status,sort_order,category_id,location_id,plan_type,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,'active',0,?,?,?,?,?)
+      `).bind(planId, bot.id, session.data.title, Number(session.data.gb) * GIB, session.data.days, price,
+        session.data.categoryId || null, session.data.locationId || null, session.data.planType || 'sale', ts, ts).run();
+    }
     await botClearSession(env, account.user.telegram_id);
-    await audit(env, account.user.id, "sales_plan_created", { planId, botId: bot.id, title: session.data.title, gb: session.data.gb, days: session.data.days, price });
+    await audit(env, account.user.id, editing ? "sales_plan_updated" : "sales_plan_created", { planId, botId: bot.id, title: session.data.title, gb: session.data.gb, days: session.data.days, price });
     await telegramApi(env, "sendMessage", {
       chat_id: chatId,
-      text: "✅ <b>پلن فروش ساخته شد</b>\n" + botEscape(session.data.title) + "\n" + botGb(Number(session.data.gb) * GIB) + " · " + botMoney(session.data.days) + " روز · <b>" + botMoney(price) + " تومان</b>",
+      text: "✅ <b>پلن فروش " + (editing ? "ویرایش" : "ساخته") + " شد</b>\n" + botEscape(session.data.title) + "\n" + botGb(Number(session.data.gb) * GIB) + " · " + botMoney(session.data.days) + " روز · <b>" + botMoney(price) + " تومان</b>",
       parse_mode: "HTML",
       reply_markup: { inline_keyboard: [[{ text: "📦 مدیریت پلن‌ها", callback_data: "bot:sales:plans" }], [{ text: "🚀 بازکردن ربات فروش", url: "https://t.me/" + bot.bot_username }]] }
     });
