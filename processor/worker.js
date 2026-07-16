@@ -1,11 +1,11 @@
 /* BLUEPANEL_PROCESSOR_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.22
+ * Version: 3.3.23
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = '3.3.22';
+const APP_VERSION = '3.3.23';
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
@@ -164,6 +164,7 @@ const DEFAULT_SETTINGS = {
   marzban_admin_password: "",
   marzban_proxies_json: "{}",
   marzban_inbounds_json: "{}",
+  marzban_template_username: "",
   marzban_price_per_gb: "2000",
   marzban_suspend_on_debt: "true",
   marzban_sync_batch: "10",
@@ -1165,8 +1166,23 @@ function sharedMarzbanJsonObject(value, label) {
   }
 }
 
+function normalizeSharedMarzbanPanelUrl(value) {
+  const raw = String(value || "").trim().replace(/\/+$/, "");
+  if (!raw) return "";
+  return raw.replace(/\/dashboard(?:\/.*)?$/i, "").replace(/\/+$/, "");
+}
+
+function sharedMarzbanDashboardUrl(value) {
+  const base = normalizeSharedMarzbanPanelUrl(value);
+  return base ? base + "/dashboard/" : "";
+}
+
+function normalizeSharedMarzbanTemplateUsername(value) {
+  return cleanText(String(value || "").trim().replace(/^@/, ""), 200);
+}
+
 function sharedMarzbanConfig(settings, env = {}) {
-  const panelUrl = String(env.MARZBAN_PANEL_URL || settings?.marzban_panel_url || "").trim().replace(/\/+$/, "");
+  const panelUrl = normalizeSharedMarzbanPanelUrl(env.MARZBAN_PANEL_URL || settings?.marzban_panel_url || "");
   const username = String(env.MARZBAN_ADMIN_USERNAME || settings?.marzban_admin_username || "").trim();
   const password = String(env.MARZBAN_ADMIN_PASSWORD || settings?.marzban_admin_password || "");
   const enabled = sharedMarzbanEnabled(settings, env);
@@ -1179,6 +1195,8 @@ function sharedMarzbanConfig(settings, env = {}) {
     password,
     proxies: sharedMarzbanJsonObject(env.MARZBAN_PROXIES_JSON || settings?.marzban_proxies_json || "{}", "تنظیم Proxies مرزبان"),
     inbounds: sharedMarzbanJsonObject(env.MARZBAN_INBOUNDS_JSON || settings?.marzban_inbounds_json || "{}", "تنظیم Inbounds مرزبان"),
+    templateUsername: cleanText(env.MARZBAN_TEMPLATE_USERNAME || settings?.marzban_template_username || "", 200),
+    dashboardUrl: sharedMarzbanDashboardUrl(panelUrl),
     pricePerGb: Math.max(0, Number(env.MARZBAN_PRICE_PER_GB || settings?.marzban_price_per_gb || settings?.price_per_gb || 0)),
     suspendOnDebt: String(env.MARZBAN_SUSPEND_ON_DEBT ?? settings?.marzban_suspend_on_debt ?? "true").toLowerCase() !== "false",
     syncBatch: Math.max(1, Math.min(20, Number(env.MARZBAN_SYNC_BATCH || settings?.marzban_sync_batch || 10)))

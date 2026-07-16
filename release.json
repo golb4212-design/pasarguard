@@ -1,7 +1,7 @@
 {
-  "version": "3.3.22",
-  "release_id": "3.3.22-20260716-visible-shared-marzban-settings",
-  "architecture": "fully-split-three-worker-visible-shared-marzban-control",
+  "version": "3.3.23",
+  "release_id": "3.3.23-20260716-marzban-template-subscription-dashboard-normalization",
+  "architecture": "fully-split-three-worker-shared-marzban-template-subscription-selection",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -9,91 +9,54 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "roles": {
-    "core": "central bot, D1 authority, schema migration, shared Marzban configuration, ownership ledger, update controller and financial reconciliation",
-    "edge": "reseller bots, customer sales/service UI, shared Marzban service lifecycle and reseller management",
-    "processor": "scheduled shared Marzban usage polling, automatic debits, service health, backups and background automation"
-  },
-  "bindings": {
-    "core": [
-      "PASARGUARD_DB",
-      "EDGE_WORKER",
-      "PROCESSOR_WORKER (optional fallback)",
-      "LIVE_USAGE_COORDINATOR -> class LiveUsageCoordinator"
-    ],
-    "edge": [
-      "EDGE_DB",
-      "CORE_WORKER",
-      "PROCESSOR_WORKER (optional)"
-    ],
-    "processor": [
-      "PROCESSOR_DB",
-      "CORE_WORKER",
-      "EDGE_WORKER"
-    ]
+    "core": "central bot, D1 authority, Marzban credential isolation, inbound tag resolution, ownership ledger and update controller",
+    "edge": "central web dashboard plus reseller bots and shared Marzban service lifecycle",
+    "processor": "scheduled shared Marzban usage polling, automatic debits, health, backups and background automation"
   },
   "features": [
-    "shared Marzban settings are visible directly in the main central web dashboard",
-    "central bot has a dedicated Marzban management screen with URL, username, password, price, batch, proxies, inbounds, debt policy and connection test",
-    "central web dashboard can save, test, enable and disable the shared Marzban backend",
-    "password messages sent to the central bot are deleted after storage",
-    "resellers never receive Marzban administrator credentials or tokens",
-    "all shared Marzban ownership and per-reseller usage billing features from 3.3.21 remain included",
+    "Marzban inbound configuration accepts the username of one existing template subscription instead of manual Proxies/Inbounds JSON",
+    "the template subscription is read through GET /api/user/{username}; its inbound mappings are copied while UUIDs and passwords are never reused",
+    "VLESS flow and Shadowsocks method may be retained, while credential fields are deliberately omitted so Marzban generates fresh credentials",
+    "Marzban URLs entered with or without /dashboard are normalized to the API base",
+    "the central web dashboard and central Telegram bot expose a manager-only /dashboard login link",
+    "resellers never receive the Marzban dashboard URL, administrator credentials, token or template account details",
+    "all per-reseller usage billing and service ownership features remain included",
     "README files are excluded"
   ],
   "deployment": {
-    "automatic_provisioning": "upload the ZIP through the central bot; deployment remains pinned to the exact GitHub commit produced by the updater",
-    "db_schema_revision": "3.3.22",
-    "shared_backend_tables": [
-      "shared_backend_accounts",
-      "shared_backend_usage_events",
-      "shared_service_ownership"
-    ],
-    "staged_compatibility": "Core, Edge and Processor self-create shared tables/indexes and add missing trial-usage columns during staged deployment",
-    "credential_scope": "configure Marzban from central dashboard Settings or central bot Management -> Marzban Shared; credentials remain central-only",
-    "billing_scope": "one account per reseller bot, one ownership record per panel username, byte-delta accounting with integer remainder preservation",
-    "debt_policy": "optional automatic reseller suspension when usage debt remains after wallet collection",
-    "master_margin": "child reseller price can include the configured upstream markup; collected margin is credited to the parent wallet once per event"
+    "automatic_provisioning": "upload the ZIP through the central bot",
+    "db_schema_revision": "3.3.23",
+    "marzban_url_input": "accepts https://host or https://host/dashboard and stores normalized API base",
+    "manager_dashboard": "normalized API base + /dashboard/; visible only in central management interfaces",
+    "template_input": "exact username of an existing Marzban account whose proxies/inbounds should be used as the service template"
   },
   "validation": {
-    "node_syntax_core": "passed",
-    "node_syntax_edge": "passed",
-    "node_syntax_processor": "passed",
-    "clean_schema_execution": "passed; 59 tables",
-    "reseller_bots_schema_columns_in_clean_install": 98,
-    "d1_max_columns_assumed": 100,
-    "shared_tables_present": "passed",
-    "old_sales_trials_schema_migration": "passed",
-    "sales_order_and_free_trial_usage_union": "passed",
-    "same_processing_token_replay": "passed; wallet and totals unchanged",
-    "different_processing_token_retry": "passed; wallet and totals unchanged",
-    "wallet_event_unique_index": "passed",
-    "embedded_central_admin_javascript": "passed",
-    "central_secret_exposure_static_scan": "passed",
-    "direct_pasarguard_service_call_scan": "passed; service lifecycle uses provider dispatcher",
-    "wrong_relative_subscription_base_scan": "passed",
-    "readme_scan": "passed; no README files",
-    "live_marzban_connection": "not run without production panel credentials",
-    "live_cloudflare_deployment": "not run without production Cloudflare credentials",
-    "live_wallet_debit": "not run against production D1",
-    "central_web_marzban_form": "passed; visible form in main /control settings page",
-    "central_bot_marzban_menu": "passed; direct management button and complete settings workflow",
-    "central_web_action_handlers": "passed; save and test handlers present with HTTPS and JSON validation"
+    "worker_node_syntax": "passed for core, edge and processor",
+    "embedded_browser_scripts": "8 script blocks extracted and passed node --check",
+    "dashboard_url_normalization": "passed for base URLs and URLs ending in /dashboard or /dashboard/",
+    "template_subscription_resolution": "mocked /api/admin/token and /api/user/{username} flow passed",
+    "template_credential_isolation": "passed; UUIDs, passwords and unsupported fields were not copied",
+    "template_username_required_on_save_and_test": "passed",
+    "legacy_manual_json_fields_removed_from_visible_interfaces": "passed",
+    "readme_excluded": true,
+    "live_marzban_connection": "not run because production credentials were not provided"
   },
   "limitations": [
-    "Marzban Proxies and Inbounds JSON must match the configuration available on the connected Marzban installation",
-    "services created directly in Marzban outside the bot are not billed to a reseller until they are imported or assigned through the bot",
-    "production API compatibility depends on the Marzban version and permissions of the configured shared admin account"
+    "the template username must identify an existing Marzban account visible to the configured shared administrator",
+    "the template account must have at least one supported active inbound",
+    "live validation requires production Marzban credentials and network access",
+    "supported automatically generated proxy types are VLESS, VMess, Trojan and Shadowsocks"
   ],
   "sha256": {
-    "core": "d1d3eed781aff36d361297cfeec7b0765d38d8ae7583cf751381ac15c32a1c26",
-    "edge": "c56c0e7eb1e9dcc466aeeed4205bb974abfef0f43dbeb3aba3501e0c5e2a3d4f",
-    "processor": "b2d7d18071749fec621723c710e93f73ec22e17207c587990ba0bee02dfe649b",
-    "durable_object_config": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
+    "core/worker.js": "f52fcccf35a2b618f45cdeb93f03e01b82e1c192abcf88b16fb5a15442738c68",
+    "edge/worker.js": "7ea894d42632b7d7c29c7edb28aa38d6015017332da7a4e45cafc1d5d757a279",
+    "processor/worker.js": "39816f677cc4f04405d8a7a29e14f4faaae15cd9b334379da70890a94d9ac6c4",
+    "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "d1d3eed781aff36d361297cfeec7b0765d38d8ae7583cf751381ac15c32a1c26",
-    "edge/worker.js": "c56c0e7eb1e9dcc466aeeed4205bb974abfef0f43dbeb3aba3501e0c5e2a3d4f",
-    "processor/worker.js": "b2d7d18071749fec621723c710e93f73ec22e17207c587990ba0bee02dfe649b",
+    "core/worker.js": "f52fcccf35a2b618f45cdeb93f03e01b82e1c192abcf88b16fb5a15442738c68",
+    "edge/worker.js": "7ea894d42632b7d7c29c7edb28aa38d6015017332da7a4e45cafc1d5d757a279",
+    "processor/worker.js": "39816f677cc4f04405d8a7a29e14f4faaae15cd9b334379da70890a94d9ac6c4",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }
