@@ -1,7 +1,7 @@
 {
-  "version": "3.3.16",
-  "release_id": "3.3.16-20260716-d1-error-center-schema-rebuild-exact-commit-update",
-  "architecture": "fully-split-three-worker-partial-open-error-uniqueness-exact-commit-auto-update",
+  "version": "3.3.17",
+  "release_id": "3.3.17-20260716-default-all-active-pasarguard-groups",
+  "architecture": "fully-split-three-worker-default-active-groups-on-subscription-create",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -32,32 +32,31 @@
     ]
   },
   "features": [
-    "rebuilds legacy system_error_center tables and removes UNIQUE(scope,bot_id,error_code,status) from the database itself",
-    "uses a partial unique index only for status=open so resolving an error can never collide with an older resolved row",
-    "normalizes NULL bot_id values to an empty string during migration",
-    "merges pre-existing duplicate open/resolved rows and preserves their total occurrence count",
-    "keeps the Processor writer compatible with both legacy and migrated schemas during staged rollout",
-    "uses an atomic partial-index UPSERT for Core error recording after migration",
-    "reads release and Worker files from the exact uploaded GitHub commit while a rollout is pending, bypassing raw branch cache propagation",
-    "persists the target commit until Core, Edge and Processor finish synchronization",
-    "keeps all previous reports, billing, gifts, panel, Telegram and live-usage features",
+    "defaults new reseller-bot subscriptions to every active/assignable PasarGuard group when a location has no explicit group IDs",
+    "preserves manually configured location group IDs as an explicit override",
+    "uses GET /api/groups/simple for PasarGuard v5 operator compatibility and falls back to GET /api/groups for older panels",
+    "applies the same group default to free trial creation",
+    "caches group discovery for two minutes per agency to reduce PasarGuard subrequests",
+    "updates Telegram and reseller dashboard copy so empty or zero group selection clearly means all active groups",
+    "keeps all previous error-center, exact-commit update, billing, gifts, reports and live-usage features",
     "README files are excluded"
   ],
   "deployment": {
     "automatic_provisioning": "upload the ZIP through the central bot; it commits to GitHub and pins deployment to that exact commit",
     "recovery": "unfinished stages resume on Cron and eligible panel/admin requests",
-    "db_schema_revision": "3.3.16",
+    "db_schema_revision": "3.3.16 (unchanged; no D1 schema migration required)",
     "error_center_schema": "partial unique index idx_error_center_open_key on scope,bot_id,error_code where status=open",
-    "staged_compatibility": "Processor uses INSERT OR IGNORE plus conditional UPDATE until Core migration is guaranteed"
+    "staged_compatibility": "Processor uses INSERT OR IGNORE plus conditional UPDATE until Core migration is guaranteed",
+    "default_group_assignment": "explicit location group IDs override; otherwise all active/assignable PasarGuard groups are attached"
   },
   "validation": {
     "node_syntax_core": "passed",
     "node_syntax_edge": "passed",
     "node_syntax_processor": "passed",
-    "legacy_unique_collision_reproduction": "passed",
-    "schema_rebuild_and_resolve": "passed",
-    "legacy_processor_after_migration": "passed",
-    "partial_index_upsert_counter_50": "passed",
+    "group_normalization": "passed",
+    "explicit_group_override": "passed",
+    "default_all_active_groups": "passed with mocked PasarGuard /api/groups/simple response",
+    "trial_default_groups": "passed by static path validation",
     "version_constants": "passed",
     "release_manifest_hashes": "recalculated",
     "live_cloudflare_deployment": "not run without production credentials"
@@ -66,15 +65,15 @@
     "production Cloudflare, Telegram, GitHub and PasarGuard calls were not executed without account credentials"
   ],
   "sha256": {
-    "core": "903c396386fe485d0da20ab5ab7106cdc1f0f49b003b45a14314eac2bcfe122e",
-    "edge": "e191f1be186afa86bcd5ba5861ba10eb6cfb42599b183956ffda7b7e3b6c3b37",
-    "processor": "ab3c140c73d6f88cef4c338f6714703e103f3d88b8385eb91d94fd80bdd3603c",
+    "core": "7f76c5a41313d20d5393f0e811bb171f7a8e78987ec3e9283b365d4fbef5b4ac",
+    "edge": "463d0add87c11b3dfbbfc0217e82cd387ba71f63998216b9412ff4e258470c1b",
+    "processor": "a1878b4de9d98d608a73c603bdaf5142455ca12d60c16e9bbbefcd6a05e0bda5",
     "durable_object_config": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "903c396386fe485d0da20ab5ab7106cdc1f0f49b003b45a14314eac2bcfe122e",
-    "edge/worker.js": "e191f1be186afa86bcd5ba5861ba10eb6cfb42599b183956ffda7b7e3b6c3b37",
-    "processor/worker.js": "ab3c140c73d6f88cef4c338f6714703e103f3d88b8385eb91d94fd80bdd3603c",
+    "core/worker.js": "7f76c5a41313d20d5393f0e811bb171f7a8e78987ec3e9283b365d4fbef5b4ac",
+    "edge/worker.js": "463d0add87c11b3dfbbfc0217e82cd387ba71f63998216b9412ff4e258470c1b",
+    "processor/worker.js": "a1878b4de9d98d608a73c603bdaf5142455ca12d60c16e9bbbefcd6a05e0bda5",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }

@@ -1,15 +1,24 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.16
+ * Version: 3.3.17
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.16';
+const APP_VERSION = '3.3.17';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.17": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🌐", text: "انتخاب خودکار همه گروه‌های فعال PasarGuard هنگام ساخت اشتراک در ربات‌های نماینده" },
+      { emoji: "🧩", text: "حفظ انتخاب دستی گروه‌های هر لوکیشن و استفاده از همه گروه‌های فعال فقط به‌عنوان حالت پیش‌فرض" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "✅", text: "ساخت اشتراک و تست رایگان با اتصال خودکار به همه گروه‌های فعال پنل" }
+    ])
+  }),
   "3.3.16": Object.freeze({
     central: Object.freeze([
       { emoji: "🧱", text: "بازسازی ساختار مرکز خطا و حذف کامل UNIQUE چهارتایی مشکل‌دار از خود دیتابیس" },
@@ -9947,9 +9956,58 @@ async function adjustSalesCustomerBalance(env, botId, customerId, amount, type, 
 function salesGroupIds(location) {
   try {
     const value = JSON.parse(location?.group_ids_json || "[]");
-    return Array.isArray(value) ? value.map(Number).filter(Number.isInteger) : [];
+    return Array.isArray(value) ? [...new Set(value.map(Number).filter(x => Number.isInteger(x) && x > 0))] : [];
   } catch (_) { return []; }
 }
+
+const salesActiveGroupCache = new Map();
+
+function normalizePasarguardActiveGroupIds(payload) {
+  const rows = Array.isArray(payload) ? payload
+    : Array.isArray(payload?.groups) ? payload.groups
+    : Array.isArray(payload?.items) ? payload.items
+    : Array.isArray(payload?.data) ? payload.data
+    : Array.isArray(payload?.results) ? payload.results
+    : [];
+  const ids = [];
+  for (const row of rows) {
+    const item = row && typeof row === "object" ? row : { id: row };
+    const status = String(item.status || "").trim().toLowerCase();
+    if (item.is_disabled === true || item.disabled === true || item.is_active === false || item.active === false || ["disabled", "inactive", "deleted", "archived"].includes(status)) continue;
+    const groupId = Number(item.id ?? item.group_id);
+    if (Number.isInteger(groupId) && groupId > 0) ids.push(groupId);
+  }
+  return [...new Set(ids)];
+}
+
+async function agencyActivePasarguardGroupIds(env, agency) {
+  const cacheKey = String(agency?.id || agency?.panel_username || "default");
+  const cached = salesActiveGroupCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < 120000) return [...cached.ids];
+  let response;
+  try {
+    // PasarGuard v5 exposes this lightweight endpoint to both sudo and operator admins.
+    response = await agencyPasarguardRequest(env, agency, "GET", "/api/groups/simple");
+  } catch (simpleError) {
+    try {
+      // Compatibility fallback for older installations that only expose the full groups endpoint.
+      response = await agencyPasarguardRequest(env, agency, "GET", "/api/groups");
+    } catch (fullError) {
+      throw new Error("دریافت گروه‌های فعال پنل پاسارگارد ناموفق بود: " + cleanText(fullError?.message || simpleError?.message || "خطای نامشخص", 300));
+    }
+  }
+  const ids = normalizePasarguardActiveGroupIds(response);
+  salesActiveGroupCache.set(cacheKey, { ids, at: Date.now() });
+  if (salesActiveGroupCache.size > 200) salesActiveGroupCache.delete(salesActiveGroupCache.keys().next().value);
+  return [...ids];
+}
+
+async function resolveSalesGroupIds(env, agency, location) {
+  const explicitlySelected = salesGroupIds(location);
+  if (explicitlySelected.length) return explicitlySelected;
+  return agencyActivePasarguardGroupIds(env, agency);
+}
+
 
 async function sendSalesServiceDelivery(env, bot, chatId, data) {
   const link = cleanText(data.subscriptionUrl, 2000);
@@ -10157,7 +10215,7 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
         data_limit_reset_strategy: "no_reset",
         note: "Telegram sales order " + order.id + " / customer " + order.customer_telegram_id
       };
-      const groups = salesGroupIds(order);
+      const groups = await resolveSalesGroupIds(env, agency, order);
       if (groups.length) payload.group_ids = groups;
       for (let attempt = 0; attempt < 3 && !created; attempt++) {
         try { created = await agencyPasarguardRequest(env, agency, "POST", "/api/user", payload); }
@@ -13073,10 +13131,10 @@ async function botHandleSessionMessage(env, account, message, session, origin, c
     const raw=cleanText(text,100);if(raw.length<2)throw new Error("نام لوکیشن کوتاه است");
     const match=raw.match(/^(\p{Extended_Pictographic}|\p{Regional_Indicator}{2})\s*(.*)$/u);const emoji=match?.[1]||"🌍";const title=cleanText(match?.[2]||raw,90);
     await botSetSession(env,account.user.telegram_id,"sales_location_groups",{...session.data,title,emoji});
-    await botPrompt(env,chatId,"🔗 شناسه Groupهای پنل برای این لوکیشن را با ویرگول ارسال کنید.\nمثال: <code>1,2,3</code>\nاگر نمی‌خواهید گروه خاصی ثبت شود، عدد <b>0</b> بفرستید.");return true;
+    await botPrompt(env,chatId,"🔗 شناسه Groupهای پنل برای این لوکیشن را با ویرگول ارسال کنید.\nمثال: <code>1,2,3</code>\nبرای انتخاب خودکار همه گروه‌های فعال پنل، عدد <b>0</b> بفرستید.");return true;
   }
   if (session.state === "sales_location_groups") {
-    const groups=text==='0'?[]:text.split(/[,،\s]+/).map(Number).filter(Number.isInteger);if(text!=='0'&&!groups.length)throw new Error("شناسه گروه معتبر وارد کنید");
+    const groups=text==='0'?[]:text.split(/[,،\s]+/).map(Number).filter(Number.isInteger);if(text!=='0'&&!groups.length)throw new Error("شناسه گروه معتبر یا عدد ۰ برای همه گروه‌های فعال وارد کنید");
     await env.PASARGUARD_DB.prepare(`INSERT INTO sales_locations(id,bot_id,title,emoji,description,group_ids_json,status,sort_order,created_at,updated_at) VALUES(?,?,?,?,NULL,?,'active',0,?,?)`).bind(id("loc"),session.data.botId,session.data.title,session.data.emoji,JSON.stringify(groups),nowIso(),nowIso()).run();
     await botClearSession(env,account.user.telegram_id);await botSendOrEdit(env,{account,chatId},"sales_catalog");return true;
   }
@@ -14667,7 +14725,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.3.16';
+const BLUEPANEL_CORE_VERSION = '3.3.17';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {

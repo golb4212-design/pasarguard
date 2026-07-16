@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.16
+ * Version: 3.3.17
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = '3.3.16';
+const APP_VERSION = '3.3.17';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -4547,9 +4547,58 @@ async function registerSalesWalletReceipt(env, bot, customer, message, session) 
 function salesGroupIds(location) {
   try {
     const value = JSON.parse(location?.group_ids_json || "[]");
-    return Array.isArray(value) ? value.map(Number).filter(Number.isInteger) : [];
+    return Array.isArray(value) ? [...new Set(value.map(Number).filter(x => Number.isInteger(x) && x > 0))] : [];
   } catch (_) { return []; }
 }
+
+const salesActiveGroupCache = new Map();
+
+function normalizePasarguardActiveGroupIds(payload) {
+  const rows = Array.isArray(payload) ? payload
+    : Array.isArray(payload?.groups) ? payload.groups
+    : Array.isArray(payload?.items) ? payload.items
+    : Array.isArray(payload?.data) ? payload.data
+    : Array.isArray(payload?.results) ? payload.results
+    : [];
+  const ids = [];
+  for (const row of rows) {
+    const item = row && typeof row === "object" ? row : { id: row };
+    const status = String(item.status || "").trim().toLowerCase();
+    if (item.is_disabled === true || item.disabled === true || item.is_active === false || item.active === false || ["disabled", "inactive", "deleted", "archived"].includes(status)) continue;
+    const groupId = Number(item.id ?? item.group_id);
+    if (Number.isInteger(groupId) && groupId > 0) ids.push(groupId);
+  }
+  return [...new Set(ids)];
+}
+
+async function agencyActivePasarguardGroupIds(env, agency) {
+  const cacheKey = String(agency?.id || agency?.panel_username || "default");
+  const cached = salesActiveGroupCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < 120000) return [...cached.ids];
+  let response;
+  try {
+    // PasarGuard v5 exposes this lightweight endpoint to both sudo and operator admins.
+    response = await agencyPasarguardRequest(env, agency, "GET", "/api/groups/simple");
+  } catch (simpleError) {
+    try {
+      // Compatibility fallback for older installations that only expose the full groups endpoint.
+      response = await agencyPasarguardRequest(env, agency, "GET", "/api/groups");
+    } catch (fullError) {
+      throw new Error("دریافت گروه‌های فعال پنل پاسارگارد ناموفق بود: " + cleanText(fullError?.message || simpleError?.message || "خطای نامشخص", 300));
+    }
+  }
+  const ids = normalizePasarguardActiveGroupIds(response);
+  salesActiveGroupCache.set(cacheKey, { ids, at: Date.now() });
+  if (salesActiveGroupCache.size > 200) salesActiveGroupCache.delete(salesActiveGroupCache.keys().next().value);
+  return [...ids];
+}
+
+async function resolveSalesGroupIds(env, agency, location) {
+  const explicitlySelected = salesGroupIds(location);
+  if (explicitlySelected.length) return explicitlySelected;
+  return agencyActivePasarguardGroupIds(env, agency);
+}
+
 
 async function sendSalesServiceDelivery(env, bot, chatId, data) {
   const link = cleanText(data.subscriptionUrl, 2000);
@@ -4960,7 +5009,7 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
         data_limit_reset_strategy: "no_reset",
         note: "Telegram sales order " + order.id + " / customer " + order.customer_telegram_id
       };
-      const groups = salesGroupIds(order);
+      const groups = await resolveSalesGroupIds(env, agency, order);
       if (groups.length) payload.group_ids = groups;
       for (let attempt = 0; attempt < 3 && !created; attempt++) {
         try { created = await agencyPasarguardRequest(env, agency, "POST", "/api/user", payload); }
@@ -5073,7 +5122,7 @@ async function requestSalesTrial(env, bot, customer, options = {}) {
   try {
     const payload = { username, status: "active", data_limit: dataBytes, expire: new Date(Date.now() + durationHours * 3600000).toISOString(), data_limit_reset_strategy: "no_reset", note: "Free trial / telegram " + customer.telegram_id };
     const location = await env.PASARGUARD_DB.prepare("SELECT group_ids_json FROM sales_locations WHERE bot_id=? AND status='active' ORDER BY sort_order,created_at LIMIT 1").bind(bot.id).first();
-    const groups = salesGroupIds(location); if (groups.length) payload.group_ids = groups;
+    const groups = await resolveSalesGroupIds(env, agency, location); if (groups.length) payload.group_ids = groups;
     let created;
     try { created = await agencyPasarguardRequest(env, agency, "POST", "/api/user", payload); }
     catch (error) { if (error.status === 409) created = await agencyPasarguardRequest(env, agency, "GET", "/api/user/" + encodeURIComponent(username)); else throw error; }
@@ -7229,12 +7278,12 @@ async function resellerOwnerHandleSession(env, bot, account, message, session) {
     const raw = cleanText(text, 100); if (raw.length < 2) throw new Error("نام لوکیشن کوتاه است");
     const match = raw.match(/^(\p{Extended_Pictographic}|\p{Regional_Indicator}{2})\s*(.*)$/u); const emoji = match?.[1] || "🌍"; const title = cleanText(match?.[2] || raw, 90);
     await salesSessionSet(env, bot.id, account.user.telegram_id, "owner_location_groups", { title, emoji });
-    await resellerOwnerPrompt(env, bot, chatId, "شناسه Groupهای پاسارگارد را با کاما ارسال کنید؛ مثال: <code>1,2</code>\nبرای بدون Group عدد <code>0</code> بفرستید.");
+    await resellerOwnerPrompt(env, bot, chatId, "شناسه Groupهای پاسارگارد را با کاما ارسال کنید؛ مثال: <code>1,2</code>\nبرای انتخاب خودکار همه گروه‌های فعال، عدد <code>0</code> بفرستید.");
     return true;
   }
   if (session.state === "owner_location_groups") {
     const groupIds = text === "0" ? [] : text.split(/[،,\s]+/).map(Number).filter(Number.isInteger).filter(x => x > 0);
-    if (text !== "0" && !groupIds.length) throw new Error("حداقل یک Group ID معتبر یا عدد ۰ ارسال کنید");
+    if (text !== "0" && !groupIds.length) throw new Error("حداقل یک Group ID معتبر یا عدد ۰ برای همه گروه‌های فعال ارسال کنید");
     await env.PASARGUARD_DB.prepare("INSERT INTO sales_locations(id,bot_id,title,emoji,group_ids_json,status,sort_order,created_at,updated_at) VALUES(?,?,?,?,?,'active',0,?,?)").bind(id("loc"), bot.id, session.data.title, session.data.emoji, JSON.stringify(groupIds), nowIso(), nowIso()).run();
     return done("catalog", "✅ لوکیشن ساخته شد.");
   }
@@ -10726,7 +10775,7 @@ function planTypeLabel(x){return x==="renew"?"تمدید":x==="volume"?"افزا
 function planTile(x){return'<div class="tile"><div class="tileTop"><div class="tileIcon">📦</div>'+badge(x.status)+'</div><h4>'+esc(x.title)+'</h4><p>'+esc(planTypeLabel(x.plan_type))+' · '+gb(x.data_limit_bytes)+' · '+num(x.duration_days)+' روز</p><div class="pillRow"><span class="miniPill">'+esc((x.category_emoji||"")+" "+(x.category_title||"بدون دسته"))+'</span><span class="miniPill">'+esc((x.location_emoji||"")+" "+(x.location_title||"بدون لوکیشن"))+'</span><span class="miniPill">اولویت '+num(x.sort_order||0)+'</span></div><div class="planPrice">'+money(x.price_toman)+'</div><div class="itemActions"><button class="btn secondary small" data-act="plan-edit" data-id="'+esc(x.id)+'">ویرایش</button><button class="btn '+(x.status==="active"?'warn':'ok')+' small" data-act="plan-toggle" data-id="'+esc(x.id)+'">'+(x.status==="active"?'غیرفعال':'فعال')+'</button><button class="btn danger small" data-act="plan-delete" data-id="'+esc(x.id)+'">حذف</button></div></div>'}
 function renderPlans(){var q=String(el("planSearch").value||"").toLowerCase(),type=el("planTypeFilter").value,st=el("planStateFilter").value,rows=(state.plans||[]).filter(function(x){var hay=[x.title,x.category_title,x.location_title].join(" ").toLowerCase();return(!q||hay.includes(q))&&(type==="all"||x.plan_type===type)&&(st==="all"||x.status===st)});el("plansGrid").innerHTML=rows.length?rows.map(planTile).join(""):empty("📦","پلنی پیدا نشد")}
 function categoryTile(x){var used=(state.plans||[]).filter(function(p){return p.category_id===x.id}).length;return'<div class="tile"><div class="tileTop"><div class="tileIcon">'+esc(x.emoji||"📂")+'</div>'+badge(x.status)+'</div><h4>'+esc(x.title)+'</h4><p>'+num(used)+' پلن متصل · اولویت '+num(x.sort_order||0)+'</p><div class="itemActions"><button class="btn secondary small" data-act="category-edit" data-id="'+esc(x.id)+'">ویرایش</button><button class="btn '+(x.status==="active"?'warn':'ok')+' small" data-act="category-toggle" data-id="'+esc(x.id)+'">'+(x.status==="active"?'غیرفعال':'فعال')+'</button><button class="btn danger small" data-act="category-delete" data-id="'+esc(x.id)+'">حذف</button></div></div>'}
-function locationTile(x){var used=(state.plans||[]).filter(function(p){return p.location_id===x.id}).length,groups=[];try{groups=JSON.parse(x.group_ids_json||"[]")}catch(_){}return'<div class="tile"><div class="tileTop"><div class="tileIcon">'+esc(x.emoji||"🌍")+'</div>'+badge(x.status)+'</div><h4>'+esc(x.title)+'</h4><p>'+esc(x.description||"بدون توضیح")+'</p><div class="pillRow"><span class="miniPill">'+num(used)+' پلن</span><span class="miniPill">'+num(groups.length)+' گروه پنل</span><span class="miniPill">اولویت '+num(x.sort_order||0)+'</span></div><div class="itemActions"><button class="btn secondary small" data-act="location-edit" data-id="'+esc(x.id)+'">ویرایش</button><button class="btn '+(x.status==="active"?'warn':'ok')+' small" data-act="location-toggle" data-id="'+esc(x.id)+'">'+(x.status==="active"?'غیرفعال':'فعال')+'</button><button class="btn danger small" data-act="location-delete" data-id="'+esc(x.id)+'">حذف</button></div></div>'}
+function locationTile(x){var used=(state.plans||[]).filter(function(p){return p.location_id===x.id}).length,groups=[];try{groups=JSON.parse(x.group_ids_json||"[]")}catch(_){}return'<div class="tile"><div class="tileTop"><div class="tileIcon">'+esc(x.emoji||"🌍")+'</div>'+badge(x.status)+'</div><h4>'+esc(x.title)+'</h4><p>'+esc(x.description||"بدون توضیح")+'</p><div class="pillRow"><span class="miniPill">'+num(used)+' پلن</span><span class="miniPill">'+(groups.length?num(groups.length)+' گروه پنل':'همه گروه‌های فعال')+'</span><span class="miniPill">اولویت '+num(x.sort_order||0)+'</span></div><div class="itemActions"><button class="btn secondary small" data-act="location-edit" data-id="'+esc(x.id)+'">ویرایش</button><button class="btn '+(x.status==="active"?'warn':'ok')+' small" data-act="location-toggle" data-id="'+esc(x.id)+'">'+(x.status==="active"?'غیرفعال':'فعال')+'</button><button class="btn danger small" data-act="location-delete" data-id="'+esc(x.id)+'">حذف</button></div></div>'}
 function renderCatalog(){renderPlans();el("categoriesGrid").innerHTML=(state.categories||[]).length?state.categories.map(categoryTile).join(""):empty("📂","هنوز دسته‌بندی ساخته نشده است");el("locationsGrid").innerHTML=(state.locations||[]).length?state.locations.map(locationTile).join(""):empty("🌍","هنوز لوکیشن ساخته نشده است")}
 function ticketCard(x){return'<div class="item"><div class="itemTop"><div><div class="title">'+esc(x.public_code)+' · '+esc(x.subject)+'</div><div class="meta">'+esc(nameOf(x))+' · '+esc(statusLabel(x.category))+' · اولویت '+esc(statusLabel(x.priority))+' · '+date(x.last_message_at)+'</div></div>'+badge(x.status)+'</div><div class="itemActions"><button class="btn secondary small" data-act="ticket-open" data-id="'+esc(x.id)+'">مشاهده و پاسخ</button><button class="btn '+(x.status==="closed"?'ok':'danger')+' small" data-act="ticket-toggle" data-id="'+esc(x.id)+'">'+(x.status==="closed"?'بازکردن':'بستن')+'</button></div></div>'}
 function renderTickets(){var q=String(el("ticketSearch").value||"").toLowerCase(),st=el("ticketStatus").value,rows=(state.tickets||[]).filter(function(x){var hay=[x.public_code,x.subject,x.username,x.first_name,x.last_name,x.telegram_id].join(" ").toLowerCase();return(!q||hay.includes(q))&&(st==="all"||x.status===st)});el("ticketsCount").textContent=num(rows.length)+" تیکت";el("ticketsList").innerHTML=rows.length?rows.map(ticketCard).join(""):empty("🎫","تیکتی پیدا نشد")}
@@ -10759,7 +10808,7 @@ function renderAll(){var b=state.bot,s=state.stats||{};el("sideBrand").textConte
 function categoryOptions(selected){return'<option value="">بدون دسته‌بندی</option>'+(state.categories||[]).map(function(x){return'<option value="'+esc(x.id)+'"'+(selected===x.id?' selected':'')+'>'+esc((x.emoji||"")+" "+x.title)+'</option>'}).join("")}
 function locationOptions(selected){return'<option value="">بدون لوکیشن</option>'+(state.locations||[]).map(function(x){return'<option value="'+esc(x.id)+'"'+(selected===x.id?' selected':'')+'>'+esc((x.emoji||"")+" "+x.title)+'</option>'}).join("")}
 function openCategoryForm(x){x=x||{};openModal(x.id?"ویرایش دسته‌بندی":"دسته‌بندی جدید",'<form id="modalForm"><div class="formGrid"><div class="field"><label>عنوان دسته‌بندی</label><input id="mfTitle" class="input" value="'+esc(x.title||"")+'" required></div><div class="field"><label>ایموجی</label><input id="mfEmoji" class="input" value="'+esc(x.emoji||"")+'" maxlength="20"></div><div class="field"><label>اولویت نمایش</label><input id="mfSort" class="input" type="number" value="'+esc(x.sort_order||0)+'"></div></div><button class="btn" type="submit">ذخیره دسته‌بندی</button></form>');el("modalForm").onsubmit=function(e){e.preventDefault();run({action:"category_save",id:x.id||"",title:el("mfTitle").value,emoji:el("mfEmoji").value,sort_order:el("mfSort").value})}}
-function openLocationForm(x){x=x||{};var groups=[];try{groups=JSON.parse(x.group_ids_json||"[]")}catch(_){}openModal(x.id?"ویرایش لوکیشن":"لوکیشن جدید",'<form id="modalForm"><div class="formGrid"><div class="field"><label>عنوان لوکیشن</label><input id="mfTitle" class="input" value="'+esc(x.title||"")+'" required></div><div class="field"><label>ایموجی</label><input id="mfEmoji" class="input" value="'+esc(x.emoji||"")+'" maxlength="20"></div><div class="field"><label>اولویت نمایش</label><input id="mfSort" class="input" type="number" value="'+esc(x.sort_order||0)+'"></div><div class="field"><label>شناسه گروه‌های پنل <small>با کاما</small></label><input id="mfGroups" class="input ltr" value="'+esc(groups.join(","))+'"></div></div><div class="field"><label>توضیح لوکیشن</label><textarea id="mfDescription" class="input" rows="3">'+esc(x.description||"")+'</textarea></div><button class="btn" type="submit">ذخیره لوکیشن</button></form>');el("modalForm").onsubmit=function(e){e.preventDefault();run({action:"location_save",id:x.id||"",title:el("mfTitle").value,emoji:el("mfEmoji").value,sort_order:el("mfSort").value,description:el("mfDescription").value,group_ids:el("mfGroups").value})}}
+function openLocationForm(x){x=x||{};var groups=[];try{groups=JSON.parse(x.group_ids_json||"[]")}catch(_){}openModal(x.id?"ویرایش لوکیشن":"لوکیشن جدید",'<form id="modalForm"><div class="formGrid"><div class="field"><label>عنوان لوکیشن</label><input id="mfTitle" class="input" value="'+esc(x.title||"")+'" required></div><div class="field"><label>ایموجی</label><input id="mfEmoji" class="input" value="'+esc(x.emoji||"")+'" maxlength="20"></div><div class="field"><label>اولویت نمایش</label><input id="mfSort" class="input" type="number" value="'+esc(x.sort_order||0)+'"></div><div class="field"><label>شناسه گروه‌های پنل <small>با کاما؛ خالی = همه گروه‌های فعال</small></label><input id="mfGroups" class="input ltr" value="'+esc(groups.join(","))+'"></div></div><div class="field"><label>توضیح لوکیشن</label><textarea id="mfDescription" class="input" rows="3">'+esc(x.description||"")+'</textarea></div><button class="btn" type="submit">ذخیره لوکیشن</button></form>');el("modalForm").onsubmit=function(e){e.preventDefault();run({action:"location_save",id:x.id||"",title:el("mfTitle").value,emoji:el("mfEmoji").value,sort_order:el("mfSort").value,description:el("mfDescription").value,group_ids:el("mfGroups").value})}}
 function openPlanForm(x){x=x||{};openModal(x.id?"ویرایش پلن":"پلن جدید",'<form id="modalForm"><div class="formGrid"><div class="field"><label>عنوان پلن</label><input id="mfTitle" class="input" value="'+esc(x.title||"")+'" required></div><div class="field"><label>نوع پلن</label><select id="mfType" class="input"><option value="sale"'+(x.plan_type==="sale"?' selected':'')+'>فروش جدید</option><option value="renew"'+(x.plan_type==="renew"?' selected':'')+'>تمدید</option><option value="volume"'+(x.plan_type==="volume"?' selected':'')+'>افزایش حجم</option></select></div><div class="field"><label>حجم گیگابایت</label><input id="mfGb" class="input" type="number" step="0.01" min="0.01" value="'+esc(x.data_limit_bytes?Number(x.data_limit_bytes)/1073741824:"")+'" required></div><div class="field"><label>مدت روز</label><input id="mfDays" class="input" type="number" min="1" value="'+esc(x.duration_days||30)+'" required></div><div class="field"><label>قیمت تومان</label><input id="mfPrice" class="input" type="number" min="0" value="'+esc(x.price_toman||0)+'" required></div><div class="field"><label>اولویت نمایش</label><input id="mfSort" class="input" type="number" value="'+esc(x.sort_order||0)+'"></div><div class="field"><label>دسته‌بندی</label><select id="mfCategory" class="input">'+categoryOptions(x.category_id)+'</select></div><div class="field"><label>لوکیشن</label><select id="mfLocation" class="input">'+locationOptions(x.location_id)+'</select></div></div><button class="btn" type="submit">ذخیره پلن</button></form>');el("modalForm").onsubmit=function(e){e.preventDefault();run({action:"plan_save",id:x.id||"",title:el("mfTitle").value,plan_type:el("mfType").value,data_gb:el("mfGb").value,duration_days:el("mfDays").value,price_toman:el("mfPrice").value,sort_order:el("mfSort").value,category_id:el("mfCategory").value,location_id:el("mfLocation").value})}}
 function openPromoForm(x){x=x||{};var localDate="";if(x.expires_at){var d=new Date(x.expires_at);if(!isNaN(d.getTime()))localDate=d.toISOString().slice(0,10)}openModal(x.id?"ویرایش کد":"کد جدید",'<form id="modalForm"><div class="formGrid"><div class="field"><label>کد</label><input id="mfCode" class="input ltr" value="'+esc(x.code||"")+'" required></div><div class="field"><label>نوع</label><select id="mfKind" class="input"><option value="discount"'+(x.kind!=="gift"?' selected':'')+'>تخفیف</option><option value="gift"'+(x.kind==="gift"?' selected':'')+'>هدیه کیف پول</option></select></div><div class="field"><label>نوع مقدار</label><select id="mfValueType" class="input"><option value="percent"'+(x.value_type!=="fixed"?' selected':'')+'>درصد</option><option value="fixed"'+(x.value_type==="fixed"?' selected':'')+'>مبلغ ثابت</option></select></div><div class="field"><label>مقدار</label><input id="mfValue" class="input" type="number" min="1" value="'+esc(x.value||"")+'" required></div><div class="field"><label>حداقل خرید تومان</label><input id="mfMin" class="input" type="number" min="0" value="'+esc(x.min_purchase_toman||0)+'"></div><div class="field"><label>حداکثر استفاده کل <small>۰ نامحدود</small></label><input id="mfMax" class="input" type="number" min="0" value="'+esc(x.max_uses||0)+'"></div><div class="field"><label>سهم هر کاربر</label><input id="mfPer" class="input" type="number" min="1" value="'+esc(x.per_user_limit||1)+'"></div><div class="field"><label>تاریخ انقضا</label><input id="mfExpire" class="input ltr" type="date" value="'+esc(localDate)+'"></div></div><div class="field"><label>توضیح</label><textarea id="mfDesc" class="input" rows="3">'+esc(x.description||"")+'</textarea></div><button class="btn" type="submit">ذخیره کد</button></form>');el("modalForm").onsubmit=function(e){e.preventDefault();run({action:"promo_save",id:x.id||"",code:el("mfCode").value,kind:el("mfKind").value,value_type:el("mfValueType").value,value:el("mfValue").value,min_purchase_toman:el("mfMin").value,max_uses:el("mfMax").value,per_user_limit:el("mfPer").value,expires_at:el("mfExpire").value,description:el("mfDesc").value})}}
 function openBalance(x){openModal("اصلاح موجودی "+nameOf(x),'<form id="modalForm"><div class="field"><label>نوع عملیات</label><select id="mfOperation" class="input"><option value="increase">افزایش موجودی</option><option value="decrease">کاهش موجودی</option></select></div><div class="field"><label>مبلغ تومان</label><input id="mfAmount" class="input" type="number" min="1" required></div><div class="field"><label>توضیح</label><input id="mfNote" class="input" placeholder="اصلاح موجودی توسط نماینده"></div><button class="btn" type="submit">ثبت تغییر</button></form>');el("modalForm").onsubmit=function(e){e.preventDefault();run({action:"customer_balance",id:x.id,operation:el("mfOperation").value,amount:el("mfAmount").value,note:el("mfNote").value})}}
@@ -11197,7 +11246,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_EDGE_VERSION='3.3.16';
+const BLUEPANEL_EDGE_VERSION='3.3.17';
 function bluePanelEdgeJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function bluePanelEdgeInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
 function bluePanelEdgeRuntimeBinding(env,name){const value=env?.[name];return{name,exact_key_present:Object.prototype.hasOwnProperty.call(env||{},name),value_present:value!==undefined&&value!==null,fetch_callable:Boolean(value&&typeof value.fetch==='function'),constructor_name:value?.constructor?.name||''}}

@@ -1,11 +1,11 @@
 /* BLUEPANEL_PROCESSOR_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.16
+ * Version: 3.3.17
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = '3.3.16';
+const APP_VERSION = '3.3.17';
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
@@ -1057,9 +1057,58 @@ async function adjustSalesCustomerBalance(env, botId, customerId, amount, type, 
 function salesGroupIds(location) {
   try {
     const value = JSON.parse(location?.group_ids_json || "[]");
-    return Array.isArray(value) ? value.map(Number).filter(Number.isInteger) : [];
+    return Array.isArray(value) ? [...new Set(value.map(Number).filter(x => Number.isInteger(x) && x > 0))] : [];
   } catch (_) { return []; }
 }
+
+const salesActiveGroupCache = new Map();
+
+function normalizePasarguardActiveGroupIds(payload) {
+  const rows = Array.isArray(payload) ? payload
+    : Array.isArray(payload?.groups) ? payload.groups
+    : Array.isArray(payload?.items) ? payload.items
+    : Array.isArray(payload?.data) ? payload.data
+    : Array.isArray(payload?.results) ? payload.results
+    : [];
+  const ids = [];
+  for (const row of rows) {
+    const item = row && typeof row === "object" ? row : { id: row };
+    const status = String(item.status || "").trim().toLowerCase();
+    if (item.is_disabled === true || item.disabled === true || item.is_active === false || item.active === false || ["disabled", "inactive", "deleted", "archived"].includes(status)) continue;
+    const groupId = Number(item.id ?? item.group_id);
+    if (Number.isInteger(groupId) && groupId > 0) ids.push(groupId);
+  }
+  return [...new Set(ids)];
+}
+
+async function agencyActivePasarguardGroupIds(env, agency) {
+  const cacheKey = String(agency?.id || agency?.panel_username || "default");
+  const cached = salesActiveGroupCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < 120000) return [...cached.ids];
+  let response;
+  try {
+    // PasarGuard v5 exposes this lightweight endpoint to both sudo and operator admins.
+    response = await agencyPasarguardRequest(env, agency, "GET", "/api/groups/simple");
+  } catch (simpleError) {
+    try {
+      // Compatibility fallback for older installations that only expose the full groups endpoint.
+      response = await agencyPasarguardRequest(env, agency, "GET", "/api/groups");
+    } catch (fullError) {
+      throw new Error("دریافت گروه‌های فعال پنل پاسارگارد ناموفق بود: " + cleanText(fullError?.message || simpleError?.message || "خطای نامشخص", 300));
+    }
+  }
+  const ids = normalizePasarguardActiveGroupIds(response);
+  salesActiveGroupCache.set(cacheKey, { ids, at: Date.now() });
+  if (salesActiveGroupCache.size > 200) salesActiveGroupCache.delete(salesActiveGroupCache.keys().next().value);
+  return [...ids];
+}
+
+async function resolveSalesGroupIds(env, agency, location) {
+  const explicitlySelected = salesGroupIds(location);
+  if (explicitlySelected.length) return explicitlySelected;
+  return agencyActivePasarguardGroupIds(env, agency);
+}
+
 
 async function sendSalesServiceDelivery(env, bot, chatId, data) {
   const link = cleanText(data.subscriptionUrl, 2000);
@@ -1436,7 +1485,7 @@ async function provisionSalesOrder(env, ownerUser, orderId) {
         data_limit_reset_strategy: "no_reset",
         note: "Telegram sales order " + order.id + " / customer " + order.customer_telegram_id
       };
-      const groups = salesGroupIds(order);
+      const groups = await resolveSalesGroupIds(env, agency, order);
       if (groups.length) payload.group_ids = groups;
       for (let attempt = 0; attempt < 3 && !created; attempt++) {
         try { created = await agencyPasarguardRequest(env, agency, "POST", "/api/user", payload); }
@@ -1996,7 +2045,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_PROCESSOR_VERSION='3.3.16';
+const BLUEPANEL_PROCESSOR_VERSION='3.3.17';
 let processorSchemaPromise=null;
 function processorJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 
