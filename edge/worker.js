@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.18
+ * Version: 3.3.19
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = '3.3.18';
+const APP_VERSION = '3.3.19';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -1184,7 +1184,7 @@ async function handleResellerReportGroupCommand(env,bot,message){
 }
 async function tryImmediateReportDelivery(env,reportId,botId,topicKey,title,messageHtml){
   let centralStatus="pending",resellerStatus=botId?"pending":"skipped";const errors=[];let bot=null;
-  if(botId){try{bot=await env.PASARGUARD_DB.prepare(`SELECT rb.*,u.telegram_id AS owner_telegram_id FROM reseller_bots rb LEFT JOIN users u ON u.id=rb.user_id WHERE rb.id=?`).bind(botId).first();}catch(error){errors.push("خواندن ربات: "+String(error?.message||error));}}
+  if(botId){try{bot=await env.PASARGUARD_DB.prepare(`SELECT rb.id,rb.user_id,rb.bot_token_enc,rb.bot_telegram_id,rb.bot_username,rb.bot_name,rb.brand_name,rb.webhook_secret,rb.status,rb.bot_version,rb.miniapp_enabled,u.telegram_id AS owner_telegram_id FROM reseller_bots rb LEFT JOIN users u ON u.id=rb.user_id WHERE rb.id=?`).bind(botId).first();}catch(error){errors.push("خواندن ربات: "+String(error?.message||error));}}
   const centralDefinition=reportTopicDefinition("central",topicKey),resellerDefinition=reportTopicDefinition("reseller",topicKey);
   const botHeader=bot?"🤖 ربات: <b>"+botEscape(bot.brand_name||bot.bot_name||bot.bot_username||bot.id)+"</b>"+(bot.bot_username?" (@"+botEscape(bot.bot_username)+")":"")+"\n👤 مالک: <code>"+botEscape(bot.owner_telegram_id||"-")+"</code>\n":botId?"🤖 شناسه ربات: <code>"+botEscape(botId)+"</code>\n":"";
   try{const d=await env.PASARGUARD_DB.prepare(`SELECT rf.chat_id,rft.thread_id FROM report_forums rf LEFT JOIN report_forum_topics rft ON rft.scope_key=rf.scope_key AND rft.topic_key=? WHERE rf.scope_key='central' AND rf.status='active'`).bind(centralDefinition.key).first();
@@ -7232,7 +7232,9 @@ async function resellerOwnerHandleSession(env, bot, account, message, session) {
   }
   if (session.state === "owner_child_change_token") {
     const child = await env.PASARGUARD_DB.prepare(`
-      SELECT rb.*,u.telegram_id AS owner_telegram_id
+      SELECT rb.id,rb.user_id,rb.bot_token_enc,rb.bot_telegram_id,rb.bot_username,rb.bot_name,
+             rb.brand_name,rb.webhook_secret,rb.status,rb.bot_version,rb.miniapp_enabled,
+             u.telegram_id AS owner_telegram_id
       FROM reseller_bots rb LEFT JOIN users u ON u.id=rb.user_id
       WHERE rb.id=? AND rb.parent_bot_id=? LIMIT 1
     `).bind(session.data.childId, bot.id).first();
@@ -11398,7 +11400,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_EDGE_VERSION='3.3.17';
+const BLUEPANEL_EDGE_VERSION='3.3.19';
 function bluePanelEdgeJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function bluePanelEdgeInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
 function bluePanelEdgeRuntimeBinding(env,name){const value=env?.[name];return{name,exact_key_present:Object.prototype.hasOwnProperty.call(env||{},name),value_present:value!==undefined&&value!==null,fetch_callable:Boolean(value&&typeof value.fetch==='function'),constructor_name:value?.constructor?.name||''}}

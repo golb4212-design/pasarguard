@@ -1,15 +1,24 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.18
+ * Version: 3.3.19
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.18';
+const APP_VERSION = '3.3.19';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.19": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🗄", text: "رفع خطای D1 too many columns با حذف SELECT ستاره‌ای از JOINهای جدول ۱۰۰ ستونی نمایندگان" },
+      { emoji: "📉", text: "محدودکردن خروجی کوئری‌های گزارش و تغییر توکن به ستون‌های ضروری و سازگار با دیتابیس‌های قدیمی" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "✅", text: "بازگشت پایدار ساخت اشتراک، گزارش‌ها و تغییر توکن بدون خطای سقف ستون‌های D1" }
+    ])
+  }),
   "3.3.18": Object.freeze({
     central: Object.freeze([
       { emoji: "🔑", text: "افزودن تغییر امن توکن ربات نماینده از ربات مرکزی و بخش مدیریت خود نماینده" },
@@ -8624,7 +8633,9 @@ async function tryImmediateReportDelivery(env, reportId, botId, topicKey, title,
   let bot = null;
   if (botId) {
     try {
-      bot = await env.PASARGUARD_DB.prepare(`SELECT rb.*,u.telegram_id AS owner_telegram_id
+      bot = await env.PASARGUARD_DB.prepare(`SELECT rb.id,rb.user_id,rb.bot_token_enc,rb.bot_telegram_id,rb.bot_username,rb.bot_name,
+               rb.brand_name,rb.webhook_secret,rb.status,rb.bot_version,rb.miniapp_enabled,
+               u.telegram_id AS owner_telegram_id
         FROM reseller_bots rb LEFT JOIN users u ON u.id=rb.user_id WHERE rb.id=?`).bind(botId).first();
     } catch (error) {
       errors.push("خواندن ربات: " + String(error?.message || error));
@@ -8718,7 +8729,9 @@ async function coreReportForumApi(env, forum, bot = null) {
 
 async function coreLoadReportBot(env, botId) {
   if (!botId) return null;
-  return env.PASARGUARD_DB.prepare(`SELECT rb.*,u.telegram_id AS owner_telegram_id
+  return env.PASARGUARD_DB.prepare(`SELECT rb.id,rb.user_id,rb.bot_token_enc,rb.bot_telegram_id,rb.bot_username,rb.bot_name,
+               rb.brand_name,rb.webhook_secret,rb.status,rb.bot_version,rb.miniapp_enabled,
+               u.telegram_id AS owner_telegram_id
     FROM reseller_bots rb LEFT JOIN users u ON u.id=rb.user_id WHERE rb.id=?`).bind(botId).first();
 }
 
@@ -13218,7 +13231,9 @@ async function botHandleSessionMessage(env, account, message, session, origin, c
   }
   if (session.state === "sales_bot_change_token") {
     const bot = await env.PASARGUARD_DB.prepare(`
-      SELECT rb.*,u.telegram_id AS owner_telegram_id
+      SELECT rb.id,rb.user_id,rb.bot_token_enc,rb.bot_telegram_id,rb.bot_username,rb.bot_name,
+             rb.brand_name,rb.webhook_secret,rb.status,rb.bot_version,rb.miniapp_enabled,
+             u.telegram_id AS owner_telegram_id
       FROM reseller_bots rb LEFT JOIN users u ON u.id=rb.user_id
       WHERE rb.id=? AND rb.user_id=? LIMIT 1
     `).bind(session.data.botId, account.user.id).first();

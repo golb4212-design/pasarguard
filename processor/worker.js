@@ -1,11 +1,11 @@
 /* BLUEPANEL_PROCESSOR_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.18
+ * Version: 3.3.19
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = '3.3.18';
+const APP_VERSION = '3.3.19';
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
@@ -511,7 +511,9 @@ async function processReportOutbox(env,limit=100){
     let bot=null;
     try{
       if(row.bot_id){
-        bot=await env.PASARGUARD_DB.prepare(`SELECT rb.*,u.telegram_id AS owner_telegram_id,u.username AS owner_username,u.first_name AS owner_first_name
+        bot=await env.PASARGUARD_DB.prepare(`SELECT rb.id,rb.user_id,rb.bot_token_enc,rb.bot_telegram_id,rb.bot_username,rb.bot_name,rb.brand_name,
+                 rb.webhook_secret,rb.status,rb.bot_version,rb.miniapp_enabled,
+                 u.telegram_id AS owner_telegram_id,u.username AS owner_username,u.first_name AS owner_first_name
           FROM reseller_bots rb JOIN users u ON u.id=rb.user_id WHERE rb.id=?`).bind(row.bot_id).first();
       }
     }catch(error){ errors.push("خواندن ربات: "+String(error?.message||error)); }
@@ -2045,7 +2047,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_PROCESSOR_VERSION='3.3.17';
+const BLUEPANEL_PROCESSOR_VERSION='3.3.19';
 let processorSchemaPromise=null;
 function processorJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 
