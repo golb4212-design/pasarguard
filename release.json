@@ -1,7 +1,7 @@
 {
-  "version": "3.3.21",
-  "release_id": "3.3.21-20260716-shared-marzban-per-reseller-usage-billing",
-  "architecture": "fully-split-three-worker-shared-marzban-central-credentials-per-reseller-ledger",
+  "version": "3.3.22",
+  "release_id": "3.3.22-20260716-visible-shared-marzban-settings",
+  "architecture": "fully-split-three-worker-visible-shared-marzban-control",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -32,30 +32,24 @@
     ]
   },
   "features": [
-    "one central Marzban administrator account serves every reseller bot without exposing its username, password or bearer token to resellers",
-    "central admin UI validates the Marzban login before enabling the shared backend",
-    "every created or imported Marzban username is mapped to exactly one reseller bot in D1",
-    "new, renewal, volume, revoke-subscription and delete operations are routed through the shared Marzban backend",
-    "usage is polled per remote username and only the positive byte delta is billed to the owning reseller",
-    "free-trial traffic is included in reseller consumption billing",
-    "usage reset is handled as a new billing cycle and never creates a negative credit",
-    "wallet debit, master margin credit and usage events are idempotent under concurrent, repeated or replayed runs",
-    "existing services receive a first-sync baseline when shared Marzban is enabled to avoid retroactive charging",
-    "bots with delivered services continue to be billed even when the bot is suspended or its license is inactive",
-    "shared Marzban credentials remain central-only and are removed from public settings and audit payloads",
-    "all previous backup delivery, D1 compatibility, token rotation, active-group and error-center fixes remain included",
+    "shared Marzban settings are visible directly in the main central web dashboard",
+    "central bot has a dedicated Marzban management screen with URL, username, password, price, batch, proxies, inbounds, debt policy and connection test",
+    "central web dashboard can save, test, enable and disable the shared Marzban backend",
+    "password messages sent to the central bot are deleted after storage",
+    "resellers never receive Marzban administrator credentials or tokens",
+    "all shared Marzban ownership and per-reseller usage billing features from 3.3.21 remain included",
     "README files are excluded"
   ],
   "deployment": {
     "automatic_provisioning": "upload the ZIP through the central bot; deployment remains pinned to the exact GitHub commit produced by the updater",
-    "db_schema_revision": "3.3.21",
+    "db_schema_revision": "3.3.22",
     "shared_backend_tables": [
       "shared_backend_accounts",
       "shared_backend_usage_events",
       "shared_service_ownership"
     ],
     "staged_compatibility": "Core, Edge and Processor self-create shared tables/indexes and add missing trial-usage columns during staged deployment",
-    "credential_scope": "Marzban URL/admin username/admin password are configured only in central settings or Worker secrets",
+    "credential_scope": "configure Marzban from central dashboard Settings or central bot Management -> Marzban Shared; credentials remain central-only",
     "billing_scope": "one account per reseller bot, one ownership record per panel username, byte-delta accounting with integer remainder preservation",
     "debt_policy": "optional automatic reseller suspension when usage debt remains after wallet collection",
     "master_margin": "child reseller price can include the configured upstream markup; collected margin is credited to the parent wallet once per event"
@@ -80,7 +74,10 @@
     "readme_scan": "passed; no README files",
     "live_marzban_connection": "not run without production panel credentials",
     "live_cloudflare_deployment": "not run without production Cloudflare credentials",
-    "live_wallet_debit": "not run against production D1"
+    "live_wallet_debit": "not run against production D1",
+    "central_web_marzban_form": "passed; visible form in main /control settings page",
+    "central_bot_marzban_menu": "passed; direct management button and complete settings workflow",
+    "central_web_action_handlers": "passed; save and test handlers present with HTTPS and JSON validation"
   },
   "limitations": [
     "Marzban Proxies and Inbounds JSON must match the configuration available on the connected Marzban installation",
@@ -88,15 +85,15 @@
     "production API compatibility depends on the Marzban version and permissions of the configured shared admin account"
   ],
   "sha256": {
-    "core": "fd5021e0312dea289a3f6a6e3b9e7af266eede19f8f1cbd04b0d6353e6cbad69",
-    "edge": "f90c68d0356181118f6c7175e025d8f1fe60c91de2b8d74a4d324b9974526f15",
-    "processor": "200dbdce64f05d464c2d09eaf96cf773077b3b314c77ed25d1bed5d9cf206dbc",
+    "core": "d1d3eed781aff36d361297cfeec7b0765d38d8ae7583cf751381ac15c32a1c26",
+    "edge": "c56c0e7eb1e9dcc466aeeed4205bb974abfef0f43dbeb3aba3501e0c5e2a3d4f",
+    "processor": "b2d7d18071749fec621723c710e93f73ec22e17207c587990ba0bee02dfe649b",
     "durable_object_config": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "fd5021e0312dea289a3f6a6e3b9e7af266eede19f8f1cbd04b0d6353e6cbad69",
-    "edge/worker.js": "f90c68d0356181118f6c7175e025d8f1fe60c91de2b8d74a4d324b9974526f15",
-    "processor/worker.js": "200dbdce64f05d464c2d09eaf96cf773077b3b314c77ed25d1bed5d9cf206dbc",
+    "core/worker.js": "d1d3eed781aff36d361297cfeec7b0765d38d8ae7583cf751381ac15c32a1c26",
+    "edge/worker.js": "c56c0e7eb1e9dcc466aeeed4205bb974abfef0f43dbeb3aba3501e0c5e2a3d4f",
+    "processor/worker.js": "b2d7d18071749fec621723c710e93f73ec22e17207c587990ba0bee02dfe649b",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }

@@ -1,15 +1,25 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.21
+ * Version: 3.3.22
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.21';
+const APP_VERSION = '3.3.22';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.22": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🧭", text: "افزودن تنظیمات قابل‌مشاهده مرزبان مشترک به داشبورد مرکزی اصلی و ربات مرکزی" },
+      { emoji: "🧪", text: "ثبت، تست، فعال‌سازی و غیرفعال‌سازی اتصال مرزبان از هر دو رابط مدیریت" },
+      { emoji: "🔒", text: "حفظ رمز ادمین در مرکز و حذف خودکار پیام حاوی رمز در ربات" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "🌐", text: "نمایندگان همچنان بدون دریافت اطلاعات ورود از مرزبان مشترک استفاده می‌کنند" }
+    ])
+  }),
   "3.3.21": Object.freeze({
     central: Object.freeze([
       { emoji: "🔐", text: "اتصال امن یک ادمین مشترک مرزبان بدون نمایش اطلاعات ورود به نماینده‌ها" },
@@ -409,7 +419,7 @@ let errorCenterSchemaPromise = null;
 
 // Persistent schema marker: avoids replaying the full D1 migration sweep whenever
 // Cloudflare starts a fresh isolate after an idle period.
-const DB_SCHEMA_REVISION = "3.3.21";
+const DB_SCHEMA_REVISION = "3.3.22";
 
 let settingsCache = null;
 
@@ -12014,7 +12024,7 @@ async function botAdminView(env, account) {
       [{ text: "🔄 استعلام پرداخت‌ها", callback_data: "bot:admin:sync_payments" }],
       [{ text: "🧹 حذف فاکتورهای معلق", callback_data: "bot:admin:cleanup" }, { text: "📣 کانال آپدیت‌ها", callback_data: "bot:admin:release_channel" }],
       [{ text: "🧭 سلامت نمایندگان", callback_data: "bot:admin:reseller_ops" }, { text: "🧯 مرکز خطاها", callback_data: "bot:admin:errors" }],
-      [{ text: "⚙️ تنظیمات سامانه", callback_data: "bot:admin:settings" }],
+      [{ text: "🌐 مرزبان مشترک", callback_data: "bot:admin:marzban" }, { text: "⚙️ تنظیمات سامانه", callback_data: "bot:admin:settings" }],
       [{ text: "📦 آپلود ZIP به GitHub", callback_data: "bot:admin:github_zip" }],
       [{ text: "🖥 داشبورد مدیریت وب", url: managementUrl }],
       [{ text: "🤖 ربات مرکزی", callback_data: "bot:admin:central_bot" }, { text: "🐍 Python Helper", callback_data: "bot:admin:python" }],
@@ -12255,6 +12265,7 @@ async function botAdminSettingsView(env, account) {
       "💳 حداقل شارژ: <b>" + botMoney(s.min_recharge) + " تومان</b>\n" +
       "🔐 جوین اجباری: <b>" + (s.central_join_enabled === "true" ? "فعال" : "غیرفعال") + "</b>\n" +
       "⚙️ همگام‌سازی مصرف: <b>" + (s.usage_sync_enabled === "true" ? "فعال" : "غیرفعال") + "</b>\n" +
+      "🌐 مرزبان مشترک: <b>" + (sharedMarzbanEnabled(s, env) ? "فعال" : "غیرفعال") + "</b>\n" +
       "🔌 API پاسارگارد: <b>" + (isPasarguardApiKey(s.pasarguard_access_token) ? "ثبت شده" : "ثبت نشده") + "</b>",
     reply_markup: { inline_keyboard: [
       [{ text: "💠 قیمت هر گیگ", callback_data: "bot:setting:price_per_gb" }, { text: "💰 حداقل موجودی پنل", callback_data: "bot:setting:setup_fee" }],
@@ -12263,6 +12274,7 @@ async function botAdminSettingsView(env, account) {
       [{ text: "🎁 تنظیم تست مرکزی", callback_data: "bot:admin:trial" }],
       [{ text: "💳 حداقل شارژ", callback_data: "bot:setting:min_recharge" }, { text: "⏱ انقضای فاکتور", callback_data: "bot:setting:pending_invoice_ttl_hours" }],
       [{ text: "🔐 تنظیمات عضویت", callback_data: "bot:admin:settings:access" }, { text: "⚙️ تنظیمات خودکار", callback_data: "bot:admin:settings:automation" }],
+      [{ text: "🌐 مرزبان مشترک مرکزی", callback_data: "bot:admin:marzban" }],
       [{ text: "🔌 اتصال API پاسارگارد", callback_data: "bot:admin:pasarguard_api" }],
       [{ text: "↩️ مدیریت سامانه", callback_data: "bot:admin" }]
     ] }
@@ -12331,6 +12343,42 @@ async function botAdminCubepayView(env, account) {
     [{text:"🧪 بررسی تنظیمات",callback_data:"bot:admin:cubepay:test"},{text:enabled?"⏸ غیرفعال‌کردن":"▶️ فعال‌کردن",callback_data:"bot:admin:cubepay:toggle"}],
     [{text:"↩️ تعرفه و هزینه‌ها",callback_data:"bot:admin:settings:finance"}]
   ]}};
+}
+
+async function botAdminMarzbanView(env, account) {
+  if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+  const settings = await getSettings(env);
+  const enabled = sharedMarzbanEnabled(settings, env);
+  const panelUrl = cleanText(settings.marzban_panel_url, 500);
+  const username = cleanText(settings.marzban_admin_username, 160);
+  const passwordSet = Boolean(String(settings.marzban_admin_password || env.MARZBAN_ADMIN_PASSWORD || "").trim());
+  const ready = Boolean(panelUrl && username && passwordSet);
+  const proxiesReady = (() => { try { const v=JSON.parse(settings.marzban_proxies_json||"{}"); return v && typeof v==="object" && !Array.isArray(v) && Object.keys(v).length>0; } catch (_) { return false; } })();
+  const inboundsReady = (() => { try { const v=JSON.parse(settings.marzban_inbounds_json||"{}"); return v && typeof v==="object" && !Array.isArray(v) && Object.keys(v).length>0; } catch (_) { return false; } })();
+  const rows = [
+    [{ text: enabled ? "⏸ غیرفعال‌کردن مرزبان" : "▶️ فعال‌کردن مرزبان", callback_data: "bot:admin:marzban:toggle" }, { text: "🧪 تست اتصال", callback_data: "bot:admin:marzban:test" }],
+    [{ text: "🌐 آدرس پنل", callback_data: "bot:admin:marzban:url" }, { text: "👤 نام کاربری", callback_data: "bot:admin:marzban:username" }],
+    [{ text: passwordSet ? "🔑 تغییر رمز ادمین" : "🔑 ثبت رمز ادمین", callback_data: "bot:admin:marzban:password" }],
+    [{ text: "💰 قیمت و Batch", callback_data: "bot:admin:marzban:billing" }, { text: settings.marzban_suspend_on_debt !== "false" ? "🛑 تعلیق بدهی: روشن" : "🟢 تعلیق بدهی: خاموش", callback_data: "bot:admin:marzban:suspend" }],
+    [{ text: "🧩 تنظیم Proxies", callback_data: "bot:admin:marzban:proxies" }, { text: "📡 تنظیم Inbounds", callback_data: "bot:admin:marzban:inbounds" }],
+    [{ text: "🔄 بروزرسانی وضعیت", callback_data: "bot:admin:marzban" }],
+    [{ text: "↩️ تنظیمات سامانه", callback_data: "bot:admin:settings" }]
+  ];
+  const lines = [
+    "🌐 <b>مرزبان مشترک مرکزی</b>", "━━━━━━━━━━━━━━",
+    "وضعیت: <b>" + (enabled && ready ? "🟢 فعال" : enabled ? "🟠 تنظیمات ناقص" : "🔴 غیرفعال") + "</b>",
+    "آدرس: <code>" + botEscape(panelUrl || "ثبت نشده") + "</code>",
+    "ادمین: <code>" + botEscape(username || "ثبت نشده") + "</code>",
+    "رمز: <b>" + (passwordSet ? "ثبت شده و مخفی" : "ثبت نشده") + "</b>",
+    "قیمت خرید هر گیگ: <b>" + botMoney(settings.marzban_price_per_gb || settings.price_per_gb || 0) + " تومان</b>",
+    "تعداد سرویس در هر نوبت: <b>" + botMoney(settings.marzban_sync_batch || 10) + "</b>",
+    "Proxies: <b>" + (proxiesReady ? "ثبت شده" : "خالی") + "</b> · Inbounds: <b>" + (inboundsReady ? "ثبت شده" : "خالی") + "</b>",
+    "تعلیق هنگام بدهی: <b>" + (settings.marzban_suspend_on_debt !== "false" ? "روشن" : "خاموش") + "</b>"
+  ];
+  if (settings.marzban_last_verified_at) lines.push("آخرین تست موفق: <b>" + botDate(settings.marzban_last_verified_at) + "</b>");
+  if (settings.marzban_last_error) lines.push("", "⚠️ آخرین خطا:", "<code>" + botEscape(settings.marzban_last_error) + "</code>");
+  lines.push("", "اطلاعات ورود فقط در Worker مرکزی استفاده می‌شوند و هر نماینده فقط سرویس‌های متعلق به خودش را مدیریت می‌کند.");
+  return { text: lines.join("\n"), reply_markup: { inline_keyboard: rows } };
 }
 
 async function botAdminPasarguardApiView(env, account) {
@@ -12568,6 +12616,7 @@ async function botRenderView(env, account, view) {
   if (view === "admin_settings_finance") return botAdminSettingsGroupView(env, account, "finance");
   if (view === "admin_plisio") return botAdminPlisioView(env, account);
   if (view === "admin_cubepay") return botAdminCubepayView(env, account);
+  if (view === "admin_marzban") return botAdminMarzbanView(env, account);
   if (view === "admin_pasarguard_api") return botAdminPasarguardApiView(env, account);
   if (view === "admin_settings_access") return botAdminSettingsGroupView(env, account, "access");
   if (view === "admin_settings_automation") return botAdminSettingsGroupView(env, account, "automation");
@@ -12927,11 +12976,78 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
     "bot:admin:group:users": "admin_group_users", "bot:admin:group:finance": "admin_group_finance",
     "bot:admin:group:operations": "admin_group_operations", "bot:admin:group:communications": "admin_group_communications",
     "bot:admin:group:system": "admin_group_system", "bot:admin:reseller_ops": "admin_reseller_ops", "bot:admin:errors": "admin_errors",
-    "bot:admin:join_channels": "admin_join_channels", "bot:admin:github_zip": "admin_github_zip"
+    "bot:admin:join_channels": "admin_join_channels", "bot:admin:github_zip": "admin_github_zip", "bot:admin:marzban": "admin_marzban"
   };
   if (simpleViews[data]) {
     await botClearSession(env, account.user.telegram_id);
     await botSendOrEdit(env, { account, chatId, messageId }, simpleViews[data]);
+    return;
+  }
+
+  if (data === "bot:admin:marzban:toggle") {
+    if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+    const settings = await getSettings(env);
+    const enabling = !sharedMarzbanEnabled(settings, env);
+    if (enabling) {
+      try {
+        sharedMarzbanConfig({ ...settings, marzban_shared_enabled:"true", service_backend:"marzban_shared" }, env);
+        await getSharedMarzbanToken(env, { ...settings, marzban_shared_enabled:"true", service_backend:"marzban_shared" }, true);
+      } catch (error) {
+        await setSettings(env,{marzban_last_error:cleanText(error?.message||error,500)});
+        throw new Error("فعال‌سازی مرزبان ناموفق بود: " + cleanText(error?.message || error, 400));
+      }
+      const ts=nowIso();
+      await setSettings(env,{marzban_shared_enabled:"true",service_backend:"marzban_shared",marzban_last_verified_at:ts,marzban_last_error:""});
+      await ensureSharedMarzbanTables(env);
+      await env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO shared_backend_accounts(bot_id,provider,initialized,created_at,updated_at) SELECT id,'marzban',0,?,? FROM reseller_bots`).bind(ts,ts).run();
+    } else {
+      await setSettings(env,{marzban_shared_enabled:"false",service_backend:"pasarguard"});
+    }
+    sharedMarzbanTokenCache.clear();
+    await audit(env,account.user.id,"shared_marzban_toggled_from_bot",{enabled:enabling});
+    const fresh=await ensureTelegramBotUser(env,callback.from);fresh.public_origin=origin;
+    await botSendOrEdit(env,{account:fresh,chatId,messageId},"admin_marzban");
+    return;
+  }
+  if (data === "bot:admin:marzban:test") {
+    if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+    const settings=await getSettings(env);
+    const probeSettings={...settings,marzban_shared_enabled:"true",service_backend:"marzban_shared"};
+    try {
+      const token=await getSharedMarzbanToken(env,probeSettings,true);
+      const ts=nowIso();await setSettings(env,{marzban_last_verified_at:ts,marzban_last_error:""});
+      await audit(env,account.user.id,"shared_marzban_tested_from_bot",{ok:Boolean(token)});
+      try { await telegramApi(env,"answerCallbackQuery",{callback_query_id:callback.id,text:"✅ اتصال مرزبان موفق بود",show_alert:false}); } catch (_) {}
+    } catch (error) {
+      await setSettings(env,{marzban_last_error:cleanText(error?.message||error,500)});
+      throw error;
+    }
+    const fresh=await ensureTelegramBotUser(env,callback.from);fresh.public_origin=origin;
+    await botSendOrEdit(env,{account:fresh,chatId,messageId},"admin_marzban");
+    return;
+  }
+  if (["url","username","password","billing","proxies","inbounds"].some(x=>data==="bot:admin:marzban:"+x)) {
+    if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+    const field=data.split(":").pop();
+    const prompts={
+      url:"🌐 <b>آدرس HTTPS پنل مرزبان را ارسال کنید</b>\nنمونه: <code>https://panel.example.com</code>",
+      username:"👤 <b>نام کاربری ادمین مشترک مرزبان را ارسال کنید</b>",
+      password:"🔑 <b>رمز ادمین مشترک مرزبان را ارسال کنید</b>\nپیام حاوی رمز پس از ذخیره حذف می‌شود.",
+      billing:"💰 <b>قیمت خرید هر گیگ و Batch را ارسال کنید</b>\nقالب: <code>2000 | 10</code>",
+      proxies:"🧩 <b>JSON مربوط به Proxies مرزبان را ارسال کنید</b>\nنمونه: <code>{\"vless\":{}}</code>",
+      inbounds:"📡 <b>JSON مربوط به Inbounds مرزبان را ارسال کنید</b>\nنمونه: <code>{\"vless\":[\"VLESS TCP REALITY\"]}</code>"
+    };
+    await botSetSession(env,account.user.telegram_id,"setting_marzban_"+field,{});
+    await botPrompt(env,chatId,prompts[field],[[{text:"لغو",callback_data:"bot:cancel"}]]);
+    return;
+  }
+  if (data === "bot:admin:marzban:suspend") {
+    if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+    const settings=await getSettings(env);const next=settings.marzban_suspend_on_debt==="false"?"true":"false";
+    await setSettings(env,{marzban_suspend_on_debt:next});
+    await audit(env,account.user.id,"shared_marzban_debt_policy_toggled",{enabled:next==="true"});
+    const fresh=await ensureTelegramBotUser(env,callback.from);fresh.public_origin=origin;
+    await botSendOrEdit(env,{account:fresh,chatId,messageId},"admin_marzban");
     return;
   }
 
@@ -14259,6 +14375,36 @@ async function botHandleSessionMessage(env, account, message, session, origin, c
     return true;
   }
 
+  if (String(session.state || "").startsWith("setting_marzban_")) {
+    if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
+    const field=String(session.state).slice("setting_marzban_".length);
+    const settings=await getSettings(env);const values={};
+    if (field==="url") {
+      const url=String(text||"").trim().replace(/\/+$/,"");
+      if (!/^https:\/\//i.test(url)) throw new Error("آدرس مرزبان باید با HTTPS شروع شود");
+      values.marzban_panel_url=url;
+    } else if (field==="username") {
+      const username=cleanText(text,160);if(!username)throw new Error("نام کاربری معتبر نیست");values.marzban_admin_username=username;
+    } else if (field==="password") {
+      const password=String(text||"").trim();if(password.length<1||password.length>1000)throw new Error("رمز ادمین معتبر نیست");values.marzban_admin_password=password;
+      try { await telegramApi(env,"deleteMessage",{chat_id:chatId,message_id:message.message_id}); } catch (_) {}
+    } else if (field==="billing") {
+      const parts=String(text||"").split("|").map(x=>x.trim());const price=botParseInteger(parts[0]),batch=botParseInteger(parts[1]);
+      if(!Number.isFinite(price)||price<0)throw new Error("قیمت هر گیگ معتبر نیست");if(!Number.isFinite(batch)||batch<1||batch>20)throw new Error("Batch باید بین ۱ تا ۲۰ باشد");
+      values.marzban_price_per_gb=String(price);values.marzban_sync_batch=String(batch);
+    } else if (field==="proxies" || field==="inbounds") {
+      let parsed;try{parsed=JSON.parse(String(text||"{}"));}catch(_){throw new Error("JSON معتبر نیست");}
+      if(!parsed||typeof parsed!=="object"||Array.isArray(parsed))throw new Error("مقدار باید JSON Object باشد");
+      values[field==="proxies"?"marzban_proxies_json":"marzban_inbounds_json"]=JSON.stringify(parsed);
+    } else throw new Error("تنظیم ناشناخته است");
+    await setSettings(env,values);sharedMarzbanTokenCache.clear();
+    await audit(env,account.user.id,"shared_marzban_setting_changed_from_bot",{field,value:field==="password"?"***":Object.values(values)[0]});
+    await botClearSession(env,account.user.telegram_id);
+    const fresh=await ensureTelegramBotUser(env,message.from);fresh.public_origin=origin;
+    await botSendOrEdit(env,{account:fresh,chatId},"admin_marzban");
+    return true;
+  }
+
   if (session.state === "setting_pasarguard_api_key") {
     if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
     const apiKey = cleanText(text, 2048);
@@ -14977,6 +15123,45 @@ async function centralAdminAction(request, env) {
   const body = await parseBody(request);
   const action = cleanText(body.action, 80);
   try {
+    if (action === "save_shared_marzban") {
+      const current=await getSettings(env);
+      const enabled=Boolean(body.enabled);
+      const panelUrl=String(body.panel_url ?? current.marzban_panel_url ?? "").trim().replace(/\/+$/,"");
+      const username=cleanText(body.username ?? current.marzban_admin_username,160);
+      const submittedPassword=String(body.password||"").trim();
+      const password=submittedPassword || String(current.marzban_admin_password || env.MARZBAN_ADMIN_PASSWORD || "");
+      if (panelUrl && !/^https:\/\//i.test(panelUrl)) throw new Error("آدرس مرزبان باید با HTTPS شروع شود");
+      let proxies={},inbounds={};
+      try { proxies=JSON.parse(String(body.proxies_json ?? current.marzban_proxies_json ?? "{}")); } catch (_) { throw new Error("Proxies باید JSON معتبر باشد"); }
+      try { inbounds=JSON.parse(String(body.inbounds_json ?? current.marzban_inbounds_json ?? "{}")); } catch (_) { throw new Error("Inbounds باید JSON معتبر باشد"); }
+      if(!proxies||typeof proxies!=="object"||Array.isArray(proxies))throw new Error("Proxies باید JSON Object باشد");
+      if(!inbounds||typeof inbounds!=="object"||Array.isArray(inbounds))throw new Error("Inbounds باید JSON Object باشد");
+      const values={
+        marzban_shared_enabled:enabled?"true":"false",service_backend:enabled?"marzban_shared":"pasarguard",
+        marzban_panel_url:panelUrl,marzban_admin_username:username,
+        marzban_price_per_gb:String(clampInt(body.price_per_gb ?? current.marzban_price_per_gb ?? current.price_per_gb ?? 0,0,1000000000000)),
+        marzban_sync_batch:String(Math.max(1,Math.min(20,clampInt(body.sync_batch ?? current.marzban_sync_batch ?? 10,1,20)))),
+        marzban_proxies_json:JSON.stringify(proxies),marzban_inbounds_json:JSON.stringify(inbounds),
+        marzban_suspend_on_debt:body.suspend_on_debt===false?"false":"true"
+      };
+      if(submittedPassword)values.marzban_admin_password=submittedPassword;
+      if(enabled){
+        if(!panelUrl||!username||!password)throw new Error("آدرس، نام کاربری و رمز ادمین مرزبان را کامل کنید");
+        const prospective={...current,...values,marzban_admin_password:password};
+        try{sharedMarzbanConfig(prospective,env);await getSharedMarzbanToken(env,prospective,true);values.marzban_last_verified_at=nowIso();values.marzban_last_error="";}
+        catch(error){await setSettings(env,{marzban_last_error:cleanText(error?.message||error,500)});throw new Error("اتصال مرزبان تأیید نشد: "+cleanText(error?.message||error,500));}
+      }
+      await setSettings(env,values);sharedMarzbanTokenCache.clear();
+      if(enabled){await ensureSharedMarzbanTables(env);const ts=nowIso();await env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO shared_backend_accounts(bot_id,provider,initialized,created_at,updated_at) SELECT id,'marzban',0,?,? FROM reseller_bots`).bind(ts,ts).run();}
+      await audit(env,auth.user.id,"shared_marzban_saved_from_central_panel",{enabled,panel_url:panelUrl,username,password_changed:Boolean(submittedPassword),price_per_gb:values.marzban_price_per_gb,sync_batch:values.marzban_sync_batch});
+      return json({success:true,message:enabled?"مرزبان مشترک ذخیره و اتصال آن تأیید شد":"مرزبان مشترک غیرفعال شد",result:{enabled,verified_at:values.marzban_last_verified_at||current.marzban_last_verified_at||""}});
+    }
+    if (action === "test_shared_marzban") {
+      const settings=await getSettings(env);
+      const probeSettings={...settings,marzban_shared_enabled:"true",service_backend:"marzban_shared"};
+      try{const token=await getSharedMarzbanToken(env,probeSettings,true);const ts=nowIso();await setSettings(env,{marzban_last_verified_at:ts,marzban_last_error:""});await audit(env,auth.user.id,"shared_marzban_tested_from_central_panel",{ok:Boolean(token),panel_url:settings.marzban_panel_url||""});return json({success:true,message:"اتصال مرزبان موفق بود",result:{verified_at:ts}});}
+      catch(error){await setSettings(env,{marzban_last_error:cleanText(error?.message||error,500)});throw error;}
+    }
     if (action === "save_pasarguard_api") {
       const current = await getSettings(env);
       const panelUrl = normalizePasarguardPanelUrl(body.panel_url || current.pasarguard_panel_url);
