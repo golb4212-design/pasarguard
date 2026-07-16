@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.19
+ * Version: 3.3.20
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = '3.3.19';
+const APP_VERSION = '3.3.20';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -5837,6 +5837,99 @@ async function processSalesCampaign(env, campaign) {
   }
 }
 
+
+function backupDocumentTopicErrorIsRecoverable(error) {
+  return /message thread not found|thread.*not found|topic.*closed|topic_closed|forum topic|message_thread_id/i.test(String(error?.message || error || ""));
+}
+
+function backupDocumentFileName(bot, snapshotId, snapshotType, createdAt) {
+  const botPart = String(bot?.bot_username || bot?.id || "reseller").replace(/[^A-Za-z0-9_-]+/g, "_").slice(0, 42) || "reseller";
+  const stamp = String(createdAt || nowIso()).replace(/\D/g, "").slice(0, 14) || String(Date.now());
+  const idPart = String(snapshotId || "snapshot").replace(/[^A-Za-z0-9_-]+/g, "_").slice(-18);
+  return "pasargad-backup-" + botPart + "-" + (snapshotType === "auto" ? "auto" : "manual") + "-" + stamp + "-" + idPart + ".json";
+}
+
+async function sendTelegramBackupDocument(token, chatId, threadId, raw, filename, caption) {
+  if (!token) throw new Error("توکن ربات برای ارسال فایل بکاپ تنظیم نشده است");
+  const form = new FormData();
+  form.set("chat_id", String(chatId));
+  if (Number(threadId || 0) > 0) form.set("message_thread_id", String(Number(threadId)));
+  form.set("document", new Blob([String(raw || "{}")], { type: "application/json; charset=utf-8" }), filename || "pasargad-backup.json");
+  form.set("caption", cleanText(caption, 950));
+  form.set("parse_mode", "HTML");
+  form.set("disable_content_type_detection", "true");
+  const response = await fetch("https://api.telegram.org/bot" + token + "/sendDocument", { method: "POST", body: form });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok === false) throw new Error(data.description || "ارسال فایل بکاپ به تلگرام ناموفق بود");
+  return data;
+}
+
+async function ensureBackupDocumentTopic(env, forum, scopeType, bot = null, recreate = false) {
+  const scopeKey = String(forum.scope_key || (scopeType === "central" ? "central" : reportScopeKey(bot?.id)));
+  const definition = reportTopicDefinition(scopeType, "backups");
+  if (recreate) {
+    await env.PASARGUARD_DB.prepare("DELETE FROM report_forum_topics WHERE scope_key=? AND topic_key=?")
+      .bind(scopeKey, definition.key).run();
+  }
+  let topic = await env.PASARGUARD_DB.prepare("SELECT thread_id,title FROM report_forum_topics WHERE scope_key=? AND topic_key=?")
+    .bind(scopeKey, definition.key).first();
+  if (Number(topic?.thread_id || 0) > 0) return { ...topic, topic_key: definition.key };
+  const created = scopeType === "central"
+    ? await telegramApi(env, "createForumTopic", { chat_id: String(forum.chat_id), name: definition.title, icon_color: definition.color })
+    : await resellerTelegramApi(env, bot, "createForumTopic", { chat_id: String(forum.chat_id), name: definition.title, icon_color: definition.color });
+  const threadId = Number(created?.result?.message_thread_id || 0);
+  if (!threadId) throw new Error("ساخت Topic فایل بکاپ ناموفق بود");
+  const ts = nowIso();
+  await env.PASARGUARD_DB.prepare(`INSERT INTO report_forum_topics(scope_key,topic_key,thread_id,title,created_at,updated_at)
+    VALUES(?,?,?,?,?,?) ON CONFLICT(scope_key,topic_key) DO UPDATE SET thread_id=excluded.thread_id,title=excluded.title,updated_at=excluded.updated_at`)
+    .bind(scopeKey, definition.key, threadId, definition.title, ts, ts).run();
+  return { thread_id: threadId, title: definition.title, topic_key: definition.key };
+}
+
+async function deliverResellerSnapshotDocument(env, bot, raw, snapshotId, snapshotType, createdAt) {
+  const result = { central: "skipped", reseller: "skipped", errors: [] };
+  const filename = backupDocumentFileName(bot, snapshotId, snapshotType, createdAt);
+  const caption = "🗄 <b>فایل بکاپ ربات نماینده</b>\n" +
+    "🤖 ربات: <b>" + botEscape(bot?.brand_name || bot?.bot_username || bot?.id || "-") + "</b>\n" +
+    "📦 نوع: <b>" + (snapshotType === "auto" ? "خودکار" : "دستی") + "</b>\n" +
+    "🆔 شناسه: <code>" + botEscape(snapshotId) + "</code>\n" +
+    "🏷 نسخه: <code>" + botEscape(APP_VERSION) + "</code>";
+  const targets = [
+    { key: "central", scopeKey: "central", scopeType: "central", bot: null },
+    { key: "reseller", scopeKey: reportScopeKey(bot.id), scopeType: "reseller", bot }
+  ];
+  for (const target of targets) {
+    const forum = await env.PASARGUARD_DB.prepare("SELECT scope_key,scope_type,bot_id,chat_id,status FROM report_forums WHERE scope_key=? AND status='active'")
+      .bind(target.scopeKey).first();
+    if (!forum?.chat_id) continue;
+    const sendOnce = async (recreate = false) => {
+      const topic = await ensureBackupDocumentTopic(env, forum, target.scopeType, target.bot, recreate);
+      const token = target.scopeType === "central"
+        ? String((await getSettings(env)).bot_token || "")
+        : await resellerBotToken(env, target.bot);
+      return sendTelegramBackupDocument(token, forum.chat_id, topic.thread_id, raw, filename, caption);
+    };
+    try {
+      try { await sendOnce(false); }
+      catch (error) {
+        if (!backupDocumentTopicErrorIsRecoverable(error)) throw error;
+        await sendOnce(true);
+      }
+      result[target.key] = "delivered";
+      const ts = nowIso();
+      await env.PASARGUARD_DB.prepare("UPDATE report_forums SET last_delivery_at=?,last_error=NULL,updated_at=? WHERE scope_key=?")
+        .bind(ts, ts, target.scopeKey).run();
+    } catch (error) {
+      const message = cleanText(String(error?.message || error), 500);
+      result[target.key] = "failed";
+      result.errors.push((target.key === "central" ? "مرکزی" : "نماینده") + ": " + message);
+      await env.PASARGUARD_DB.prepare("UPDATE report_forums SET last_error=?,updated_at=? WHERE scope_key=?")
+        .bind(message, nowIso(), target.scopeKey).run().catch(() => null);
+    }
+  }
+  return result;
+}
+
 function resellerSnapshotSettings(bot) {
   const out = {};
   for (const key of RESELLER_BACKUP_FIELDS) out[key] = bot?.[key] ?? null;
@@ -5884,13 +5977,23 @@ async function createResellerSnapshot(env, bot, actorTelegramId = "system", snap
     await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET last_backup_at=?,last_backup_status='success',last_backup_error=NULL,updated_at=? WHERE id=?")
       .bind(createdAt, createdAt, fresh.id).run();
     await pruneResellerSnapshots(env, fresh.id, fresh.backup_retention_days || 14);
+    const fileDelivery = await deliverResellerSnapshotDocument(env, fresh, raw, snapshotId, snapshotType, createdAt);
     await queueReportEvent(env, fresh.id, "backups", snapshotType === "auto" ? "بکاپ خودکار ربات ساخته شد" : "بکاپ دستی ربات ساخته شد",
       "ربات: <b>" + botEscape(fresh.brand_name || fresh.bot_username) + "</b>\n" +
       "نوع: <b>" + (snapshotType === "auto" ? "خودکار" : "دستی") + "</b>\n" +
       "حجم فایل: <b>" + botMoney(new TextEncoder().encode(raw).length) + " بایت</b>\n" +
-      "شناسه بکاپ: <code>" + botEscape(snapshotId) + "</code>",
+      "شناسه بکاپ: <code>" + botEscape(snapshotId) + "</code>\n" +
+      "فایل گروه مرکزی: <b>" + (fileDelivery.central === "delivered" ? "ارسال شد ✅" : fileDelivery.central === "failed" ? "ناموفق ❌" : "تنظیم نشده") + "</b>\n" +
+      "فایل گروه نماینده: <b>" + (fileDelivery.reseller === "delivered" ? "ارسال شد ✅" : fileDelivery.reseller === "failed" ? "ناموفق ❌" : "تنظیم نشده") + "</b>",
       "backup-success:" + snapshotId);
-    return { id: snapshotId, created_at: createdAt, size_bytes: new TextEncoder().encode(raw).length, type: snapshotType };
+    if (fileDelivery.errors.length) {
+      await queueReportEvent(env, fresh.id, "errors", "فایل بکاپ ساخته شد اما ارسال گروه ناقص بود",
+        "ربات: <b>" + botEscape(fresh.brand_name || fresh.bot_username) + "</b>\n" +
+        "شناسه بکاپ: <code>" + botEscape(snapshotId) + "</code>\n" +
+        "جزئیات: <code>" + botEscape(cleanText(fileDelivery.errors.join(" | "), 900)) + "</code>",
+        "backup-file-delivery:" + snapshotId);
+    }
+    return { id: snapshotId, created_at: createdAt, size_bytes: new TextEncoder().encode(raw).length, type: snapshotType, file_delivery: fileDelivery };
   } catch (error) {
     await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET last_backup_status='failed',last_backup_error=?,updated_at=? WHERE id=?")
       .bind(cleanText(error.message, 500), nowIso(), fresh.id).run();

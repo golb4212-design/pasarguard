@@ -1,7 +1,7 @@
 {
-  "version": "3.3.19",
-  "release_id": "3.3.19-20260716-d1-result-column-limit-fix",
-  "architecture": "fully-split-three-worker-d1-safe-narrow-reseller-queries",
+  "version": "3.3.20",
+  "release_id": "3.3.20-20260716-backup-document-topic-delivery",
+  "architecture": "fully-split-three-worker-real-backup-document-delivery",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -32,11 +32,12 @@
     ]
   },
   "features": [
-    "fixes D1 too many columns in result set on legacy reseller_bots tables at the 100-column ceiling",
-    "replaces every reseller_bots star-plus-owner JOIN with an explicit narrow projection",
-    "keeps report delivery and secure reseller token rotation in a single query without exceeding D1 result limits",
-    "requires no destructive database migration and preserves all reseller, customer, order and service data",
-    "keeps all previous secure token rotation, active-group defaults, error-center and exact-commit update features",
+    "sends the actual reseller backup JSON file with Telegram sendDocument instead of only a text notification",
+    "delivers manual backups created by Core or Edge and automatic backups created by Processor",
+    "sends to the configured backups topic in both the central report forum and the reseller report forum",
+    "automatically recreates a missing, closed or invalid backup topic and retries document delivery once",
+    "records per-destination delivery outcome in the backup report without marking a successfully stored D1 snapshot as failed",
+    "keeps all previous D1 column-limit, secure token rotation, active-group defaults and error-center fixes",
     "README files are excluded"
   ],
   "deployment": {
@@ -47,7 +48,9 @@
     "staged_compatibility": "Processor uses INSERT OR IGNORE plus conditional UPDATE until Core migration is guaranteed",
     "default_group_assignment": "explicit location group IDs override; otherwise all active/assignable PasarGuard groups are attached",
     "reseller_token_rotation": "fresh webhook secret, Telegram validation, D1 identity switch, cache invalidation and old-webhook cleanup",
-    "d1_result_column_fix": "all reseller_bots JOIN projections are explicit and remain below the D1 100-column limit"
+    "d1_result_column_fix": "all reseller_bots JOIN projections are explicit and remain below the D1 100-column limit",
+    "backup_file_delivery": "real JSON document via Telegram sendDocument to central and reseller backup topics",
+    "backup_topic_recovery": "invalid or closed backup topics are recreated and document upload is retried once"
   },
   "validation": {
     "node_syntax_core": "passed",
@@ -61,21 +64,29 @@
     "report_delivery_projection": "12 to 14 columns",
     "version_constants": "passed",
     "release_manifest_hashes": "recalculated",
-    "live_cloudflare_deployment": "not run without production credentials"
+    "live_cloudflare_deployment": "not run without production credentials",
+    "backup_document_helper_core": "added",
+    "backup_document_helper_edge": "added",
+    "backup_document_helper_processor": "added",
+    "manual_backup_paths": "Core and Edge",
+    "automatic_backup_path": "Processor",
+    "live_telegram_delivery": "not run without production bot tokens and group access",
+    "telegram_multipart_mock": "passed: sendDocument endpoint, chat_id, message_thread_id, filename and JSON bytes verified",
+    "readme_scan": "passed; no README files"
   },
   "limitations": [
     "production Cloudflare, Telegram, GitHub and PasarGuard calls were not executed without account credentials"
   ],
   "sha256": {
-    "core": "5ead34ae5aae989786f57c5034b58970f0f30a4ecf25275063f0d56e86d6a45f",
-    "edge": "24f5eea19794a376ffc1f8809658cf2ef92e0a0d585eeefb3a8920e9b08b36c1",
-    "processor": "994c9fbb856ed6bd5c107d9bd9a4fa8f451f268b933e73ac97a4437e7bb39795",
+    "core": "7b3e8a14ee7e0ff3add1ad77badabedcd646cf5de86236b6d719c07a4431267b",
+    "edge": "a4a46126565d95091f48c8b5bcf104b4df6e4c2caa7de6491697880b79254e0b",
+    "processor": "afb6ae63cc7625e05184534af8335ab24375b1100945bcb6d9d97c81e966714f",
     "durable_object_config": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "5ead34ae5aae989786f57c5034b58970f0f30a4ecf25275063f0d56e86d6a45f",
-    "edge/worker.js": "24f5eea19794a376ffc1f8809658cf2ef92e0a0d585eeefb3a8920e9b08b36c1",
-    "processor/worker.js": "994c9fbb856ed6bd5c107d9bd9a4fa8f451f268b933e73ac97a4437e7bb39795",
+    "core/worker.js": "7b3e8a14ee7e0ff3add1ad77badabedcd646cf5de86236b6d719c07a4431267b",
+    "edge/worker.js": "a4a46126565d95091f48c8b5bcf104b4df6e4c2caa7de6491697880b79254e0b",
+    "processor/worker.js": "afb6ae63cc7625e05184534af8335ab24375b1100945bcb6d9d97c81e966714f",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }
