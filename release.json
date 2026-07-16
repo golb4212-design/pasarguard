@@ -1,7 +1,7 @@
 {
-  "version": "3.3.28",
-  "release_id": "3.3.28-native-reply-keyboard-everywhere",
-  "architecture": "fully-split-three-worker-dual-panel-native-reply-keyboard",
+  "version": "3.3.29",
+  "release_id": "3.3.29-cascading-multi-level-usage-settlement",
+  "architecture": "fully-split-three-worker-dual-panel-cascading-ledger",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -9,38 +9,44 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "all callback-based central, reseller, customer and master menus are rendered as Telegram reply keyboards",
-    "dynamic plan, service, order and management buttons are routed through D1-backed per-chat reply routes",
-    "URL and copy actions are delivered as normal bot messages instead of inline glass buttons",
-    "Telegram chat menu button uses the commands menu rather than a WebApp glass button",
-    "existing callback handlers remain compatible through synthetic callback dispatch",
+    "second-level reseller wallet is charged at the per-GB rate configured by the master reseller",
+    "the master wallet receives the collected second-level usage income as a separate ledger entry",
+    "the master wallet is independently charged at the central per-GB rate for the same Marzban traffic",
+    "PasarGuard settlement runs child collection before central panel billing so the cascade order is deterministic",
+    "child debt and master upstream debt are tracked independently and may suspend their own level independently",
+    "central reports separate child gross billing, master income, central upstream cost, debt, and accrued profit",
+    "financial events are guarded by idempotent event keys and D1 transaction batches",
     "README files are excluded"
   ],
   "deployment": {
     "automatic_provisioning": "upload ZIP through the central bot",
-    "db_schema_revision": "3.3.28"
+    "db_schema_revision": "3.3.29"
   },
   "validation": {
     "worker_syntax": "passed: core, edge, processor",
     "embedded_browser_scripts": "passed: 10 scripts",
-    "reply_route_schema": "passed in SQLite memory",
-    "reply_keyboard_runtime_simulation": "passed: send, edit, dynamic route lookup, route cleanup and synthetic callback acknowledgement",
-    "inline_keyboard_runtime_interception": "passed for central, reseller and processor Telegram wrappers",
-    "telegram_live_api": "not run; requires a real bot token"
+    "fresh_sqlite_schema": "passed: shared cascade columns and indexes",
+    "legacy_schema_migration": "passed: additive D1 columns are idempotent",
+    "cascade_sql_simulation": "passed: funded and debt scenarios",
+    "placeholder_bind_validation": "passed: 24 prepared statements in each Worker billing path",
+    "financial_order": "passed: child debit -> master income -> master central debit",
+    "duplicate_event_guard": "passed by event-key and processing-token design",
+    "live_api": "not run; requires real Telegram, PasarGuard and Marzban credentials"
   },
   "limitations": [
-    "Old inline buttons in historical Telegram messages cannot be removed without their message IDs; all newly rendered bot menus use reply keyboards."
+    "Existing historical Marzban usage is not retroactively re-billed; cascading settlement starts from the next measured delta.",
+    "PasarGuard central cost is still sourced from the real manager aggregate; child attribution is shown separately without double-debiting the master."
   ],
   "sha256": {
-    "core/worker.js": "3f887cf6bcc78a79cd285ebdfaccb613e170c350999b6d6ead825ea42e6aa039",
-    "edge/worker.js": "833bccef68ab79c395ce96ba55a88fb1204255813f963c2ce1cf43e1a210c157",
-    "processor/worker.js": "1ba70af433e0a62fdcf3f1444e182ee7513f55c083af2580bb9fff99569e4177",
+    "core/worker.js": "043a51c23cf1065e559d34915833241d76e07100d1482daead0d92403a888041",
+    "edge/worker.js": "d73157cefbddc5cf665d0f22e37f8cd6b9febcdb52657757fe7682375ce66a2a",
+    "processor/worker.js": "47b9f0375d1396e05dbc88c41e9f705f298efa636e62cc26839a67b32beb4105",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "3f887cf6bcc78a79cd285ebdfaccb613e170c350999b6d6ead825ea42e6aa039",
-    "edge/worker.js": "833bccef68ab79c395ce96ba55a88fb1204255813f963c2ce1cf43e1a210c157",
-    "processor/worker.js": "1ba70af433e0a62fdcf3f1444e182ee7513f55c083af2580bb9fff99569e4177",
+    "core/worker.js": "043a51c23cf1065e559d34915833241d76e07100d1482daead0d92403a888041",
+    "edge/worker.js": "d73157cefbddc5cf665d0f22e37f8cd6b9febcdb52657757fe7682375ce66a2a",
+    "processor/worker.js": "47b9f0375d1396e05dbc88c41e9f705f298efa636e62cc26839a67b32beb4105",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }

@@ -1,15 +1,27 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.28
+ * Version: 3.3.29
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.28';
+const APP_VERSION = '3.3.29';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.29": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🧮", text: "حسابداری پلکانی واقعی: وصول از ربات فروش دوم و کسر مستقل نرخ مرکزی از مستر" },
+      { emoji: "📚", text: "ثبت جداگانه درآمد ناخالص، هزینه بالادست، بدهی هر سطح و سود خالص در دفتر مرکزی" },
+      { emoji: "🔒", text: "جلوگیری از دوبارکسرشدن در اجرای هم‌زمان Cron، Live و همگام‌سازی دستی" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "💳", text: "صورتحساب مستقل هر ربات فروش با نرخ تعیین‌شده توسط مستر" },
+      { emoji: "📈", text: "واریز درآمد مصرف به مستر و کسر جداگانه هزینه مرکزی همان مصرف" },
+      { emoji: "🧾", text: "نمایش بدهی کودک و بدهی مستر به مرکز به‌صورت جدا و قابل‌پیگیری" }
+    ])
+  }),
   "3.3.28": Object.freeze({
     central: Object.freeze([
       { emoji: "⌨️", text: "تبدیل تمام دکمه‌های عملیاتی ربات مرکزی به کیبورد معمولی تلگرام" },
@@ -478,7 +490,7 @@ let errorCenterSchemaPromise = null;
 
 // Persistent schema marker: avoids replaying the full D1 migration sweep whenever
 // Cloudflare starts a fresh isolate after an idle period.
-const DB_SCHEMA_REVISION = "3.3.28";
+const DB_SCHEMA_REVISION = "3.3.29";
 
 let settingsCache = null;
 
@@ -1173,6 +1185,12 @@ CREATE TABLE IF NOT EXISTS shared_backend_accounts (
   total_charged INTEGER NOT NULL DEFAULT 0,
   total_collected INTEGER NOT NULL DEFAULT 0,
   total_parent_profit INTEGER NOT NULL DEFAULT 0,
+  upstream_unpaid_toman INTEGER NOT NULL DEFAULT 0,
+  upstream_total_charged INTEGER NOT NULL DEFAULT 0,
+  upstream_total_collected INTEGER NOT NULL DEFAULT 0,
+  parent_income_total INTEGER NOT NULL DEFAULT 0,
+  parent_income_collected INTEGER NOT NULL DEFAULT 0,
+  parent_net_profit_total INTEGER NOT NULL DEFAULT 0,
   last_delta_bytes INTEGER NOT NULL DEFAULT 0,
   last_synced_at TEXT,
   last_error TEXT,
@@ -1195,6 +1213,11 @@ CREATE TABLE IF NOT EXISTS shared_backend_usage_events (
   parent_profit_amount INTEGER NOT NULL DEFAULT 0,
   collected_amount INTEGER NOT NULL DEFAULT 0,
   parent_profit_collected INTEGER NOT NULL DEFAULT 0,
+  parent_income_amount INTEGER NOT NULL DEFAULT 0,
+  parent_income_collected INTEGER NOT NULL DEFAULT 0,
+  upstream_collected_amount INTEGER NOT NULL DEFAULT 0,
+  upstream_unpaid_after INTEGER NOT NULL DEFAULT 0,
+  parent_net_profit_amount INTEGER NOT NULL DEFAULT 0,
   unpaid_after INTEGER NOT NULL DEFAULT 0,
   price_per_gb INTEGER NOT NULL,
   service_count INTEGER NOT NULL DEFAULT 0,
@@ -2261,6 +2284,21 @@ async function ensureDbInternal(env) {
       ["master_profit_amount", "INTEGER NOT NULL DEFAULT 0"],
       ["price_per_gb", "INTEGER NOT NULL DEFAULT 0"],
       ["created_at", "TEXT"]
+    ],
+    shared_backend_accounts: [
+      ["upstream_unpaid_toman", "INTEGER NOT NULL DEFAULT 0"],
+      ["upstream_total_charged", "INTEGER NOT NULL DEFAULT 0"],
+      ["upstream_total_collected", "INTEGER NOT NULL DEFAULT 0"],
+      ["parent_income_total", "INTEGER NOT NULL DEFAULT 0"],
+      ["parent_income_collected", "INTEGER NOT NULL DEFAULT 0"],
+      ["parent_net_profit_total", "INTEGER NOT NULL DEFAULT 0"]
+    ],
+    shared_backend_usage_events: [
+      ["parent_income_amount", "INTEGER NOT NULL DEFAULT 0"],
+      ["parent_income_collected", "INTEGER NOT NULL DEFAULT 0"],
+      ["upstream_collected_amount", "INTEGER NOT NULL DEFAULT 0"],
+      ["upstream_unpaid_after", "INTEGER NOT NULL DEFAULT 0"],
+      ["parent_net_profit_amount", "INTEGER NOT NULL DEFAULT 0"]
     ],
     sales_plans: [
       ["category_id", "TEXT"],
@@ -9967,111 +10005,210 @@ function sharedMarzbanSnapshotUpdate(env, bot, item, eventKey = "", token = "") 
 async function billSharedMarzbanBot(env, bot, options = {}) {
   const settings = await getSettings(env);
   const cfg = sharedMarzbanConfig(settings, env);
-  if (!cfg.enabled) return { processed:false, charged:0, collected:0, unpaid:0 };
+  if (!cfg.enabled) return { processed:false, charged:0, collected:0, unpaid:0, upstream_charged:0, upstream_collected:0, upstream_unpaid:0 };
   const account = await ensureSharedBackendAccount(env, bot.id, false);
   const usage = await sharedMarzbanUsageSnapshots(env, bot, options.limit || cfg.syncBatch);
   const ts = nowIso();
 
-  // Existing services become the baseline once. New services activate the account
-  // at creation time, so their first real usage is still billable.
+  // Existing services become the baseline once. Future deltas are billed exactly once.
   if (!Number(account?.initialized || 0)) {
     const statements = [
       env.PASARGUARD_DB.prepare("UPDATE shared_backend_accounts SET initialized=1,revision=revision+1,last_delta_bytes=0,last_synced_at=?,last_error=NULL,updated_at=? WHERE bot_id=?").bind(ts,ts,bot.id)
     ];
     for (const item of usage.snapshots) statements.push(sharedMarzbanSnapshotUpdate(env,bot,item));
     await env.PASARGUARD_DB.batch(statements);
-    return { processed:true, initialized:true, checked:usage.checked, failed:usage.failed, charged:0, collected:0, unpaid:Number(account?.unpaid_toman||0) };
+    return { processed:true, initialized:true, checked:usage.checked, failed:usage.failed, charged:0, collected:0,
+      unpaid:Number(account?.unpaid_toman||0), upstream_charged:0, upstream_collected:0,
+      upstream_unpaid:Number(account?.upstream_unpaid_toman||0) };
   }
 
   const deltaBytes = usage.snapshots.reduce((sum,item)=>sum + Math.max(0,Number(item.delta||0)),0);
   const parent = bot.parent_bot_id ? await getResellerBotById(env,bot.parent_bot_id) : null;
-  const basePrice = Math.max(0,Number(cfg.pricePerGb || settings.price_per_gb || 0));
-  const chargedPrice = parent
-    ? Math.max(basePrice + Math.max(1,Number(settings.master_min_markup_toman||100)), Number(bot.upstream_price_per_gb||0))
-    : basePrice;
-  const marginPrice = parent ? Math.max(0,chargedPrice-basePrice) : 0;
-  const totalCalc = resellerUsageAmount(deltaBytes,chargedPrice,Number(account.billing_remainder||0));
-  const baseCalc = resellerUsageAmount(deltaBytes,basePrice,Number(account.base_billing_remainder||0));
-  const marginCalc = resellerUsageAmount(deltaBytes,marginPrice,Number(account.margin_billing_remainder||0));
-  const dueBase = Math.max(0,Number(account.unpaid_base_toman||0)) + baseCalc.amount;
-  const dueMargin = Math.max(0,Number(account.unpaid_margin_toman||0)) + marginCalc.amount;
-  const totalDue = dueBase + dueMargin;
-  const owner = await env.PASARGUARD_DB.prepare("SELECT id,wallet_balance FROM users WHERE id=?").bind(bot.user_id).first();
-  if (!owner) throw new Error("حساب مالک ربات نماینده پیدا نشد");
-  const collected = Math.min(Math.max(0,Number(owner.wallet_balance||0)),totalDue);
-  const baseCollected = Math.min(collected,dueBase);
-  const marginCollected = Math.min(Math.max(0,collected-baseCollected),dueMargin);
-  const unpaidBase = Math.max(0,dueBase-baseCollected);
-  const unpaidMargin = Math.max(0,dueMargin-marginCollected);
-  const unpaid = unpaidBase + unpaidMargin;
-  const nextStatus = cfg.suspendOnDebt && unpaid>0
-    ? "suspended_balance"
-    : (bot.status==="suspended_balance" && unpaid===0 ? "active" : bot.status);
+  const upstreamPrice = Math.max(0,Number(cfg.pricePerGb || settings.price_per_gb || 0));
+  const childPrice = parent
+    ? Math.max(upstreamPrice, Number(bot.upstream_price_per_gb || parent.downline_default_price_per_gb || 0))
+    : upstreamPrice;
+  const childCalc = resellerUsageAmount(deltaBytes,childPrice,Number(account.billing_remainder||0));
+  const upstreamCalc = resellerUsageAmount(deltaBytes,upstreamPrice,Number(account.base_billing_remainder||0));
+  const profitCalc = resellerUsageAmount(deltaBytes,Math.max(0,childPrice-upstreamPrice),Number(account.margin_billing_remainder||0));
 
-  const financialChange = deltaBytes>0 || collected>0 || unpaid!==Number(account.unpaid_toman||0) || nextStatus!==bot.status;
-  if (!financialChange) {
-    const statements = [env.PASARGUARD_DB.prepare("UPDATE shared_backend_accounts SET last_synced_at=?,last_error=NULL,updated_at=? WHERE bot_id=?").bind(ts,ts,bot.id)];
-    for (const item of usage.snapshots) statements.push(sharedMarzbanSnapshotUpdate(env,bot,item));
-    await env.PASARGUARD_DB.batch(statements);
-    return { processed:true, checked:usage.checked, failed:usage.failed, delta:0, charged:0, collected:0, unpaid, status:nextStatus };
+  const childOwner = await env.PASARGUARD_DB.prepare("SELECT id,wallet_balance FROM users WHERE id=?").bind(bot.user_id).first();
+  if (!childOwner) throw new Error("حساب مالک ربات نماینده پیدا نشد");
+
+  // Direct representative: one wallet owes the central bot.
+  if (!parent) {
+    const previousUnpaid = Math.max(0,Number(account.unpaid_toman||0));
+    const due = previousUnpaid + upstreamCalc.amount;
+    const available = Math.max(0,Number(childOwner.wallet_balance||0));
+    const collected = Math.min(available,due);
+    const unpaid = Math.max(0,due-collected);
+    const nextStatus = cfg.suspendOnDebt && unpaid>0 ? "suspended_balance"
+      : (bot.status==="suspended_balance" && unpaid===0 && Number(bot.upstream_unpaid_toman||0)>0 ? "active" : bot.status);
+    const changed = deltaBytes>0 || collected>0 || unpaid!==previousUnpaid || nextStatus!==bot.status;
+    if (!changed) {
+      const statements=[env.PASARGUARD_DB.prepare("UPDATE shared_backend_accounts SET last_synced_at=?,last_error=NULL,updated_at=? WHERE bot_id=?").bind(ts,ts,bot.id)];
+      for (const item of usage.snapshots) statements.push(sharedMarzbanSnapshotUpdate(env,bot,item));
+      await env.PASARGUARD_DB.batch(statements);
+      return { processed:true,checked:usage.checked,failed:usage.failed,delta:0,charged:0,collected:0,unpaid,
+        upstream_charged:0,upstream_collected:0,upstream_unpaid:unpaid,status:nextStatus };
+    }
+    const revision=Math.max(0,Number(account.revision||0));
+    const eventKey="shared-marzban:"+bot.id+":"+revision;
+    const token=id("smu");
+    const details=JSON.stringify(usage.snapshots.map(x=>({t:x.sourceType||'order',u:x.username,p:x.previous,c:x.current,d:x.delta})).slice(0,20));
+    const stageOne="EXISTS(SELECT 1 FROM shared_backend_usage_events e WHERE e.event_key=? AND e.processing_token=? AND e.applied=1)";
+    const own="EXISTS(SELECT 1 FROM shared_backend_usage_events e WHERE e.event_key=? AND e.processing_token=? AND e.applied=2)";
+    const statements=[
+      env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO shared_backend_usage_events(
+        event_key,processing_token,applied,bot_id,parent_bot_id,owner_user_id,revision_from,delta_bytes,
+        charged_amount,base_cost_amount,parent_profit_amount,collected_amount,parent_profit_collected,
+        unpaid_after,price_per_gb,service_count,details_json,parent_income_amount,parent_income_collected,
+        upstream_collected_amount,upstream_unpaid_after,parent_net_profit_amount,created_at)
+        VALUES(?,?,0,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+        .bind(eventKey,token,bot.id,null,bot.user_id,revision,deltaBytes,upstreamCalc.amount,upstreamCalc.amount,0,
+          collected,0,unpaid,upstreamPrice,usage.snapshots.length,details,0,0,collected,unpaid,0,ts),
+      env.PASARGUARD_DB.prepare("UPDATE shared_backend_usage_events SET applied=1 WHERE event_key=? AND processing_token=? AND applied=0 AND changes()=1").bind(eventKey,token),
+      env.PASARGUARD_DB.prepare(`UPDATE shared_backend_accounts SET revision=revision+1,billing_remainder=?,
+        base_billing_remainder=?,margin_billing_remainder=0,unpaid_toman=?,unpaid_base_toman=?,unpaid_margin_toman=0,
+        upstream_unpaid_toman=?,total_charged=total_charged+?,total_collected=total_collected+?,
+        upstream_total_charged=upstream_total_charged+?,upstream_total_collected=upstream_total_collected+?,
+        last_delta_bytes=?,last_synced_at=?,last_error=NULL,updated_at=?
+        WHERE bot_id=? AND revision=? AND ${stageOne}`)
+        .bind(upstreamCalc.remainder,upstreamCalc.remainder,unpaid,unpaid,unpaid,upstreamCalc.amount,collected,
+          upstreamCalc.amount,collected,deltaBytes,ts,ts,bot.id,revision,eventKey,token),
+      env.PASARGUARD_DB.prepare("UPDATE shared_backend_usage_events SET applied=2 WHERE event_key=? AND processing_token=? AND applied=1 AND changes()=1").bind(eventKey,token),
+      env.PASARGUARD_DB.prepare(`UPDATE reseller_bots SET status=?,upstream_unpaid_toman=?,
+        upstream_total_charged=upstream_total_charged+?,updated_at=? WHERE id=? AND ${own}`)
+        .bind(nextStatus,unpaid,upstreamCalc.amount,ts,bot.id,eventKey,token)
+    ];
+    if (collected>0) {
+      statements.push(
+        env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO wallet_ledger(id,user_id,type,amount,balance_after,ref_type,ref_id,description,created_at)
+          SELECT ?,id,'shared_marzban_usage',-?,MAX(0,wallet_balance-?),'shared_marzban_event',?,'هزینه مصرف مرزبان مشترک مرکزی',?
+          FROM users WHERE id=? AND ${own}`).bind(id("led"),collected,collected,eventKey,ts,bot.user_id,eventKey,token),
+        env.PASARGUARD_DB.prepare(`UPDATE users SET wallet_balance=MAX(0,wallet_balance-?),updated_at=? WHERE id=? AND ${own}`)
+          .bind(collected,ts,bot.user_id,eventKey,token)
+      );
+    }
+    for (const item of usage.snapshots) statements.push(sharedMarzbanSnapshotUpdate(env,bot,item,eventKey,token));
+    const results=await env.PASARGUARD_DB.batch(statements);
+    const applied=Number(results?.[3]?.meta?.changes||0)>0;
+    return { processed:true,checked:usage.checked,failed:usage.failed,delta:applied?deltaBytes:0,
+      charged:applied?upstreamCalc.amount:0,collected:applied?collected:0,unpaid:applied?unpaid:previousUnpaid,
+      upstream_charged:applied?upstreamCalc.amount:0,upstream_collected:applied?collected:0,
+      upstream_unpaid:applied?unpaid:Number(account.upstream_unpaid_toman||0),parent_income:0,parent_profit:0,
+      price_per_gb:upstreamPrice,status:applied?nextStatus:bot.status,duplicate:!applied };
   }
 
-  // One revision = one idempotent financial event. Parallel Cron/manual/live runs
-  // use the same key; only the invocation that owns processing_token can mutate money.
-  const revision = Math.max(0,Number(account.revision||0));
-  const eventKey = "shared-marzban:" + bot.id + ":" + revision;
-  const token = id("smu");
-  const details = JSON.stringify(usage.snapshots.map(x=>({t:x.sourceType||'order',u:x.username,p:x.previous,c:x.current,d:x.delta})).slice(0,20));
-  const stageOne = "EXISTS(SELECT 1 FROM shared_backend_usage_events e WHERE e.event_key=? AND e.processing_token=? AND e.applied=1)";
-  const own = "EXISTS(SELECT 1 FROM shared_backend_usage_events e WHERE e.event_key=? AND e.processing_token=? AND e.applied=2)";
-  const statements = [
+  // Cascading settlement: child pays the master's configured rate; the master independently
+  // pays the central rate for the same bytes. Child debt never cancels the master's upstream debt.
+  const parentOwner = await env.PASARGUARD_DB.prepare("SELECT id,wallet_balance FROM users WHERE id=?").bind(parent.user_id).first();
+  if (!parentOwner) throw new Error("حساب مستر بالادست پیدا نشد");
+  const previousChildUnpaid=Math.max(0,Number(account.unpaid_toman||0));
+  const childDue=previousChildUnpaid+childCalc.amount;
+  const childAvailable=Math.max(0,Number(childOwner.wallet_balance||0));
+  const childCollected=Math.min(childAvailable,childDue);
+  const childUnpaid=Math.max(0,childDue-childCollected);
+
+  const previousUpstreamUnpaid=Math.max(0,Number(account.upstream_unpaid_toman||0));
+  const upstreamDue=previousUpstreamUnpaid+upstreamCalc.amount;
+  const parentBalanceBefore=Math.max(0,Number(parentOwner.wallet_balance||0));
+  const parentAvailableAfterIncome=parentBalanceBefore+childCollected;
+  const upstreamCollected=Math.min(parentAvailableAfterIncome,upstreamDue);
+  const upstreamUnpaid=Math.max(0,upstreamDue-upstreamCollected);
+  const parentBalanceAfter=parentAvailableAfterIncome-upstreamCollected;
+  const parentNetCash=childCollected-upstreamCollected;
+  const accruedProfit=Math.max(0,childCalc.amount-upstreamCalc.amount);
+
+  const childStatus=cfg.suspendOnDebt && childUnpaid>0 ? "suspended_balance"
+    : (bot.status==="suspended_balance" && childUnpaid===0 && Number(bot.upstream_unpaid_toman||0)>0 ? "active" : bot.status);
+  const otherDebtRow=await env.PASARGUARD_DB.prepare(`SELECT
+    COALESCE((SELECT unpaid_toman FROM shared_backend_accounts WHERE bot_id=?),0)+
+    COALESCE((SELECT SUM(a.upstream_unpaid_toman) FROM shared_backend_accounts a JOIN reseller_bots rb ON rb.id=a.bot_id WHERE rb.parent_bot_id=? AND rb.id<>?),0) AS other_debt`)
+    .bind(parent.id,parent.id,bot.id).first();
+  const parentTotalUnpaid=Math.max(0,Number(otherDebtRow?.other_debt||0))+upstreamUnpaid;
+  const parentStatus=cfg.suspendOnDebt && parentTotalUnpaid>0 ? "suspended_balance"
+    : (parent.status==="suspended_balance" && parentTotalUnpaid===0 && Number(parent.upstream_unpaid_toman||0)>0 ? "active" : parent.status);
+
+  const changed=deltaBytes>0 || childCollected>0 || upstreamCollected>0 || childUnpaid!==previousChildUnpaid ||
+    upstreamUnpaid!==previousUpstreamUnpaid || childStatus!==bot.status || parentStatus!==parent.status;
+  if (!changed) {
+    const statements=[env.PASARGUARD_DB.prepare("UPDATE shared_backend_accounts SET last_synced_at=?,last_error=NULL,updated_at=? WHERE bot_id=?").bind(ts,ts,bot.id)];
+    for (const item of usage.snapshots) statements.push(sharedMarzbanSnapshotUpdate(env,bot,item));
+    await env.PASARGUARD_DB.batch(statements);
+    return { processed:true,checked:usage.checked,failed:usage.failed,delta:0,charged:0,collected:0,unpaid:childUnpaid,
+      upstream_charged:0,upstream_collected:0,upstream_unpaid:upstreamUnpaid,parent_income:0,parent_profit:0,
+      status:childStatus,parent_status:parentStatus };
+  }
+
+  const revision=Math.max(0,Number(account.revision||0));
+  const eventKey="shared-marzban:"+bot.id+":"+revision;
+  const token=id("smu");
+  const details=JSON.stringify(usage.snapshots.map(x=>({t:x.sourceType||'order',u:x.username,p:x.previous,c:x.current,d:x.delta})).slice(0,20));
+  const stageOne="EXISTS(SELECT 1 FROM shared_backend_usage_events e WHERE e.event_key=? AND e.processing_token=? AND e.applied=1)";
+  const own="EXISTS(SELECT 1 FROM shared_backend_usage_events e WHERE e.event_key=? AND e.processing_token=? AND e.applied=2)";
+  const statements=[
     env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO shared_backend_usage_events(
       event_key,processing_token,applied,bot_id,parent_bot_id,owner_user_id,revision_from,delta_bytes,
       charged_amount,base_cost_amount,parent_profit_amount,collected_amount,parent_profit_collected,
-      unpaid_after,price_per_gb,service_count,details_json,created_at) VALUES(?,?,0,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-      .bind(eventKey,token,bot.id,parent?.id||null,bot.user_id,revision,deltaBytes,totalCalc.amount,baseCalc.amount,
-        marginCalc.amount,collected,marginCollected,unpaid,chargedPrice,usage.snapshots.length,details,ts),
+      unpaid_after,price_per_gb,service_count,details_json,parent_income_amount,parent_income_collected,
+      upstream_collected_amount,upstream_unpaid_after,parent_net_profit_amount,created_at)
+      VALUES(?,?,0,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .bind(eventKey,token,bot.id,parent.id,bot.user_id,revision,deltaBytes,childCalc.amount,upstreamCalc.amount,accruedProfit,
+        childCollected,Math.max(0,parentNetCash),childUnpaid,childPrice,usage.snapshots.length,details,
+        childCalc.amount,childCollected,upstreamCollected,upstreamUnpaid,accruedProfit,ts),
     env.PASARGUARD_DB.prepare("UPDATE shared_backend_usage_events SET applied=1 WHERE event_key=? AND processing_token=? AND applied=0 AND changes()=1").bind(eventKey,token),
     env.PASARGUARD_DB.prepare(`UPDATE shared_backend_accounts SET revision=revision+1,billing_remainder=?,
-      base_billing_remainder=?,margin_billing_remainder=?,unpaid_toman=?,unpaid_base_toman=?,unpaid_margin_toman=?,
-      total_charged=total_charged+?,total_collected=total_collected+?,total_parent_profit=total_parent_profit+?,
+      base_billing_remainder=?,margin_billing_remainder=?,unpaid_toman=?,unpaid_base_toman=?,unpaid_margin_toman=0,
+      upstream_unpaid_toman=?,total_charged=total_charged+?,total_collected=total_collected+?,
+      total_parent_profit=total_parent_profit+?,upstream_total_charged=upstream_total_charged+?,
+      upstream_total_collected=upstream_total_collected+?,parent_income_total=parent_income_total+?,
+      parent_income_collected=parent_income_collected+?,parent_net_profit_total=parent_net_profit_total+?,
       last_delta_bytes=?,last_synced_at=?,last_error=NULL,updated_at=?
       WHERE bot_id=? AND revision=? AND ${stageOne}`)
-      .bind(totalCalc.remainder,baseCalc.remainder,marginCalc.remainder,unpaid,unpaidBase,unpaidMargin,
-        totalCalc.amount,collected,marginCollected,deltaBytes,ts,ts,bot.id,revision,eventKey,token),
+      .bind(childCalc.remainder,upstreamCalc.remainder,profitCalc.remainder,childUnpaid,upstreamUnpaid,upstreamUnpaid,
+        childCalc.amount,childCollected,accruedProfit,upstreamCalc.amount,upstreamCollected,childCalc.amount,
+        childCollected,accruedProfit,deltaBytes,ts,ts,bot.id,revision,eventKey,token),
     env.PASARGUARD_DB.prepare("UPDATE shared_backend_usage_events SET applied=2 WHERE event_key=? AND processing_token=? AND applied=1 AND changes()=1").bind(eventKey,token),
-    env.PASARGUARD_DB.prepare(`UPDATE reseller_bots SET status=?,
-      upstream_price_per_gb=CASE WHEN parent_bot_id IS NULL THEN upstream_price_per_gb ELSE ? END,
-      upstream_unpaid_toman=?,
-      upstream_total_charged=COALESCE((SELECT total_charged FROM shared_backend_accounts WHERE bot_id=?),upstream_total_charged),
-      upstream_total_profit=COALESCE((SELECT total_parent_profit FROM shared_backend_accounts WHERE bot_id=?),upstream_total_profit),
-      updated_at=? WHERE id=? AND ${own}`)
-      .bind(nextStatus,chargedPrice,unpaid,bot.id,bot.id,ts,bot.id,eventKey,token)
+    env.PASARGUARD_DB.prepare(`UPDATE reseller_bots SET status=?,upstream_price_per_gb=?,upstream_unpaid_toman=?,
+      upstream_total_charged=upstream_total_charged+?,updated_at=? WHERE id=? AND ${own}`)
+      .bind(childStatus,childPrice,childUnpaid,childCalc.amount,ts,bot.id,eventKey,token),
+    env.PASARGUARD_DB.prepare(`UPDATE reseller_bots SET status=?,upstream_unpaid_toman=?,
+      upstream_total_charged=upstream_total_charged+?,upstream_total_profit=upstream_total_profit+?,updated_at=?
+      WHERE id=? AND ${own}`)
+      .bind(parentStatus,parentTotalUnpaid,upstreamCalc.amount,accruedProfit,ts,parent.id,eventKey,token)
   ];
-  if (collected>0) {
-    statements.push(env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO wallet_ledger(id,user_id,type,amount,balance_after,ref_type,ref_id,description,created_at)
-      SELECT ?,id,'shared_marzban_usage',-?,MAX(0,wallet_balance-?),'shared_marzban_event',?,'هزینه مصرف مرزبان مشترک',?
-      FROM users WHERE id=? AND ${own}`).bind(id("led"),collected,collected,eventKey,ts,bot.user_id,eventKey,token));
-    statements.push(env.PASARGUARD_DB.prepare(`UPDATE users SET wallet_balance=MAX(0,wallet_balance-?),updated_at=? WHERE id=? AND changes()=1`)
-      .bind(collected,ts,bot.user_id));
+  if (childCollected>0) {
+    statements.push(
+      env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO wallet_ledger(id,user_id,type,amount,balance_after,ref_type,ref_id,description,created_at)
+        SELECT ?,id,'shared_marzban_usage',-?,?,'shared_marzban_event',?,'هزینه مصرف در ربات فروش بالادست',?
+        FROM users WHERE id=? AND ${own}`).bind(id("led"),childCollected,Math.max(0,childAvailable-childCollected),eventKey,ts,bot.user_id,eventKey,token),
+      env.PASARGUARD_DB.prepare(`UPDATE users SET wallet_balance=MAX(0,wallet_balance-?),updated_at=? WHERE id=? AND ${own}`)
+        .bind(childCollected,ts,bot.user_id,eventKey,token),
+      env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO wallet_ledger(id,user_id,type,amount,balance_after,ref_type,ref_id,description,created_at)
+        SELECT ?,id,'shared_marzban_downline_income',?,?,'shared_marzban_event',?,'درآمد مصرف ربات فروش ساخته‌شده',?
+        FROM users WHERE id=? AND ${own}`).bind(id("led"),childCollected,parentBalanceBefore+childCollected,eventKey,ts,parent.user_id,eventKey,token)
+    );
   }
-  if (parent && marginCollected>0) {
+  if (upstreamCollected>0) {
     statements.push(env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO wallet_ledger(id,user_id,type,amount,balance_after,ref_type,ref_id,description,created_at)
-      SELECT ?,id,'shared_marzban_margin',?,wallet_balance+?,'shared_marzban_event',?,'سود مصرف نماینده زیرمجموعه در مرزبان مشترک',?
-      FROM users WHERE id=? AND ${own}`).bind(id("led"),marginCollected,marginCollected,eventKey,ts,parent.user_id,eventKey,token));
-    statements.push(env.PASARGUARD_DB.prepare(`UPDATE users SET wallet_balance=wallet_balance+?,updated_at=? WHERE id=? AND changes()=1`)
-      .bind(marginCollected,ts,parent.user_id));
+      SELECT ?,id,'shared_marzban_upstream_cost',-?,?,'shared_marzban_event',?,'هزینه مرکزی مصرف مرزبان شاخه فروش',?
+      FROM users WHERE id=? AND ${own}`).bind(id("led"),upstreamCollected,parentBalanceAfter,eventKey,ts,parent.user_id,eventKey,token));
+  }
+  if (childCollected>0 || upstreamCollected>0) {
+    statements.push(env.PASARGUARD_DB.prepare(`UPDATE users SET wallet_balance=wallet_balance+?-?,updated_at=? WHERE id=? AND ${own}`)
+      .bind(childCollected,upstreamCollected,ts,parent.user_id,eventKey,token));
   }
   for (const item of usage.snapshots) statements.push(sharedMarzbanSnapshotUpdate(env,bot,item,eventKey,token));
-  const results = await env.PASARGUARD_DB.batch(statements);
-  const applied = Number(results?.[3]?.meta?.changes||0)>0;
-  return {
-    processed:true, checked:usage.checked, failed:usage.failed,
-    delta:applied?deltaBytes:0, charged:applied?totalCalc.amount:0,
-    collected:applied?collected:0, parent_profit:applied?marginCollected:0,
-    unpaid:applied?unpaid:Number(account.unpaid_toman||0), price_per_gb:chargedPrice,
-    status:applied?nextStatus:bot.status, duplicate:!applied
-  };
+  const results=await env.PASARGUARD_DB.batch(statements);
+  const applied=Number(results?.[3]?.meta?.changes||0)>0;
+  return { processed:true,checked:usage.checked,failed:usage.failed,delta:applied?deltaBytes:0,
+    charged:applied?childCalc.amount:0,collected:applied?childCollected:0,unpaid:applied?childUnpaid:previousChildUnpaid,
+    upstream_charged:applied?upstreamCalc.amount:0,upstream_collected:applied?upstreamCollected:0,
+    upstream_unpaid:applied?upstreamUnpaid:previousUpstreamUnpaid,parent_income:applied?childCollected:0,
+    parent_profit:applied?accruedProfit:0,parent_net_cash:applied?parentNetCash:0,price_per_gb:childPrice,
+    upstream_price_per_gb:upstreamPrice,status:applied?childStatus:bot.status,parent_status:applied?parentStatus:parent.status,
+    duplicate:!applied };
 }
 
 async function syncSharedMarzbanUsage(env, parentBotId = null, limit = 100, options = {}) {
@@ -10089,7 +10226,7 @@ async function syncSharedMarzbanUsage(env, parentBotId = null, limit = 100, opti
   const query = env.PASARGUARD_DB.prepare(sql);
   const safeLimit = Math.max(1,Math.min(500,Number(limit||100)));
   const rows = parentBotId ? await query.bind(parentBotId,safeLimit).all() : await query.bind(safeLimit).all();
-  let processed=0,initialized=0,charged=0,collected=0,unpaid=0,parentProfit=0,failed=0;
+  let processed=0,initialized=0,charged=0,collected=0,unpaid=0,parentProfit=0,upstreamCharged=0,upstreamCollected=0,upstreamUnpaid=0,parentIncome=0,parentNetCash=0,failed=0;
   for (const row of rows.results || []) {
     try {
       const bot = await getResellerBotById(env,row.id);
@@ -10100,14 +10237,14 @@ async function syncSharedMarzbanUsage(env, parentBotId = null, limit = 100, opti
       charged += Number(result.charged||0);
       collected += Number(result.collected||0);
       unpaid += Number(result.unpaid||0);
-      parentProfit += Number(result.parent_profit||0);
+      parentProfit += Number(result.parent_profit||0); upstreamCharged += Number(result.upstream_charged||0); upstreamCollected += Number(result.upstream_collected||0); upstreamUnpaid += Number(result.upstream_unpaid||0); parentIncome += Number(result.parent_income||0); parentNetCash += Number(result.parent_net_cash||0);
     } catch (error) {
       failed++;
       try { await env.PASARGUARD_DB.prepare("UPDATE shared_backend_accounts SET last_error=?,updated_at=? WHERE bot_id=?").bind(String(error?.message||error).slice(0,1000),nowIso(),row.id).run(); } catch (_) {}
       try { await audit(env,null,"shared_marzban_usage_sync_failed",{botId:row.id,message:String(error?.message||error)}); } catch (_) {}
     }
   }
-  return { provider:"marzban_shared", processed, initialized, charged, collected, unpaid, parent_profit:parentProfit, failed };
+  return { provider:"marzban_shared", processed, initialized, charged, collected, unpaid, parent_profit:parentProfit, upstream_charged:upstreamCharged, upstream_collected:upstreamCollected, upstream_unpaid:upstreamUnpaid, parent_income:parentIncome, parent_net_cash:parentNetCash, failed };
 }
 
 
@@ -10126,7 +10263,9 @@ async function billDownlineResellerBot(env, childBot, options = {}) {
   const price = Math.max(centralMinimumDownlinePrice(settings), Number(childBot.upstream_price_per_gb || 0));
   const previousRemainder = Math.max(0, Number(childBot.upstream_billing_remainder || 0));
   const calc = resellerUsageAmount(delta, price, previousRemainder);
-  const centralCalc = resellerUsageAmount(delta, Math.max(0, Number(settings.price_per_gb || 0)), 0);
+  const parentDiscount = await agencyTierDiscount(env,parent.user_id);
+  const effectiveCentralPrice = Math.max(0,Math.round(Number(settings.price_per_gb||0)*(100-parentDiscount)/100));
+  const centralCalc = resellerUsageAmount(delta,effectiveCentralPrice,0);
   const newlyDue = calc.amount;
   const previousUnpaid = Math.max(0, Number(childBot.upstream_unpaid_toman || 0));
   const dueBeforeCollection = previousUnpaid + newlyDue;
@@ -10188,7 +10327,7 @@ async function billDownlineResellerBot(env, childBot, options = {}) {
     unpaid: inserted ? unpaid : previousUnpaid,
     price_per_gb: price,
     status: inserted ? status : childBot.status,
-    duplicate: !inserted
+    duplicate: !inserted, upstream_charged: inserted ? centralCalc.amount : 0, upstream_collected: 0, upstream_unpaid: 0, parent_income: inserted ? collected : 0, parent_profit: inserted ? Math.max(0,newlyDue-centralCalc.amount) : 0
   };
 }
 
@@ -10203,13 +10342,13 @@ async function syncDownlineUsage(env, parentBotId = null, limit = 100, options =
   const query = env.PASARGUARD_DB.prepare(sql);
   const rows = parentBotId ? await query.bind(parentBotId,limit).all() : await query.bind(limit).all();
   const serviceLimit = clampInt(options.serviceLimit || 120, 5, 120);
-  let processed=0,charged=0,collected=0,unpaid=0,failed=0;
+  let processed=0,charged=0,collected=0,unpaid=0,upstreamCharged=0,upstreamCollected=0,upstreamUnpaid=0,parentIncome=0,parentProfit=0,failed=0;
   for (const row of rows.results || []) {
     try {
       const bot = await getResellerBotById(env,row.id);
       if (!bot) continue;
       const result = await billDownlineResellerBot(env,bot,{sync:options.sync !== false,limit:serviceLimit});
-      processed++;charged+=Number(result.charged||0);collected+=Number(result.collected||0);unpaid+=Number(result.unpaid||0);
+      processed++;charged+=Number(result.charged||0);collected+=Number(result.collected||0);unpaid+=Number(result.unpaid||0);upstreamCharged+=Number(result.upstream_charged||0);upstreamCollected+=Number(result.upstream_collected||0);upstreamUnpaid+=Number(result.upstream_unpaid||0);parentIncome+=Number(result.parent_income||0);parentProfit+=Number(result.parent_profit||0);
     } catch (error) {
       failed++;
       try { await audit(env,null,"downline_usage_sync_failed",{botId:row.id,message:String(error?.message||error)}); } catch (_) {}
@@ -10221,7 +10360,12 @@ async function syncDownlineUsage(env, parentBotId = null, limit = 100, options =
     collected:collected+Number(marzbanResult.collected||0),
     unpaid:unpaid+Number(marzbanResult.unpaid||0),
     failed:failed+Number(marzbanResult.failed||0),
-    pasarguard:{processed,charged,collected,unpaid,failed},
+    upstream_charged:upstreamCharged+Number(marzbanResult.upstream_charged||0),
+    upstream_collected:upstreamCollected+Number(marzbanResult.upstream_collected||0),
+    upstream_unpaid:upstreamUnpaid+Number(marzbanResult.upstream_unpaid||0),
+    parent_income:parentIncome+Number(marzbanResult.parent_income||0),
+    parent_profit:parentProfit+Number(marzbanResult.parent_profit||0),
+    pasarguard:{processed,charged,collected,unpaid,upstream_charged:upstreamCharged,upstream_collected:upstreamCollected,upstream_unpaid:upstreamUnpaid,parent_income:parentIncome,parent_profit:parentProfit,failed},
     marzban:marzbanResult
   };
 }
@@ -10850,6 +10994,9 @@ async function ensureSharedMarzbanTables(env) {
       unpaid_toman INTEGER NOT NULL DEFAULT 0, unpaid_base_toman INTEGER NOT NULL DEFAULT 0,
       unpaid_margin_toman INTEGER NOT NULL DEFAULT 0, total_charged INTEGER NOT NULL DEFAULT 0,
       total_collected INTEGER NOT NULL DEFAULT 0, total_parent_profit INTEGER NOT NULL DEFAULT 0,
+      upstream_unpaid_toman INTEGER NOT NULL DEFAULT 0, upstream_total_charged INTEGER NOT NULL DEFAULT 0,
+      upstream_total_collected INTEGER NOT NULL DEFAULT 0, parent_income_total INTEGER NOT NULL DEFAULT 0,
+      parent_income_collected INTEGER NOT NULL DEFAULT 0, parent_net_profit_total INTEGER NOT NULL DEFAULT 0,
       last_delta_bytes INTEGER NOT NULL DEFAULT 0, last_synced_at TEXT, last_error TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`),
     env.PASARGUARD_DB.prepare(`CREATE TABLE IF NOT EXISTS shared_backend_usage_events (
@@ -10858,6 +11005,9 @@ async function ensureSharedMarzbanTables(env) {
       delta_bytes INTEGER NOT NULL, charged_amount INTEGER NOT NULL, base_cost_amount INTEGER NOT NULL DEFAULT 0,
       parent_profit_amount INTEGER NOT NULL DEFAULT 0, collected_amount INTEGER NOT NULL DEFAULT 0,
       parent_profit_collected INTEGER NOT NULL DEFAULT 0, unpaid_after INTEGER NOT NULL DEFAULT 0,
+      parent_income_amount INTEGER NOT NULL DEFAULT 0, parent_income_collected INTEGER NOT NULL DEFAULT 0,
+      upstream_collected_amount INTEGER NOT NULL DEFAULT 0, upstream_unpaid_after INTEGER NOT NULL DEFAULT 0,
+      parent_net_profit_amount INTEGER NOT NULL DEFAULT 0,
       price_per_gb INTEGER NOT NULL, service_count INTEGER NOT NULL DEFAULT 0,
       details_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL)`),
     env.PASARGUARD_DB.prepare(`CREATE TABLE IF NOT EXISTS shared_service_ownership (
@@ -10869,6 +11019,35 @@ async function ensureSharedMarzbanTables(env) {
     env.PASARGUARD_DB.prepare(`CREATE INDEX IF NOT EXISTS idx_shared_service_ownership_bot ON shared_service_ownership(bot_id,updated_at DESC)`),
     env.PASARGUARD_DB.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_ledger_shared_marzban_event ON wallet_ledger(type,ref_type,ref_id) WHERE ref_type='shared_marzban_event' AND type IN ('shared_marzban_usage','shared_marzban_margin')`)
   ]);
+
+  const cascadeAccountColumns = [
+    ["upstream_unpaid_toman", "INTEGER NOT NULL DEFAULT 0"],
+    ["upstream_total_charged", "INTEGER NOT NULL DEFAULT 0"],
+    ["upstream_total_collected", "INTEGER NOT NULL DEFAULT 0"],
+    ["parent_income_total", "INTEGER NOT NULL DEFAULT 0"],
+    ["parent_income_collected", "INTEGER NOT NULL DEFAULT 0"],
+    ["parent_net_profit_total", "INTEGER NOT NULL DEFAULT 0"]
+  ];
+  const cascadeEventColumns = [
+    ["parent_income_amount", "INTEGER NOT NULL DEFAULT 0"],
+    ["parent_income_collected", "INTEGER NOT NULL DEFAULT 0"],
+    ["upstream_collected_amount", "INTEGER NOT NULL DEFAULT 0"],
+    ["upstream_unpaid_after", "INTEGER NOT NULL DEFAULT 0"],
+    ["parent_net_profit_amount", "INTEGER NOT NULL DEFAULT 0"]
+  ];
+  for (const [table, columns] of [["shared_backend_accounts", cascadeAccountColumns], ["shared_backend_usage_events", cascadeEventColumns]]) {
+    const info = await env.PASARGUARD_DB.prepare("PRAGMA table_info(" + table + ")").all();
+    const existing = new Set((info.results || []).map(row => String(row.name || "")));
+    for (const [name, definition] of columns) {
+      if (existing.has(name)) continue;
+      try { await env.PASARGUARD_DB.prepare("ALTER TABLE " + table + " ADD COLUMN " + name + " " + definition).run(); }
+      catch (error) { if (!/duplicate column/i.test(String(error?.message || error))) throw error; }
+    }
+  }
+  await env.PASARGUARD_DB.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_ledger_shared_marzban_cascade
+    ON wallet_ledger(user_id,type,ref_type,ref_id)
+    WHERE ref_type='shared_marzban_event' AND type IN ('shared_marzban_usage','shared_marzban_downline_income','shared_marzban_upstream_cost')`).run();
+
   if (!sharedMarzbanTrialSchemaReady) {
     const info = await env.PASARGUARD_DB.prepare("PRAGMA table_info(sales_trials)").all();
     const existing = new Set((info.results || []).map(row => String(row.name || "")));
@@ -12643,8 +12822,19 @@ async function botAdminAgencyUsageView(env, account, requestedPage = 0) {
     FROM agencies
   `).first();
   const collectedSummary = await env.PASARGUARD_DB.prepare(`
-    SELECT COALESCE(SUM(CASE WHEN type='usage_charge' AND amount<0 THEN -amount ELSE 0 END),0) AS actual_collected
+    SELECT
+      COALESCE(SUM(CASE WHEN type='usage_charge' AND amount<0 THEN -amount ELSE 0 END),0) AS pasarguard_collected,
+      COALESCE(SUM(CASE WHEN type='shared_marzban_upstream_cost' AND amount<0 THEN -amount ELSE 0 END),0) AS marzban_upstream_collected,
+      COALESCE(SUM(CASE WHEN type IN ('downline_usage_income','shared_marzban_downline_income') AND amount>0 THEN amount ELSE 0 END),0) AS master_income_collected
     FROM wallet_ledger
+  `).first();
+  const cascadeSummary = await env.PASARGUARD_DB.prepare(`
+    SELECT
+      COALESCE((SELECT SUM(charged_amount) FROM reseller_usage_events),0)+COALESCE((SELECT SUM(charged_amount) FROM shared_backend_usage_events WHERE parent_bot_id IS NOT NULL),0) AS child_billed,
+      COALESCE((SELECT SUM(collected_amount) FROM reseller_usage_events),0)+COALESCE((SELECT SUM(parent_income_collected) FROM shared_backend_usage_events WHERE parent_bot_id IS NOT NULL),0) AS child_collected,
+      COALESCE((SELECT SUM(central_cost_amount) FROM reseller_usage_events),0)+COALESCE((SELECT SUM(base_cost_amount) FROM shared_backend_usage_events WHERE parent_bot_id IS NOT NULL),0) AS attributed_upstream_cost,
+      COALESCE((SELECT SUM(master_profit_amount) FROM reseller_usage_events),0)+COALESCE((SELECT SUM(parent_net_profit_amount) FROM shared_backend_usage_events WHERE parent_bot_id IS NOT NULL),0) AS accrued_master_profit,
+      COALESCE((SELECT SUM(upstream_unpaid_after) FROM shared_backend_usage_events e WHERE e.created_at=(SELECT MAX(e2.created_at) FROM shared_backend_usage_events e2 WHERE e2.bot_id=e.bot_id)),0) AS marzban_upstream_debt
   `).first();
   const total = Math.max(0, Number(summary?.total || 0));
   const pages = Math.max(1, Math.ceil(total / pageSize));
@@ -12688,7 +12878,11 @@ async function botAdminAgencyUsageView(env, account, requestedPage = 0) {
       "🏢 کل پنل‌ها: <b>" + botMoney(total) + "</b> · فعال: <b>" + botMoney(summary?.active_count) + "</b>\n" +
       "📦 مصرف کل: <b>" + botGb(summary?.total_usage_bytes) + "</b>\n" +
       "🧾 صورتحساب ثبت‌شده: <b>" + botMoney(summary?.total_charged) + " تومان</b>\n" +
-      "💸 کسر واقعی از کیف پول: <b>" + botMoney(collectedSummary?.actual_collected) + " تومان</b>\n" +
+      "💸 وصول مرکزی PasarGuard: <b>" + botMoney(collectedSummary?.pasarguard_collected) + " تومان</b>\n" +
+      "🌐 وصول مرکزی مرزبان: <b>" + botMoney(collectedSummary?.marzban_upstream_collected) + " تومان</b>\n" +
+      "🪜 فروش پلکانی: <b>" + botMoney(cascadeSummary?.child_billed) + " تومان</b> · وصول از سطح دوم: <b>" + botMoney(cascadeSummary?.child_collected) + " تومان</b>\n" +
+      "🏦 هزینه منتسب به مرکز: <b>" + botMoney(cascadeSummary?.attributed_upstream_cost) + " تومان</b> · سود ناخالص مسترها: <b>" + botMoney(cascadeSummary?.accrued_master_profit) + " تومان</b>\n" +
+      "⚠️ بدهی مرزبان مسترها به مرکز: <b>" + botMoney(cascadeSummary?.marzban_upstream_debt) + " تومان</b>\n" +
       "📄 صفحه <b>" + botMoney(page + 1) + "</b> از <b>" + botMoney(pages) + "</b>\n\n" + lines,
     reply_markup: { inline_keyboard: buttons }
   };
@@ -16327,8 +16521,8 @@ export class LiveUsageCoordinator {
         await this.state.storage.put("status", result);
         return result;
       }
-      const central = await syncUsage(this.env, config.centralBatch);
       const downline = await syncDownlineUsage(this.env, null, config.downlineBatch, { sync: true, serviceLimit: config.serviceBatch });
+      const central = await syncUsage(this.env, config.centralBatch);
       const balance = await reconcileAllAgencyBalanceStates(this.env, Math.max(50, config.centralBatch * 3));
       const result = {
         enabled: true,
@@ -16355,19 +16549,32 @@ export class LiveUsageCoordinator {
       const downlineBilled = Number(downline?.charged || 0);
       const downlineCollected = Number(downline?.collected || 0);
       const downlineUnpaid = Number(downline?.unpaid || 0);
-      const totalCollected = centralCollected + downlineCollected;
-      if (centralBilled > 0 || centralCollected > 0 || downlineBilled > 0 || downlineCollected > 0 || downlineUnpaid > 0) {
+      const upstreamBilled = Number(downline?.upstream_charged || 0);
+      const upstreamCollected = Number(downline?.upstream_collected || 0);
+      const upstreamUnpaid = Number(downline?.upstream_unpaid || 0);
+      const masterIncome = Number(downline?.parent_income || 0);
+      const masterProfit = Number(downline?.parent_profit || 0);
+      const marzbanCentralBilled = Number(downline?.marzban?.upstream_charged || 0);
+      const marzbanCentralCollected = Number(downline?.marzban?.upstream_collected || 0);
+      const centralTotalBilled = centralBilled + marzbanCentralBilled;
+      const centralTotalCollected = centralCollected + marzbanCentralCollected;
+      if (centralTotalBilled > 0 || centralTotalCollected > 0 || downlineBilled > 0 || downlineCollected > 0 || downlineUnpaid > 0 || upstreamUnpaid > 0) {
         try {
           await queueReportEvent(this.env, null, "payments", "محاسبه خودکار مصرف نمایندگان",
             "📡 <b>محاسبه Live مصرف انجام شد</b>\n" +
             "پنل‌های مستقیم: " + Number(central?.processed || 0).toLocaleString("fa-IR") + "\n" +
             "صورتحساب مستقیم: " + centralBilled.toLocaleString("fa-IR") + " تومان\n" +
             "کسر مستقیم از کیف پول: " + centralCollected.toLocaleString("fa-IR") + " تومان\n" +
-            "ربات‌های زیرمجموعه: " + Number(downline?.processed || 0).toLocaleString("fa-IR") + "\n" +
-            "صورتحساب زیرمجموعه: " + downlineBilled.toLocaleString("fa-IR") + " تومان\n" +
-            "وصول زیرمجموعه: " + downlineCollected.toLocaleString("fa-IR") + " تومان\n" +
-            "بدهی زیرمجموعه: " + downlineUnpaid.toLocaleString("fa-IR") + " تومان\n" +
-            "💰 <b>جمع وصول واقعی: " + totalCollected.toLocaleString("fa-IR") + " تومان</b>",
+            "ربات‌های فروش سطح دوم: " + Number(downline?.processed || 0).toLocaleString("fa-IR") + "\n" +
+            "صورتحساب سطح دوم با نرخ مستر: " + downlineBilled.toLocaleString("fa-IR") + " تومان\n" +
+            "وصول از سطح دوم: " + downlineCollected.toLocaleString("fa-IR") + " تومان\n" +
+            "بدهی سطح دوم به مستر: " + downlineUnpaid.toLocaleString("fa-IR") + " تومان\n" +
+            "درآمد واریزشده به مستر: " + masterIncome.toLocaleString("fa-IR") + " تومان\n" +
+            "هزینه منتسب مستر به مرکز: " + upstreamBilled.toLocaleString("fa-IR") + " تومان\n" +
+            "وصول مستقیم هزینه مرزبان از مستر: " + upstreamCollected.toLocaleString("fa-IR") + " تومان\n" +
+            "بدهی مستر به مرکز: " + upstreamUnpaid.toLocaleString("fa-IR") + " تومان\n" +
+            "سود ناخالص ثبت‌شده مستر: " + masterProfit.toLocaleString("fa-IR") + " تومان\n" +
+            "🏦 <b>صورتحساب واقعی مرکز: " + centralTotalBilled.toLocaleString("fa-IR") + " تومان · وصول مرکز: " + centralTotalCollected.toLocaleString("fa-IR") + " تومان</b>",
             "live_usage:" + result.finished_at.slice(0, 16));
         } catch (_) {}
       }
