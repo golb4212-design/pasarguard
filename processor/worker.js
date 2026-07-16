@@ -1,11 +1,11 @@
 /* BLUEPANEL_PROCESSOR_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.27
+ * Version: 3.3.28
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = '3.3.27';
+const APP_VERSION = '3.3.28';
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
@@ -334,17 +334,207 @@ async function decryptSecret(value, env) {
   return new TextDecoder().decode(decrypted);
 }
 
+
+let telegramReplyRouteSchemaReady = false;
+
+async function ensureTelegramReplyRouteSchema(env) {
+  if (telegramReplyRouteSchemaReady) return;
+  await env.PASARGUARD_DB.prepare(`
+    CREATE TABLE IF NOT EXISTS telegram_reply_routes (
+      bot_scope TEXT NOT NULL,
+      chat_id TEXT NOT NULL,
+      button_text TEXT NOT NULL,
+      action_json TEXT NOT NULL,
+      source_message_id INTEGER,
+      expires_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(bot_scope, chat_id, button_text)
+    )
+  `).run();
+  await env.PASARGUARD_DB.prepare(`
+    CREATE INDEX IF NOT EXISTS idx_telegram_reply_routes_expiry
+    ON telegram_reply_routes(expires_at)
+  `).run();
+  telegramReplyRouteSchemaReady = true;
+}
+
+function telegramReplyButtonText(value, fallback, seen) {
+  let text = String(value || fallback || "گزینه").replace(/\s+/g, " ").trim();
+  if (!text) text = "گزینه";
+  if (text.length > 56) text = text.slice(0, 53) + "…";
+  const base = text;
+  let counter = 2;
+  while (seen.has(text)) {
+    const suffix = " · " + counter++;
+    text = base.slice(0, Math.max(1, 64 - suffix.length)) + suffix;
+  }
+  seen.add(text);
+  return text;
+}
+
+function telegramReplyKeyboardPlan(inlineKeyboard) {
+  const rows = [];
+  const routes = [];
+  const seen = new Set();
+  let ordinal = 0;
+  for (const sourceRow of Array.isArray(inlineKeyboard) ? inlineKeyboard : []) {
+    const row = [];
+    for (const button of Array.isArray(sourceRow) ? sourceRow : []) {
+      ordinal += 1;
+      const text = telegramReplyButtonText(button?.text, "گزینه " + ordinal, seen);
+      if (button?.web_app?.url) {
+        row.push({ text, web_app: { url: String(button.web_app.url) } });
+        continue;
+      }
+      row.push({ text });
+      let action = null;
+      if (button?.callback_data) action = { kind: "callback", data: String(button.callback_data) };
+      else if (button?.url) action = { kind: "url", value: String(button.url) };
+      else if (button?.copy_text?.text != null) action = { kind: "copy", value: String(button.copy_text.text) };
+      else if (button?.switch_inline_query != null) action = { kind: "text", value: String(button.switch_inline_query || "") };
+      else if (button?.switch_inline_query_current_chat != null) action = { kind: "text", value: String(button.switch_inline_query_current_chat || "") };
+      else if (button?.login_url?.url) action = { kind: "url", value: String(button.login_url.url) };
+      if (action) routes.push({ text, action });
+    }
+    if (row.length) rows.push(row);
+  }
+  return {
+    markup: {
+      keyboard: rows,
+      resize_keyboard: true,
+      is_persistent: true,
+      one_time_keyboard: false,
+      input_field_placeholder: "یک گزینه را از منوی پایین انتخاب کنید"
+    },
+    routes
+  };
+}
+
+async function telegramReplaceReplyRoutes(env, botScope, chatId, routes, sourceMessageId = null) {
+  if (!env?.PASARGUARD_DB || chatId == null) return;
+  await ensureTelegramReplyRouteSchema(env);
+  const scope = String(botScope || "central");
+  const chat = String(chatId);
+  const now = nowIso();
+  const expires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  const statements = [
+    env.PASARGUARD_DB.prepare("DELETE FROM telegram_reply_routes WHERE bot_scope=? AND chat_id=?").bind(scope, chat)
+  ];
+  for (const route of routes || []) {
+    statements.push(env.PASARGUARD_DB.prepare(`
+      INSERT INTO telegram_reply_routes(bot_scope,chat_id,button_text,action_json,source_message_id,expires_at,updated_at)
+      VALUES(?,?,?,?,?,?,?)
+      ON CONFLICT(bot_scope,chat_id,button_text) DO UPDATE SET
+        action_json=excluded.action_json,
+        source_message_id=excluded.source_message_id,
+        expires_at=excluded.expires_at,
+        updated_at=excluded.updated_at
+    `).bind(scope, chat, String(route.text), JSON.stringify(route.action || {}), sourceMessageId == null ? null : Number(sourceMessageId), expires, now));
+  }
+  await env.PASARGUARD_DB.batch(statements);
+}
+
+async function telegramFindReplyRoute(env, botScope, chatId, buttonText) {
+  if (!env?.PASARGUARD_DB || chatId == null || !buttonText) return null;
+  await ensureTelegramReplyRouteSchema(env);
+  const row = await env.PASARGUARD_DB.prepare(`
+    SELECT action_json,source_message_id FROM telegram_reply_routes
+    WHERE bot_scope=? AND chat_id=? AND button_text=? AND expires_at>?
+    LIMIT 1
+  `).bind(String(botScope || "central"), String(chatId), String(buttonText), nowIso()).first();
+  if (!row) return null;
+  let action = {};
+  try { action = JSON.parse(row.action_json || "{}"); } catch (_) {}
+  return { action, source_message_id: row.source_message_id == null ? null : Number(row.source_message_id) };
+}
+
+async function telegramSendReplyRouteSpecial(sendFn, chatId, route) {
+  const action = route?.action || {};
+  if (action.kind === "url") {
+    await sendFn("sendMessage", { chat_id: chatId, text: "🔗 لینک موردنظر:\n" + String(action.value || ""), disable_web_page_preview: true });
+    return true;
+  }
+  if (action.kind === "copy") {
+    const value = String(action.value || "");
+    const escaped = typeof botEscape === "function" ? botEscape(value) : value.replace(/[&<>]/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[ch]));
+    await sendFn("sendMessage", { chat_id: chatId, text: "📋 برای کپی روی متن زیر بزنید:\n<code>" + escaped + "</code>", parse_mode: "HTML" });
+    return true;
+  }
+  if (action.kind === "text") {
+    await sendFn("sendMessage", { chat_id: chatId, text: String(action.value || "") || "این گزینه ورودی متنی ندارد." });
+    return true;
+  }
+  return false;
+}
+
+async function telegramUiApi(env, botScope, token, method, body) {
+  const payload = { ...(body || {}) };
+  if (method === "answerCallbackQuery" && String(payload.callback_query_id || "").startsWith("reply-keyboard-")) {
+    return { ok: true, result: true };
+  }
+  const inlineKeyboard = payload?.reply_markup?.inline_keyboard;
+  const chatId = payload.chat_id;
+  if (!Array.isArray(inlineKeyboard)) {
+    const result = await telegramApiWithToken(token, method, payload);
+    if (chatId != null && (payload?.reply_markup?.keyboard || payload?.reply_markup?.remove_keyboard)) {
+      await telegramReplaceReplyRoutes(env, botScope, chatId, [], result?.result?.message_id || null);
+    }
+    return result;
+  }
+
+
+  if (!inlineKeyboard.length || !inlineKeyboard.some(row => Array.isArray(row) && row.length)) {
+    if (chatId != null) await telegramReplaceReplyRoutes(env, botScope, chatId, [], null);
+    if (method === "editMessageReplyMarkup") return { ok: true, result: true };
+    return telegramApiWithToken(token, method, payload);
+  }
+
+  const plan = telegramReplyKeyboardPlan(inlineKeyboard);
+  if (!plan.markup.keyboard.length) {
+    if (chatId != null) await telegramReplaceReplyRoutes(env, botScope, chatId, [], null);
+    const without = { ...payload };
+    delete without.reply_markup;
+    return telegramApiWithToken(token, method, without);
+  }
+
+  if (method === "editMessageText" || method === "editMessageCaption") {
+    const editPayload = { ...payload };
+    delete editPayload.reply_markup;
+    let edited = null;
+    try { edited = await telegramApiWithToken(token, method, editPayload); }
+    catch (error) {
+      if (!/message is not modified/i.test(String(error?.message || error))) throw error;
+    }
+    const prompt = await telegramApiWithToken(token, "sendMessage", {
+      chat_id: chatId,
+      text: "⌨️ گزینه موردنظر را از منوی پایین انتخاب کنید.",
+      reply_markup: plan.markup
+    });
+    await telegramReplaceReplyRoutes(env, botScope, chatId, plan.routes, prompt?.result?.message_id || null);
+    return edited || prompt;
+  }
+
+  if (method === "editMessageReplyMarkup") {
+    await telegramReplaceReplyRoutes(env, botScope, chatId, plan.routes, payload.message_id || null);
+    const prompt = await telegramApiWithToken(token, "sendMessage", {
+      chat_id: chatId,
+      text: "⌨️ گزینه موردنظر را از منوی پایین انتخاب کنید.",
+      reply_markup: plan.markup
+    });
+    await telegramReplaceReplyRoutes(env, botScope, chatId, plan.routes, prompt?.result?.message_id || null);
+    return prompt;
+  }
+
+  payload.reply_markup = plan.markup;
+  const result = await telegramApiWithToken(token, method, payload);
+  await telegramReplaceReplyRoutes(env, botScope, chatId, plan.routes, result?.result?.message_id || null);
+  return result;
+}
+
 async function telegramApi(env, method, body) {
   const settings = await getSettings(env);
   if (!settings.bot_token) throw new Error("توکن ربات در پنل مدیریت تنظیم نشده است");
-  const response = await fetch("https://api.telegram.org/bot" + settings.bot_token + "/" + method, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body)
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || data.ok === false) throw new Error(data.description || "Telegram API error");
-  return data;
+  return telegramUiApi(env, "central", settings.bot_token, method, body);
 }
 
 function pasarguardBaseUrl(settings) {
@@ -1108,7 +1298,7 @@ async function resellerBotToken(env, bot) {
 }
 
 async function resellerTelegramApi(env, bot, method, body) {
-  return telegramApiWithToken(await resellerBotToken(env, bot), method, body);
+  return telegramUiApi(env, "reseller:" + String(bot.id), await resellerBotToken(env, bot), method, body);
 }
 
 async function getAgencyPasarguardToken(env, agency, forceRefresh = false) {

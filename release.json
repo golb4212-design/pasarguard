@@ -1,7 +1,7 @@
 {
-  "version": "3.3.27",
-  "release_id": "3.3.27-master-downline-legacy-menu-plan-edit-delete",
-  "architecture": "fully-split-three-worker-dual-panel-master-downline-management",
+  "version": "3.3.28",
+  "release_id": "3.3.28-native-reply-keyboard-everywhere",
+  "architecture": "fully-split-three-worker-dual-panel-native-reply-keyboard",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -9,37 +9,38 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "direct downline bot creation button and /newbot command in master reseller bots",
-    "legacy provider command menu and persistent reply keyboard cleanup during token migration and runtime repair",
-    "Telegram commands restored after cleaning default, private, group, administrator and owner scopes",
-    "plan edit and safe delete in central bot, reseller bot and web control panel",
-    "plans with order history remain protected and can be disabled instead of deleted",
+    "all callback-based central, reseller, customer and master menus are rendered as Telegram reply keyboards",
+    "dynamic plan, service, order and management buttons are routed through D1-backed per-chat reply routes",
+    "URL and copy actions are delivered as normal bot messages instead of inline glass buttons",
+    "Telegram chat menu button uses the commands menu rather than a WebApp glass button",
+    "existing callback handlers remain compatible through synthetic callback dispatch",
     "README files are excluded"
   ],
   "deployment": {
     "automatic_provisioning": "upload ZIP through the central bot",
-    "db_schema_revision": "3.3.27"
+    "db_schema_revision": "3.3.28"
   },
   "validation": {
     "worker_syntax": "passed: core, edge, processor",
     "embedded_browser_scripts": "passed: 10 scripts",
-    "database_schema": "passed in SQLite memory",
-    "plan_update_and_safe_delete_sql": "passed",
+    "reply_route_schema": "passed in SQLite memory",
+    "reply_keyboard_runtime_simulation": "passed: send, edit, dynamic route lookup, route cleanup and synthetic callback acknowledgement",
+    "inline_keyboard_runtime_interception": "passed for central, reseller and processor Telegram wrappers",
     "telegram_live_api": "not run; requires a real bot token"
   },
   "limitations": [
-    "Telegram bots still require a token created in BotFather; Telegram does not provide an API for one bot to create another bot"
+    "Old inline buttons in historical Telegram messages cannot be removed without their message IDs; all newly rendered bot menus use reply keyboards."
   ],
   "sha256": {
-    "core/worker.js": "abc76c1c7566be4a5fe289708daaa3ea3a9bdade1da1dd633a511a08f2bb4add",
-    "edge/worker.js": "a0caa9e943c01f924554d4aea75d17360d327afd8a92677d4f15a21a49ecb57e",
-    "processor/worker.js": "bf4cd25cd5615a54260f0ab2e7d644a950efb000650e4a6e5cc59de3eb75297f",
+    "core/worker.js": "3f887cf6bcc78a79cd285ebdfaccb613e170c350999b6d6ead825ea42e6aa039",
+    "edge/worker.js": "833bccef68ab79c395ce96ba55a88fb1204255813f963c2ce1cf43e1a210c157",
+    "processor/worker.js": "1ba70af433e0a62fdcf3f1444e182ee7513f55c083af2580bb9fff99569e4177",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "abc76c1c7566be4a5fe289708daaa3ea3a9bdade1da1dd633a511a08f2bb4add",
-    "edge/worker.js": "a0caa9e943c01f924554d4aea75d17360d327afd8a92677d4f15a21a49ecb57e",
-    "processor/worker.js": "bf4cd25cd5615a54260f0ab2e7d644a950efb000650e4a6e5cc59de3eb75297f",
+    "core/worker.js": "3f887cf6bcc78a79cd285ebdfaccb613e170c350999b6d6ead825ea42e6aa039",
+    "edge/worker.js": "833bccef68ab79c395ce96ba55a88fb1204255813f963c2ce1cf43e1a210c157",
+    "processor/worker.js": "1ba70af433e0a62fdcf3f1444e182ee7513f55c083af2580bb9fff99569e4177",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }
