@@ -1,15 +1,26 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.40
+ * Version: 3.3.41
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.40';
+const APP_VERSION = '3.3.41';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.41": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🎨", text: "تکمیل حالت هوشمند رنگ کلیدها؛ هیچ کلید معتبر بدون رنگ باقی نمی‌ماند" },
+      { emoji: "🧠", text: "دسته‌بندی گسترده‌تر عملیات مخرب، مالی، مدیریتی، آموزشی و هدیه" },
+      { emoji: "🔵", text: "Fallback امن کلیدهای ناشناخته به رنگ آبی بدون تغییر متن یا عملکرد" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "✅", text: "رنگ‌دار شدن کامل کلیدهای منوی مشتری و مدیریت در حالت هوشمند" },
+      { emoji: "🟢", text: "خرید، تمدید، هدیه، تست رایگان و تخفیف سبز؛ عملیات خطرناک قرمز؛ سایر گزینه‌ها آبی" }
+    ])
+  }),
   "3.3.40": Object.freeze({
     central: Object.freeze([
       { emoji: "🛟", text: "بازگردانی فوری پاسخ‌گویی ربات‌های نماینده با جداسازی تنظیمات ظاهری از مسیر حیاتی Webhook" },
@@ -3714,10 +3725,19 @@ function telegramUiNormalizeMatchText(value) {
 function telegramUiSmartStyle(text) {
   const value = telegramUiNormalizeMatchText(text);
   if (!value) return "";
-  if (/(حذف|پاک|رد سفارش|رد درخواست|مسدود|توقف|غیرفعال|لغو|باطل|خروج|بستن|منقضی|قطع اتصال)/.test(value)) return "danger";
-  if (/(تأیید|تایید|خرید|پرداخت|شارژ|ثبت|ذخیره|ساخت|افزایش|تمدید|فعال کردن|فعال‌کردن|تحویل|ارسال|تسویه|اتصال)/.test(value)) return "success";
-  if (/(مدیریت|تنظیمات|گزارش|آمار|کیف پول|پنل|سرویس|ربات|منوی اصلی|خانه|بروزرسانی|به روزرسانی|ورود|مشاهده)/.test(value)) return "primary";
-  return "";
+
+  // Destructive or blocking actions are always red.
+  if (/(حذف|پاک|رد(?: سفارش| درخواست)?|مسدود|توقف|غیرفعال|لغو|باطل|خروج|بستن|منقضی|قطع(?: اتصال)?|تعلیق|محروم|ریست|بازنشانی)/.test(value)) return "danger";
+
+  // Positive transactional actions are green.
+  if (/(تأیید|تایید|خرید|پرداخت|شارژ|ثبت|ذخیره|ساخت|ایجاد|افزایش|افزودن|تمدید|فعال(?: کردن|‌کردن|سازی)?|تحویل|ارسال|تسویه|اتصال|هدیه|رایگان|تخفیف|دعوت|زیرمجموعه|بازکردن|راه‌اندازی|راه اندازی|دریافت|برداشت|واریز)/.test(value)) return "success";
+
+  // Informational, navigation and management actions are blue.
+  if (/(مدیریت|تنظیمات|گزارش|آمار|کیف پول|پنل|سرویس|ربات|منوی اصلی|خانه|بروزرسانی|به روزرسانی|ورود|مشاهده|پیشنهاد|حساب|کاربری|آموزش|راهنما|سفارش|پشتیبانی|قوانین|سؤال|سوال|درباره|اعلان|تاریخچه|وضعیت|پروفایل|کد|لینک|بازگشت|لیست|جستجو|اطلاعات|جزئیات|امنیت|تیم|فعالیت|موجودی)/.test(value)) return "primary";
+
+  // Complete smart mode: never leave a valid button colourless.
+  // Unknown actions safely fall back to Telegram's primary (blue) style.
+  return "primary";
 }
 
 function telegramUiResolveButtonStyle(text, configSource = {}) {

@@ -1,7 +1,7 @@
 {
-  "version": "3.3.40",
-  "release_id": "3.3.40-reseller-webhook-ui-fail-open",
-  "architecture": "fully-split-three-worker-reseller-webhook-fail-open",
+  "version": "3.3.41",
+  "release_id": "3.3.41-smart-button-full-coverage",
+  "architecture": "fully-split-three-worker-smart-button-full-coverage",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -9,18 +9,19 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "restores representative bot webhook processing when Telegram UI key-value reads encounter any D1 schema or transient error",
-    "makes premium emoji and button color storage fully fail-open so optional appearance settings can never stop a bot",
-    "preserves the exact original reply-keyboard button text while attaching icon_custom_emoji_id, keeping reply routes stable",
-    "adds normalized fallback matching for keyboards created before an update or with emoji presentation differences",
-    "retries Telegram HTTP 400 responses after removing modern emoji/style fields even when Telegram returns a new error wording",
-    "keeps the 3.3.39 no-new-column D1 design and all 3.3.37 backup isolation fixes",
+    "completes Telegram smart button styling so every non-empty button receives a style",
+    "expands danger matching for destructive, blocking, reset and disconnect actions",
+    "expands success matching for purchases, renewals, gifts, free trials, discounts, referrals and positive transactions",
+    "maps navigation, account, training, reports and informational actions to primary blue",
+    "falls back unknown buttons to primary instead of leaving them colourless",
+    "preserves custom style rules including explicit default overrides",
+    "keeps all 3.3.40 representative webhook fail-open protections",
     "README files are excluded"
   ],
   "deployment": {
     "automatic_provisioning": "upload ZIP through the central bot",
     "db_schema_revision": "3.3.40-reseller-webhook-ui-fail-open",
-    "automatic_migration": "no new reseller_bots columns; legacy Telegram UI copy is optional and fail-open",
+    "automatic_migration": "no database schema change",
     "required_bindings": [
       "Core: PROCESSOR_WORKER",
       "Processor: EDGE_WORKER and CORE_WORKER",
@@ -29,37 +30,36 @@
   },
   "validation": {
     "worker_syntax": "passed: core, edge, processor",
-    "reseller_webhook_regression": "passed by static path review: UI storage exceptions no longer propagate through getResellerBotById into RESELLER_WEBHOOK_RECOVERY",
-    "reply_keyboard_route_regression": "passed: original button text is preserved and normalized fallback route matching is present",
-    "telegram_api_compatibility_fallback": "passed: modern fields are stripped and retried for Telegram HTTP 400 responses",
-    "d1_column_limit_regression": "passed: no ALTER TABLE reseller_bots ADD COLUMN telegram_ui_json",
+    "smart_style_full_coverage": "passed: every non-empty unknown button falls back to primary",
+    "sample_menu_regression": "passed: buy/renew/gift/trial/discount are success; management/account/help/orders are primary; destructive actions are danger",
+    "custom_rules_precedence": "preserved: explicit rules are evaluated before smart mode",
+    "database_schema": "unchanged from 3.3.40",
     "zip_integrity": "pending final archive test",
     "live_api": "not run; requires production Cloudflare, D1 and Telegram credentials"
   },
   "limitations": [
-    "Premium custom emoji availability is still controlled by Telegram bot eligibility and the bot owner's Premium status.",
-    "Telegram button styles remain limited to primary, success, danger, or default."
+    "Telegram button styles remain limited to primary, success, danger, or default.",
+    "An explicit custom rule using default intentionally leaves that matching button uncoloured."
   ],
-  "title": "بازگشت ربات‌های نماینده و ایمن‌سازی کامل تنظیمات ظاهر",
-  "summary": "مسیر حیاتی Webhook دیگر به خواندن تنظیمات ایموجی و رنگ وابسته نیست؛ خطای D1 در تنظیمات ظاهری با حالت پیش‌فرض مهار می‌شود و متن کلیدهای Reply Keyboard برای سازگاری با منوهای قدیمی تغییر نمی‌کند.",
+  "title": "تکمیل رنگ‌بندی هوشمند همه کلیدها",
+  "summary": "در حالت هوشمند دیگر هیچ کلید معتبری بدون رنگ باقی نمی‌ماند؛ عملیات مثبت سبز، عملیات خطرناک قرمز و سایر کلیدها آبی می‌شوند.",
   "changes": [
-    "Fail-open کردن تمام خطاهای خواندن تنظیمات ظاهر هر ربات.",
-    "جلوگیری از عبور خطای اختیاری telegram_ui_json به RESELLER_WEBHOOK_RECOVERY و سکوت ربات.",
-    "حفظ دقیق متن اصلی کلید هنگام افزودن Custom Emoji ID.",
-    "تطبیق جایگزین کلیدهای قدیمی با حذف تفاوت‌های ایموجی و Presentation.",
-    "Fallback گسترده Telegram روی تمام خطاهای HTTP 400 مربوط به فیلدهای جدید.",
-    "Fail-open کردن Migration سازگاری نسخه 3.3.38 در Core و Edge."
+    "افزودن fallback آبی برای تمام کلیدهای ناشناخته.",
+    "گسترش واژه‌های تشخیص خرید، تمدید، هدیه، تست رایگان، تخفیف و زیرمجموعه‌گیری.",
+    "گسترش واژه‌های تشخیص حساب کاربری، آموزش، راهنما، پیشنهاد، سفارش‌ها و اطلاعات.",
+    "حفظ اولویت قوانین اختصاصی و امکان default عمدی.",
+    "بدون تغییر دیتابیس یا Migration."
   ],
   "sha256": {
-    "core/worker.js": "9cc5cc40a5c121fdaaf3c07a104ff31556eccec2853fcf7a1f4c17eab0a76a44",
-    "edge/worker.js": "0a85992fa017dced01bdb78dd838f795ddf10138c4af6ee3f9fd2a1ce7e3f03a",
-    "processor/worker.js": "ec66ad673892f2f359ac7562ba1f881912f27c3f85a506db1541f619df2c2896",
+    "core/worker.js": "82ef2246898d43e647393feb363c7eb2b29633eaf220ec4042ae426e173e4f9b",
+    "edge/worker.js": "a6d93c95612a44dd5c41351e86cebd601b3dd16611f16c154fb5b2f4347ddff5",
+    "processor/worker.js": "08abdfa63373e10136ffcdefd13d550c832ccb7b3bcf122daa05d0abfd1d3375",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "9cc5cc40a5c121fdaaf3c07a104ff31556eccec2853fcf7a1f4c17eab0a76a44",
-    "edge/worker.js": "0a85992fa017dced01bdb78dd838f795ddf10138c4af6ee3f9fd2a1ce7e3f03a",
-    "processor/worker.js": "ec66ad673892f2f359ac7562ba1f881912f27c3f85a506db1541f619df2c2896",
+    "core/worker.js": "82ef2246898d43e647393feb363c7eb2b29633eaf220ec4042ae426e173e4f9b",
+    "edge/worker.js": "a6d93c95612a44dd5c41351e86cebd601b3dd16611f16c154fb5b2f4347ddff5",
+    "processor/worker.js": "08abdfa63373e10136ffcdefd13d550c832ccb7b3bcf122daa05d0abfd1d3375",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }
