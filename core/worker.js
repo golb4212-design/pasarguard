@@ -1,15 +1,27 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.33
+ * Version: 3.3.34
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.33';
+const APP_VERSION = '3.3.34';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.34": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🔄", text: "همگام‌سازی پیوسته همه ربات‌های موجود در هر اجرای Cron به‌جای یک فاز از چهار فاز" },
+      { emoji: "⚡", text: "کاهش شدید درخواست‌های Telegram هنگام بروزرسانی عادی و جلوگیری از عبور از سقف subrequest" },
+      { emoji: "🧹", text: "محدودشدن پاک‌سازی سنگین منوی ارائه‌دهنده قبلی فقط به زمان انتقال واقعی توکن" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "✅", text: "اعمال تدریجی و مطمئن نسخه جدید روی تمام ربات‌های قدیمی و جدید" },
+      { emoji: "📡", text: "ترمیم Webhook و فرمان‌های هر ربات بدون حذف چندباره منو در هر نسخه" },
+      { emoji: "🔁", text: "ادامه خودکار همگام‌سازی ربات‌های باقی‌مانده در Cron بعدی" }
+    ])
+  }),
   "3.3.33": Object.freeze({
     central: Object.freeze([
       { emoji: "🗄", text: "مهاجرت اجباری ستون location_id دسته‌بندی‌ها روی دیتابیس‌های قدیمی" },
@@ -3949,7 +3961,7 @@ async function notifyVersionActivation(env) {
       "📣 ارسال خودکار اطلاعیه کانال: <code>" + (settings.release_channel_enabled === "true" ? "فعال" : "غیرفعال") + "</code>\n" +
       "🐍 وضعیت Python: <code>" + botEscape(pythonState) + "</code>"
     );
-    try { resellerSync = await syncAllResellerBotMenus(env, false, 5); } catch (_) {}
+    try { resellerSync = await syncAllResellerBotMenus(env, false, 4); } catch (_) {}
     try { await audit(env, null, "runtime_version_activated", { version: APP_VERSION, independentBot: true, resellerSalesBots: true, resellerSync, agencySync }); } catch (_) {}
   }
 
@@ -8224,7 +8236,7 @@ async function triggerProcessorBusinessJobs(env, source = "core") {
 async function configureResellerRoutingOnly(env, bot, fallbackOrigin = "") {
   const settings = await getSettings(env);
   const publicOrigin = resellerBotOrigin(settings, fallbackOrigin);
-  const prepared = { ...bot, __cleanup_legacy_keyboard: true };
+  const prepared = { ...bot };
   const webhookUrl = await configureResellerBot(env, prepared, publicOrigin);
   return {
     webhook_url: webhookUrl,
@@ -10661,7 +10673,7 @@ async function configureResellerBot(env, bot, origin = "") {
     try { await telegramApiWithToken(token, "setChatMenuButton", { chat_id: Number(ownerChatId), menu_button: menuButton }); } catch (_) {}
   }
 
-  const cleanupLegacyKeyboard = bot.__cleanup_legacy_keyboard === true || String(bot.bot_version || "") !== RESELLER_BOT_VERSION;
+  const cleanupLegacyKeyboard = bot.__cleanup_legacy_keyboard === true;
   if (cleanupLegacyKeyboard && /^\d{5,20}$/.test(ownerChatId)) {
     try {
       await telegramApiWithToken(token, "sendMessage", {
@@ -12099,7 +12111,7 @@ async function runCentralRepairAll(env, account) {
     await env.PASARGUARD_DB.prepare("INSERT INTO repair_runs(id,scope,action,status,result_json,created_at) VALUES(?,'central','repair_all','running','{}',?)").bind(runId,ts).run();
     tracking=true;
   } catch(error){console.error("repair tracking unavailable",error);}
-  try{await syncAllResellerBotMenus(env,false,5);result.menus=true;}catch(error){console.error("repair menus",error);}
+  try{await syncAllResellerBotMenus(env,false,4);result.menus=true;}catch(error){console.error("repair menus",error);}
   try{await runAllResellerHealthChecks(env,5);result.health=true;}catch(error){console.error("repair health",error);}
   try{await createAllResellerBackups(env,5);result.backups=true;}catch(error){console.error("repair backups",error);}
   try{await processReportOutboxOnCore(env,8);result.reports=true;}catch(error){console.error("repair reports",error);}
@@ -16852,10 +16864,12 @@ async function runBluePanelCoreScheduledJobs(env) {
   ]);
   await notifyVersionActivation(env);
   try { await automaticUpdateTick(env,{source:'cron',intervalSeconds:30}); } catch (error) { console.error('isolated auto update error',error); }
+  // Routine reseller rollout is lightweight (no legacy command purge) and runs on every cron.
+  // Four bots stay safely below the external subrequest budget while guaranteeing progress.
+  try { await syncAllResellerBotMenus(env,false,4); } catch (error) { console.error('reseller menu sync error',error); }
 
   if (phase === 0) {
     try { await syncPasarguardManagersForAllUsers(env,3); } catch (error) { console.error('manager sync phase error',error); }
-    try { await syncAllResellerBotMenus(env,false,3); } catch (error) { console.error('reseller menu sync phase error',error); }
   } else if (phase === 1) {
     if (!liveUsageNamespaceAvailable(env)) await syncUsage(env,10);
     await reconcileAllAgencyBalanceStates(env,8);

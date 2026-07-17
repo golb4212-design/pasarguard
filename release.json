@@ -1,6 +1,6 @@
 {
-  "version": "3.3.33",
-  "release_id": "3.3.33-reseller-dashboard-login-bootstrap-json-recovery",
+  "version": "3.3.34",
+  "release_id": "3.3.34-complete-reseller-bot-rollout-subrequest-fix",
   "architecture": "fully-split-three-worker-dual-panel-cascading-ledger-native-reply-keyboard",
   "files": {
     "core": "core/worker.js",
@@ -9,11 +9,11 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "reseller management login no longer runs catalog migrations inside the authentication POST",
-    "management bootstrap is bounded to prevent Cloudflare invocation exhaustion on large accounts",
-    "login and bootstrap failures always return structured JSON with an explicit error code",
-    "browser retries one bounded bootstrap request and displays HTTP/content-type details instead of a generic invalid-server message",
-    "all previous dual-panel, location catalog and cascading billing capabilities are preserved",
+    "routine reseller bot synchronization no longer performs exhaustive legacy command cleanup on every release",
+    "legacy menu cleanup runs only for an actual imported/replaced Telegram token",
+    "a bounded reseller rollout batch runs on every cron invocation and continues until all bot_version values are current",
+    "routing-only repair no longer triggers destructive menu cleanup",
+    "all previous dual-panel, location catalog, cascading billing and dashboard capabilities are preserved",
     "README files are excluded"
   ],
   "deployment": {
@@ -22,32 +22,31 @@
   },
   "validation": {
     "worker_syntax": "passed: core, edge, processor",
-    "embedded_browser_scripts": "passed: 10 scripts",
-    "static_login_flow": "passed: auth uses lightweight DB binding; bootstrap uses bounded response and JSON wrappers",
-    "live_api": "not run; requires production D1, Cloudflare and panel credentials"
+    "rollout_static_check": "passed: normal version mismatch does not set cleanupLegacyKeyboard; cron sync runs every phase with batch 4",
+    "subrequest_model": "routine bot sync reduced from roughly 27 Telegram calls per bot to the bounded command/webhook refresh path",
+    "live_api": "not run; requires production Cloudflare and Telegram credentials"
   },
   "limitations": [
-    "Live integration was not executed because real credentials and production D1 are unavailable in this environment."
+    "Bots with invalid/revoked tokens remain in error state and cannot be updated until their token is corrected."
   ],
-  "title": "رفع پاسخ نامعتبر سرور در ورود پنل نمایندگی",
-  "summary": "ورود پنل از مهاجرت‌های سنگین جدا شد و داشبورد با پاسخ محدود و JSON امن بارگذاری می‌شود تا Cloudflare به‌جای JSON صفحه خطای HTML برنگرداند.",
+  "title": "اعمال مطمئن بروزرسانی روی همه ربات‌های موجود",
+  "summary": "پاک‌سازی سنگین منوی قدیمی از بروزرسانی عادی جدا شد و همگام‌سازی کم‌حجم در هر Cron ادامه پیدا می‌کند تا همه ربات‌ها به نسخه جدید برسند.",
   "changes": [
-    "سبک‌سازی مسیر POST ورود و حذف مهاجرت کاتالوگ از همان درخواست.",
-    "محدودسازی حجم داده اولیه داشبورد برای حساب‌های دارای سفارش و مشتری زیاد.",
-    "افزودن wrapper امن JSON برای ورود و bootstrap مدیریت نماینده.",
-    "نمایش کد HTTP و نوع پاسخ در صورت خطای زیرساخت و یک بار تلاش مجدد خودکار.",
-    "بروزرسانی Service Worker و cache-bust رابط مدیریت."
+    "حذف اجرای deleteMyCommands چندزبانه و چندScope برای هر تغییر نسخه عادی.",
+    "اجرای پاک‌سازی کامل فقط هنگام انتقال واقعی توکن از ارائه‌دهنده دیگر.",
+    "همگام‌سازی چهار ربات در هر اجرای Cron و ادامه خودکار تا پایان فهرست.",
+    "حذف پاک‌سازی سنگین از عملیات صرفاً مربوط به ترمیم Routing و Webhook."
   ],
   "sha256": {
-    "core/worker.js": "4aaa5e6dcaaf8d65463fc6db460ee86322e0dee1348fd6cf17e711607c4bab6c",
-    "edge/worker.js": "3b31b5fe4374382d6555b62badcb7c4f41f96527a175e42fbea1a9ff2ec15e0b",
-    "processor/worker.js": "ec968d73ba14618184369fd124d1ff25675600ba889d224b976dcb9e9c5c7e21",
+    "core/worker.js": "59db7a11973ae570fbed68bf9870400bd9ff90d3561c87b46457d043ca17ce95",
+    "edge/worker.js": "214a41b7c84c3aa2cc0e98c2c88933f3f51ec273e8624c5406577415ccfa862c",
+    "processor/worker.js": "1190783ffb917eacc96d64673166b301887f50dfd8f299cf42c9e226047cc65f",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "4aaa5e6dcaaf8d65463fc6db460ee86322e0dee1348fd6cf17e711607c4bab6c",
-    "edge/worker.js": "3b31b5fe4374382d6555b62badcb7c4f41f96527a175e42fbea1a9ff2ec15e0b",
-    "processor/worker.js": "ec968d73ba14618184369fd124d1ff25675600ba889d224b976dcb9e9c5c7e21",
+    "core/worker.js": "59db7a11973ae570fbed68bf9870400bd9ff90d3561c87b46457d043ca17ce95",
+    "edge/worker.js": "214a41b7c84c3aa2cc0e98c2c88933f3f51ec273e8624c5406577415ccfa862c",
+    "processor/worker.js": "1190783ffb917eacc96d64673166b301887f50dfd8f299cf42c9e226047cc65f",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }
