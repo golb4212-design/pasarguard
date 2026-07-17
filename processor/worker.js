@@ -1,11 +1,11 @@
 /* BLUEPANEL_PROCESSOR_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.39
+ * Version: 3.3.40
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = '3.3.39';
+const APP_VERSION = '3.3.40';
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
@@ -496,12 +496,10 @@ function telegramUiDecorateButton(button, configSource = {}) {
   if (!out.icon_custom_emoji_id) {
     const emoji = telegramUiEmojiMatch(originalText, configSource);
     if (emoji) {
+      // Keep the original button text byte-for-byte. Reply keyboards send their
+      // text back as a user message; changing it here breaks stored routes and
+      // makes old keyboards appear unresponsive after an update.
       out.icon_custom_emoji_id = emoji.emojiId;
-      if (emoji.isPrefix) {
-        const leading = originalText.match(/^[\s\u200e\u200f\u061c]*/)?.[0] || "";
-        let rest = originalText.slice(leading.length + emoji.key.length).replace(/^[\ufe0f\u200c\u200d\s]+/, "");
-        if (rest) out.text = rest;
-      }
     }
   }
   return out;
@@ -565,7 +563,12 @@ async function getResellerTelegramUiStoredValue(env, botId, legacyValue = "") {
     ).bind(botId, RESELLER_TELEGRAM_UI_TEXT_KEY).first();
     if (row?.text_value != null && String(row.text_value).trim()) value = String(row.text_value);
   } catch (error) {
-    if (!/no such table/i.test(String(error?.message || error))) throw error;
+    // Appearance is optional. A D1 schema mismatch, busy database, malformed
+    // legacy table or temporary read failure must never abort a bot webhook.
+    console.warn("telegram ui storage read failed; using safe defaults", {
+      bot_id: String(botId || ""),
+      error: String(error?.message || error).slice(0, 500)
+    });
   }
   return value || "{}";
 }
@@ -674,14 +677,36 @@ async function telegramReplaceReplyRoutes(env, botScope, chatId, routes, sourceM
   await env.PASARGUARD_DB.batch(statements);
 }
 
+function telegramReplyRouteComparableText(value) {
+  return telegramUiNormalizeMatchText(value)
+    .replace(/[\p{Extended_Pictographic}\p{Emoji_Presentation}]/gu, " ")
+    .replace(/[\u2600-\u27bf]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 async function telegramFindReplyRoute(env, botScope, chatId, buttonText) {
   if (!env?.PASARGUARD_DB || chatId == null || !buttonText) return null;
   await ensureTelegramReplyRouteSchema(env);
-  const row = await env.PASARGUARD_DB.prepare(`
-    SELECT action_json,source_message_id FROM telegram_reply_routes
+  const scope = String(botScope || "central");
+  const chat = String(chatId);
+  const now = nowIso();
+  let row = await env.PASARGUARD_DB.prepare(`
+    SELECT button_text,action_json,source_message_id FROM telegram_reply_routes
     WHERE bot_scope=? AND chat_id=? AND button_text=? AND expires_at>?
     LIMIT 1
-  `).bind(String(botScope || "central"), String(chatId), String(buttonText), nowIso()).first();
+  `).bind(scope, chat, String(buttonText), now).first();
+  if (!row) {
+    const wanted = telegramReplyRouteComparableText(buttonText);
+    if (wanted) {
+      const candidates = await env.PASARGUARD_DB.prepare(`
+        SELECT button_text,action_json,source_message_id FROM telegram_reply_routes
+        WHERE bot_scope=? AND chat_id=? AND expires_at>?
+        ORDER BY updated_at DESC LIMIT 120
+      `).bind(scope, chat, now).all();
+      row = (candidates.results || []).find(item => telegramReplyRouteComparableText(item.button_text) === wanted) || null;
+    }
+  }
   if (!row) return null;
   let action = {};
   try { action = JSON.parse(row.action_json || "{}"); } catch (_) {}
@@ -850,7 +875,9 @@ async function telegramApiWithToken(token, method, body) {
     return await send(payload);
   } catch (error) {
     const modern = telegramUiMarkupModernFields(payload?.reply_markup);
-    if ((!modern.emoji && !modern.style) || !telegramUiModernFieldError(error)) throw error;
+    const telegramErrorCode = Number(error?.telegram_error_code || 0);
+    const retryableModernError = telegramUiModernFieldError(error) || telegramErrorCode === 400 || /^Bad Request:/i.test(String(error?.message || error));
+    if ((!modern.emoji && !modern.style) || !retryableModernError) throw error;
     let retryPayload = payload;
     let lastError = error;
     if (modern.emoji) {
@@ -3298,7 +3325,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_PROCESSOR_VERSION='3.3.39';
+const BLUEPANEL_PROCESSOR_VERSION='3.3.40';
 let processorSchemaPromise=null;
 function processorJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 

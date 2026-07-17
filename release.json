@@ -1,7 +1,7 @@
 {
-  "version": "3.3.39",
-  "release_id": "3.3.39-core-recovery-d1-column-limit-fix",
-  "architecture": "fully-split-three-worker-telegram-ui-kv-storage",
+  "version": "3.3.40",
+  "release_id": "3.3.40-reseller-webhook-ui-fail-open",
+  "architecture": "fully-split-three-worker-reseller-webhook-fail-open",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -9,19 +9,18 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "removes the 3.3.38 reseller_bots.telegram_ui_json ALTER TABLE migration that could exceed Cloudflare D1's 100-column table limit",
-    "stores each reseller bot's Telegram premium emoji and button style configuration in the existing reseller_bot_texts key-value table under a reserved internal key",
-    "migrates settings from reseller_bots.telegram_ui_json when the 3.3.38 column was successfully created on a database",
-    "preserves central Telegram UI settings in app_settings.telegram_ui_json",
-    "preserves premium custom emoji, primary/success/danger button styles, smart rules, custom mappings and Telegram compatibility fallback",
-    "preserves Telegram UI settings in reseller backups and restores",
-    "all previous backup invocation isolation, dashboard, catalog and cascading billing fixes are preserved",
+    "restores representative bot webhook processing when Telegram UI key-value reads encounter any D1 schema or transient error",
+    "makes premium emoji and button color storage fully fail-open so optional appearance settings can never stop a bot",
+    "preserves the exact original reply-keyboard button text while attaching icon_custom_emoji_id, keeping reply routes stable",
+    "adds normalized fallback matching for keyboards created before an update or with emoji presentation differences",
+    "retries Telegram HTTP 400 responses after removing modern emoji/style fields even when Telegram returns a new error wording",
+    "keeps the 3.3.39 no-new-column D1 design and all 3.3.37 backup isolation fixes",
     "README files are excluded"
   ],
   "deployment": {
     "automatic_provisioning": "upload ZIP through the central bot",
-    "db_schema_revision": "3.3.39-telegram-ui-kv-storage",
-    "automatic_migration": "does not add a reseller_bots column; copies a legacy 3.3.38 telegram_ui_json value into reseller_bot_texts when present",
+    "db_schema_revision": "3.3.40-reseller-webhook-ui-fail-open",
+    "automatic_migration": "no new reseller_bots columns; legacy Telegram UI copy is optional and fail-open",
     "required_bindings": [
       "Core: PROCESSOR_WORKER",
       "Processor: EDGE_WORKER and CORE_WORKER",
@@ -30,36 +29,37 @@
   },
   "validation": {
     "worker_syntax": "passed: core, edge, processor",
-    "d1_column_limit_regression": "passed: reseller_bots schema is 98 columns and no Worker contains ALTER TABLE reseller_bots ADD COLUMN telegram_ui_json",
-    "legacy_migration_sql": "passed locally for both databases with and without the optional 3.3.38 column",
-    "telegram_ui_storage_regression": "passed: central remains in app_settings; reseller settings save, hydrate, backup and restore through reserved reseller_bot_texts key",
-    "telegram_api_compatibility_fallback": "preserved from 3.3.38",
-    "zip_integrity": "passed: archive test succeeded; exact six-file payload plus directories; no README",
+    "reseller_webhook_regression": "passed by static path review: UI storage exceptions no longer propagate through getResellerBotById into RESELLER_WEBHOOK_RECOVERY",
+    "reply_keyboard_route_regression": "passed: original button text is preserved and normalized fallback route matching is present",
+    "telegram_api_compatibility_fallback": "passed: modern fields are stripped and retried for Telegram HTTP 400 responses",
+    "d1_column_limit_regression": "passed: no ALTER TABLE reseller_bots ADD COLUMN telegram_ui_json",
+    "zip_integrity": "pending final archive test",
     "live_api": "not run; requires production Cloudflare, D1 and Telegram credentials"
   },
   "limitations": [
-    "Premium custom emoji availability remains controlled by Telegram account and bot eligibility; automatic fallback removes unsupported modern fields.",
-    "Only Telegram-supported button styles are available: primary, success, danger, or default."
+    "Premium custom emoji availability is still controlled by Telegram bot eligibility and the bot owner's Premium status.",
+    "Telegram button styles remain limited to primary, success, danger, or default."
   ],
-  "title": "رفع CORE_RECOVERY_MODE بدون حذف ایموجی پرمیوم و رنگ کلیدها",
-  "summary": "تنظیمات ظاهر ربات نماینده دیگر ستون جدیدی به reseller_bots اضافه نمی‌کند و در مخزن کلید-مقدار موجود ذخیره می‌شود؛ بنابراین دیتابیس‌های قدیمی نزدیک سقف ۱۰۰ ستون از حالت بازیابی خارج می‌شوند.",
+  "title": "بازگشت ربات‌های نماینده و ایمن‌سازی کامل تنظیمات ظاهر",
+  "summary": "مسیر حیاتی Webhook دیگر به خواندن تنظیمات ایموجی و رنگ وابسته نیست؛ خطای D1 در تنظیمات ظاهری با حالت پیش‌فرض مهار می‌شود و متن کلیدهای Reply Keyboard برای سازگاری با منوهای قدیمی تغییر نمی‌کند.",
   "changes": [
-    "حذف Migration ستون telegram_ui_json از جدول سنگین reseller_bots.",
-    "ذخیره تنظیمات رنگ کلیدها و Custom Emoji هر ربات در reseller_bot_texts با کلید داخلی رزروشده.",
-    "مهاجرت خودکار و سازگار داده نسخه 3.3.38 در صورت ایجاد موفق ستون قدیمی.",
-    "حفظ کامل تنظیمات مرکزی، پنل نماینده، بکاپ و بازیابی.",
-    "حفظ fallback چندمرحله‌ای Telegram برای ایموجی پرمیوم و رنگ کلیدها."
+    "Fail-open کردن تمام خطاهای خواندن تنظیمات ظاهر هر ربات.",
+    "جلوگیری از عبور خطای اختیاری telegram_ui_json به RESELLER_WEBHOOK_RECOVERY و سکوت ربات.",
+    "حفظ دقیق متن اصلی کلید هنگام افزودن Custom Emoji ID.",
+    "تطبیق جایگزین کلیدهای قدیمی با حذف تفاوت‌های ایموجی و Presentation.",
+    "Fallback گسترده Telegram روی تمام خطاهای HTTP 400 مربوط به فیلدهای جدید.",
+    "Fail-open کردن Migration سازگاری نسخه 3.3.38 در Core و Edge."
   ],
   "sha256": {
-    "core/worker.js": "f5dda7ea8b7b273e17ffee7bd91d4927d41ec290c2587430651f3d9017bf1c8d",
-    "edge/worker.js": "105ca28eb9f1a5ae720cee75429354bc1a4ca035cb77bf9be8abf45c2442626f",
-    "processor/worker.js": "da8ecf43ad5b995ca0c02ed3150c19bc2abf4aef71f15efbcefeb1d8a2f14d51",
+    "core/worker.js": "9cc5cc40a5c121fdaaf3c07a104ff31556eccec2853fcf7a1f4c17eab0a76a44",
+    "edge/worker.js": "0a85992fa017dced01bdb78dd838f795ddf10138c4af6ee3f9fd2a1ce7e3f03a",
+    "processor/worker.js": "ec66ad673892f2f359ac7562ba1f881912f27c3f85a506db1541f619df2c2896",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "f5dda7ea8b7b273e17ffee7bd91d4927d41ec290c2587430651f3d9017bf1c8d",
-    "edge/worker.js": "105ca28eb9f1a5ae720cee75429354bc1a4ca035cb77bf9be8abf45c2442626f",
-    "processor/worker.js": "da8ecf43ad5b995ca0c02ed3150c19bc2abf4aef71f15efbcefeb1d8a2f14d51",
+    "core/worker.js": "9cc5cc40a5c121fdaaf3c07a104ff31556eccec2853fcf7a1f4c17eab0a76a44",
+    "edge/worker.js": "0a85992fa017dced01bdb78dd838f795ddf10138c4af6ee3f9fd2a1ce7e3f03a",
+    "processor/worker.js": "ec66ad673892f2f359ac7562ba1f881912f27c3f85a506db1541f619df2c2896",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }
