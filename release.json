@@ -1,7 +1,7 @@
 {
-  "version": "3.3.38",
-  "release_id": "3.3.38-telegram-premium-emoji-button-styles",
-  "architecture": "fully-split-three-worker-telegram-ui",
+  "version": "3.3.39",
+  "release_id": "3.3.39-core-recovery-d1-column-limit-fix",
+  "architecture": "fully-split-three-worker-telegram-ui-kv-storage",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -9,19 +9,19 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "Telegram Bot API button style support for ReplyKeyboardMarkup and InlineKeyboardMarkup using primary, success and danger styles",
-    "premium custom emoji icons on keyboard buttons through configurable icon_custom_emoji_id mappings",
-    "smart semantic button coloring plus fixed-color and per-text rule modes",
-    "separate Telegram keyboard appearance settings for the central bot and every reseller or master bot",
-    "automatic compatibility fallback that retries without premium emoji and then without button styles when Telegram rejects modern fields",
-    "premium emoji prefix replacement so a mapped normal emoji can be replaced by its custom icon without duplicate visible icons",
+    "removes the 3.3.38 reseller_bots.telegram_ui_json ALTER TABLE migration that could exceed Cloudflare D1's 100-column table limit",
+    "stores each reseller bot's Telegram premium emoji and button style configuration in the existing reseller_bot_texts key-value table under a reserved internal key",
+    "migrates settings from reseller_bots.telegram_ui_json when the 3.3.38 column was successfully created on a database",
+    "preserves central Telegram UI settings in app_settings.telegram_ui_json",
+    "preserves premium custom emoji, primary/success/danger button styles, smart rules, custom mappings and Telegram compatibility fallback",
+    "preserves Telegram UI settings in reseller backups and restores",
     "all previous backup invocation isolation, dashboard, catalog and cascading billing fixes are preserved",
     "README files are excluded"
   ],
   "deployment": {
     "automatic_provisioning": "upload ZIP through the central bot",
-    "db_schema_revision": "3.3.38-telegram-button-ui",
-    "automatic_migration": "adds reseller_bots.telegram_ui_json when missing; central settings use app_settings.telegram_ui_json",
+    "db_schema_revision": "3.3.39-telegram-ui-kv-storage",
+    "automatic_migration": "does not add a reseller_bots column; copies a legacy 3.3.38 telegram_ui_json value into reseller_bot_texts when present",
     "required_bindings": [
       "Core: PROCESSOR_WORKER",
       "Processor: EDGE_WORKER and CORE_WORKER",
@@ -30,38 +30,36 @@
   },
   "validation": {
     "worker_syntax": "passed: core, edge, processor",
-    "embedded_dashboard_script_syntax": "passed: reseller control and central control scripts",
-    "telegram_ui_static_regression": "passed: smart colors, custom rules, emoji parsing, prefix replacement and reply-route preservation",
-    "telegram_api_compatibility_fallback": "passed: emoji-only retry and full style retry paths",
-    "schema_static_regression": "passed: default settings, CREATE TABLE, ALTER migration, backup fields and save endpoints include telegram_ui_json",
-    "zip_integrity": "passed: archive test succeeded; exact six-file layout; no README",
+    "d1_column_limit_regression": "passed: reseller_bots schema is 98 columns and no Worker contains ALTER TABLE reseller_bots ADD COLUMN telegram_ui_json",
+    "legacy_migration_sql": "passed locally for both databases with and without the optional 3.3.38 column",
+    "telegram_ui_storage_regression": "passed: central remains in app_settings; reseller settings save, hydrate, backup and restore through reserved reseller_bot_texts key",
+    "telegram_api_compatibility_fallback": "preserved from 3.3.38",
+    "zip_integrity": "passed: archive test succeeded; exact six-file payload plus directories; no README",
     "live_api": "not run; requires production Cloudflare, D1 and Telegram credentials"
   },
   "limitations": [
-    "Premium custom emoji availability is controlled by Telegram account and bot eligibility; when unavailable, the message is automatically resent with ordinary keyboard fields.",
-    "Only Telegram-supported button colors are available: primary (blue), success (green), danger (red), or default."
+    "Premium custom emoji availability remains controlled by Telegram account and bot eligibility; automatic fallback removes unsupported modern fields.",
+    "Only Telegram-supported button styles are available: primary, success, danger, or default."
   ],
-  "title": "ایموجی پرمیوم و رنگ‌بندی کلیدهای تلگرام",
-  "summary": "ظاهر کلیدهای ربات مرکزی و نمایندگی قابل تنظیم شد: حالت هوشمند یا ثابت برای رنگ آبی، سبز و قرمز، قوانین متنی سفارشی و نگاشت Custom Emoji ID با fallback امن.",
+  "title": "رفع CORE_RECOVERY_MODE بدون حذف ایموجی پرمیوم و رنگ کلیدها",
+  "summary": "تنظیمات ظاهر ربات نماینده دیگر ستون جدیدی به reseller_bots اضافه نمی‌کند و در مخزن کلید-مقدار موجود ذخیره می‌شود؛ بنابراین دیتابیس‌های قدیمی نزدیک سقف ۱۰۰ ستون از حالت بازیابی خارج می‌شوند.",
   "changes": [
-    "افزودن تنظیم ظاهر کلیدها به بخش خدمات مرکزی و پنل تنظیمات کامل هر ربات نماینده.",
-    "پشتیبانی از style و icon_custom_emoji_id برای کلیدهای Inline و Reply Telegram.",
-    "افزودن حالت هوشمند برای تشخیص کلیدهای تأیید، خرید، مدیریت، حذف و لغو براساس متن.",
-    "افزودن قوانین سفارشی مانند حذف=danger، خرید=success و مدیریت=primary.",
-    "افزودن نگاشت ایموجی یا متن کلید به Custom Emoji ID عددی.",
-    "افزودن fallback چندمرحله‌ای تا در صورت محدودیت Premium یا ناسازگاری تلگرام، ارسال پیام متوقف نشود.",
-    "افزودن ستون telegram_ui_json با Migration خودکار و پشتیبانی از بکاپ و بازیابی تنظیمات."
+    "حذف Migration ستون telegram_ui_json از جدول سنگین reseller_bots.",
+    "ذخیره تنظیمات رنگ کلیدها و Custom Emoji هر ربات در reseller_bot_texts با کلید داخلی رزروشده.",
+    "مهاجرت خودکار و سازگار داده نسخه 3.3.38 در صورت ایجاد موفق ستون قدیمی.",
+    "حفظ کامل تنظیمات مرکزی، پنل نماینده، بکاپ و بازیابی.",
+    "حفظ fallback چندمرحله‌ای Telegram برای ایموجی پرمیوم و رنگ کلیدها."
   ],
   "sha256": {
-    "core/worker.js": "2d221f89eaa733b0468d4e7f254ea30999aa1c238c598f28da7492ead5b28e7f",
-    "edge/worker.js": "3afa225b7567e9b0a7dac2b495ed67ce9909c6b39aa1b8b6ad29711c2bf8e5b9",
-    "processor/worker.js": "9141bca80143063b740d009a8a5a4d5473336ae58e87ca0b3624db5131b71200",
+    "core/worker.js": "f5dda7ea8b7b273e17ffee7bd91d4927d41ec290c2587430651f3d9017bf1c8d",
+    "edge/worker.js": "105ca28eb9f1a5ae720cee75429354bc1a4ca035cb77bf9be8abf45c2442626f",
+    "processor/worker.js": "da8ecf43ad5b995ca0c02ed3150c19bc2abf4aef71f15efbcefeb1d8a2f14d51",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "2d221f89eaa733b0468d4e7f254ea30999aa1c238c598f28da7492ead5b28e7f",
-    "edge/worker.js": "3afa225b7567e9b0a7dac2b495ed67ce9909c6b39aa1b8b6ad29711c2bf8e5b9",
-    "processor/worker.js": "9141bca80143063b740d009a8a5a4d5473336ae58e87ca0b3624db5131b71200",
+    "core/worker.js": "f5dda7ea8b7b273e17ffee7bd91d4927d41ec290c2587430651f3d9017bf1c8d",
+    "edge/worker.js": "105ca28eb9f1a5ae720cee75429354bc1a4ca035cb77bf9be8abf45c2442626f",
+    "processor/worker.js": "da8ecf43ad5b995ca0c02ed3150c19bc2abf4aef71f15efbcefeb1d8a2f14d51",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }
