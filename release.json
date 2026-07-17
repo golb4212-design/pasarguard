@@ -1,7 +1,7 @@
 {
-  "version": "3.3.44",
-  "release_id": "3.3.44-reseller-premium-emoji-picker",
-  "architecture": "fully-split-three-worker-reseller-premium-emoji-manager",
+  "version": "3.3.45",
+  "release_id": "3.3.45-premium-emoji-message-text-fix",
+  "architecture": "fully-split-three-worker-premium-emoji-message-rendering",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -9,14 +9,12 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "adds an in-bot premium emoji manager to every reseller bot settings menu",
-    "shows a paginated catalog of 98 emojis currently used by reseller menus and buttons",
-    "lets the reseller tap an ordinary emoji and send one Telegram premium emoji as its replacement",
-    "extracts custom_emoji_id automatically from Telegram message entities",
-    "supports replacing, removing one mapping, clearing all mappings, and toggling premium emoji display",
-    "uses the premium icon as a true replacement on actionable buttons instead of duplicating the ordinary emoji",
-    "stores mappings in the existing reseller_bot_texts settings record",
-    "preserves balanced smart button colours and Cloudflare upload retry logic",
+    "applies reseller premium emoji mappings to message text and captions in addition to keyboard buttons",
+    "uses tg-emoji HTML tags for HTML messages and explicit custom_emoji MessageEntity objects for plain text",
+    "stores the actual alternative emoji received from Telegram so custom emoji entities wrap a valid fallback emoji",
+    "preserves existing HTML formatting and avoids replacing emoji inside code, pre, or existing tg-emoji tags",
+    "falls back automatically to ordinary emoji when Telegram rejects custom emoji eligibility or formatting",
+    "keeps the interactive reseller emoji picker and balanced smart button colours",
     "does not change the database schema",
     "README files are excluded"
   ],
@@ -31,38 +29,37 @@
     ]
   },
   "validation": {
-    "worker_syntax": "passed: core, edge, processor",
-    "emoji_catalog": "passed: 98 canonical-unique entries; covers all static emoji literals used in button text; callback_data remains below Telegram limit",
-    "reseller_flow": "static validation passed: view, callbacks, permission routing, session capture, save/remove/clear/toggle",
+    "worker_syntax": "passed: node --check for core, edge and processor",
+    "message_text_renderer": "passed: HTML tg-emoji, plain-text UTF-16 MessageEntity offsets, code/pre exclusion, and fallback stripping",
     "database_schema": "unchanged from 3.3.40",
-    "zip_integrity": "passed: archive tested with unzip -t; 9 entries; no README",
+    "zip_integrity": "passed: unzip -t; 9 entries; no README",
     "live_api": "not run; requires production Telegram and Cloudflare credentials"
   },
   "limitations": [
-    "The reseller must send exactly one Telegram custom emoji; ordinary emoji messages do not contain a custom_emoji_id.",
-    "Telegram controls whether a bot is eligible to use custom emoji icons based on the bot owner and platform requirements.",
-    "The exact appearance of premium emoji and button accents depends on the Telegram client and theme."
+    "Custom emoji rendering still depends on Telegram eligibility: an additional username purchased on Fragment or a Premium bot owner for directly sent messages.",
+    "Mappings created before 3.3.45 may use the original emoji as fallback until the reseller saves that mapping again; matching emoji normally works immediately.",
+    "The exact animation and appearance depend on the Telegram client and theme."
   ],
-  "title": "مدیریت تعاملی ایموجی‌های پرمیوم نماینده",
-  "summary": "نماینده از داخل تنظیمات ربات، فهرست ایموجی‌های استفاده‌شده را می‌بیند؛ روی هر مورد می‌زند و با ارسال یک ایموجی پرمیوم، همان مورد را در کلیدهای ربات جایگزین می‌کند.",
+  "title": "نمایش ایموجی پرمیوم در متن پیام‌ها",
+  "summary": "نگاشت ایموجی نماینده اکنون علاوه بر کلیدها، روی متن و کپشن پیام‌های ربات نیز به‌صورت Custom Emoji واقعی اعمال می‌شود.",
   "changes": [
-    "افزودن گزینه «ایموجی‌های پرمیوم» به تنظیمات داخل ربات نماینده.",
-    "نمایش فهرست صفحه‌بندی‌شده ۹۸ ایموجی به‌کاررفته با علامت وضعیت جایگزینی.",
-    "دریافت مستقیم ایموجی پرمیوم و استخراج خودکار Custom Emoji ID از پیام تلگرام.",
-    "افزودن حذف تکی، پاک‌کردن همه و کلید فعال/غیرفعال‌سازی نمایش.",
-    "حذف ایموجی معمولی از متن کلیدهای عملیاتی پس از ثبت جایگزین پرمیوم برای جلوگیری از نمایش تکراری.",
-    "حفظ ذخیره‌سازی قبلی بدون ستون و Migration جدید."
+    "اعمال جایگزینی ایموجی پرمیوم روی متن و کپشن تمام پیام‌های خروجی ربات نماینده.",
+    "استفاده از تگ tg-emoji برای پیام‌های HTML و MessageEntity برای پیام‌های ساده.",
+    "ذخیره ایموجی جایگزین واقعی ارسالی نماینده برای جلوگیری از نادیده‌گرفتن Entity توسط تلگرام.",
+    "حفظ قالب‌بندی HTML و جلوگیری از دستکاری ایموجی داخل code، pre و tg-emoji موجود.",
+    "Fallback خودکار به ایموجی معمولی در صورت خطای دسترسی یا ناسازگاری کلاینت تلگرام.",
+    "بدون ستون یا Migration جدید."
   ],
   "sha256": {
-    "core/worker.js": "b38c18d5adb3143d34c32e4eab8372b581a29df647fbece81c7aece1e37a0e9b",
-    "edge/worker.js": "4dd6327af2090b12c47b4b3504c1d69f9e18dd22046676ef623a8750114fb3c7",
-    "processor/worker.js": "bdd76688c45afb5f41d36f7643a34cb252ec52531646711d55864a3c5dcb8ae0",
+    "core/worker.js": "f3794364da89fc9d2f337c903b216467b69267aa59315b9b4c5bd437dad84ce2",
+    "edge/worker.js": "924fa4d52a38347f5f2f13da94021b8b5685db8b29025e1ac8606327c07f70b0",
+    "processor/worker.js": "f3a88d99143c7c3765ed33a2c658053bcfbbfcd506ceba33350853818cc73e61",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "b38c18d5adb3143d34c32e4eab8372b581a29df647fbece81c7aece1e37a0e9b",
-    "edge/worker.js": "4dd6327af2090b12c47b4b3504c1d69f9e18dd22046676ef623a8750114fb3c7",
-    "processor/worker.js": "bdd76688c45afb5f41d36f7643a34cb252ec52531646711d55864a3c5dcb8ae0",
+    "core/worker.js": "f3794364da89fc9d2f337c903b216467b69267aa59315b9b4c5bd437dad84ce2",
+    "edge/worker.js": "924fa4d52a38347f5f2f13da94021b8b5685db8b29025e1ac8606327c07f70b0",
+    "processor/worker.js": "f3a88d99143c7c3765ed33a2c658053bcfbbfcd506ceba33350853818cc73e61",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }
