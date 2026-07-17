@@ -1,6 +1,6 @@
 {
-  "version": "3.3.34",
-  "release_id": "3.3.34-complete-reseller-bot-rollout-subrequest-fix",
+  "version": "3.3.35",
+  "release_id": "3.3.35-dashboard-union-order-by-login-fix",
   "architecture": "fully-split-three-worker-dual-panel-cascading-ledger-native-reply-keyboard",
   "files": {
     "core": "core/worker.js",
@@ -9,11 +9,10 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "routine reseller bot synchronization no longer performs exhaustive legacy command cleanup on every release",
-    "legacy menu cleanup runs only for an actual imported/replaced Telegram token",
-    "a bounded reseller rollout batch runs on every cron invocation and continues until all bot_version values are current",
-    "routing-only repair no longer triggers destructive menu cleanup",
-    "all previous dual-panel, location catalog, cascading billing and dashboard capabilities are preserved",
+    "master dashboard usage events combine PasarGuard and Marzban rows through an explicitly aliased union subquery",
+    "compound-query ordering now targets a real projected created_at column",
+    "reseller dashboard login no longer fails while loading cascading usage reports",
+    "all previous rollout, dual-panel, location catalog and cascading billing capabilities are preserved",
     "README files are excluded"
   ],
   "deployment": {
@@ -22,31 +21,31 @@
   },
   "validation": {
     "worker_syntax": "passed: core, edge, processor",
-    "rollout_static_check": "passed: normal version mismatch does not set cleanupLegacyKeyboard; cron sync runs every phase with batch 4",
-    "subrequest_model": "routine bot sync reduced from roughly 27 Telegram calls per bot to the bounded command/webhook refresh path",
-    "live_api": "not run; requires production Cloudflare and Telegram credentials"
+    "sqlite_union_regression": "passed: PasarGuard and Marzban rows load and sort by projected created_at without compound ORDER BY error",
+    "zip_integrity": "passed: archive test succeeded and no README file is included",
+    "live_api": "not run; requires production Cloudflare, D1 and Telegram credentials"
   },
   "limitations": [
     "Bots with invalid/revoked tokens remain in error state and cannot be updated until their token is corrected."
   ],
-  "title": "اعمال مطمئن بروزرسانی روی همه ربات‌های موجود",
-  "summary": "پاک‌سازی سنگین منوی قدیمی از بروزرسانی عادی جدا شد و همگام‌سازی کم‌حجم در هر Cron ادامه پیدا می‌کند تا همه ربات‌ها به نسخه جدید برسند.",
+  "title": "رفع خطای ورود پنل نمایندگی در گزارش حسابداری مستر",
+  "summary": "کوئری ترکیبی رویدادهای مصرف پاسارگارد و مرزبان در یک زیرکوئری با ستون‌های هم‌نام و مرتب‌سازی معتبر بازنویسی شد تا ورود پنل نمایندگی دیگر با خطای ORDER BY متوقف نشود.",
   "changes": [
-    "حذف اجرای deleteMyCommands چندزبانه و چندScope برای هر تغییر نسخه عادی.",
-    "اجرای پاک‌سازی کامل فقط هنگام انتقال واقعی توکن از ارائه‌دهنده دیگر.",
-    "همگام‌سازی چهار ربات در هر اجرای Cron و ادامه خودکار تا پایان فهرست.",
-    "حذف پاک‌سازی سنگین از عملیات صرفاً مربوط به ترمیم Routing و Webhook."
+    "بازنویسی UNION گزارش مصرف مستر با نام‌گذاری صریح تمام ستون‌ها.",
+    "انتقال ORDER BY به بیرون از UNION و مرتب‌سازی روی created_at واقعی خروجی.",
+    "حفظ ساختار داده گزارش مصرف پاسارگارد و مرزبان بدون تغییر نام فیلدهای رابط.",
+    "جلوگیری از تبدیل خطای گزارش حسابداری به خطای ورود پنل نمایندگی."
   ],
   "sha256": {
-    "core/worker.js": "59db7a11973ae570fbed68bf9870400bd9ff90d3561c87b46457d043ca17ce95",
-    "edge/worker.js": "214a41b7c84c3aa2cc0e98c2c88933f3f51ec273e8624c5406577415ccfa862c",
-    "processor/worker.js": "1190783ffb917eacc96d64673166b301887f50dfd8f299cf42c9e226047cc65f",
+    "core/worker.js": "0166171a99ba954675fa08c0c8910a1deae8604e5059368ac66733e37f6b9d26",
+    "edge/worker.js": "4f731056df9dc34955932fcfefba5c66d5cc8569acb266562c224276138e9c70",
+    "processor/worker.js": "a728000f3227ddad4052e5879eb6d720f710c901de84d35ff90aef3dd73baf07",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "59db7a11973ae570fbed68bf9870400bd9ff90d3561c87b46457d043ca17ce95",
-    "edge/worker.js": "214a41b7c84c3aa2cc0e98c2c88933f3f51ec273e8624c5406577415ccfa862c",
-    "processor/worker.js": "1190783ffb917eacc96d64673166b301887f50dfd8f299cf42c9e226047cc65f",
+    "core/worker.js": "0166171a99ba954675fa08c0c8910a1deae8604e5059368ac66733e37f6b9d26",
+    "edge/worker.js": "4f731056df9dc34955932fcfefba5c66d5cc8569acb266562c224276138e9c70",
+    "processor/worker.js": "a728000f3227ddad4052e5879eb6d720f710c901de84d35ff90aef3dd73baf07",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }

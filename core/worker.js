@@ -1,16 +1,16 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.34
+ * Version: 3.3.35
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.34';
+const APP_VERSION = '3.3.35';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
-  "3.3.34": Object.freeze({
+  "3.3.35": Object.freeze({
     central: Object.freeze([
       { emoji: "🔄", text: "همگام‌سازی پیوسته همه ربات‌های موجود در هر اجرای Cron به‌جای یک فاز از چهار فاز" },
       { emoji: "⚡", text: "کاهش شدید درخواست‌های Telegram هنگام بروزرسانی عادی و جلوگیری از عبور از سقف subrequest" },
