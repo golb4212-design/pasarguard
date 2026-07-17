@@ -1,7 +1,7 @@
 {
-  "version": "3.3.41",
-  "release_id": "3.3.41-smart-button-full-coverage",
-  "architecture": "fully-split-three-worker-smart-button-full-coverage",
+  "version": "3.3.42",
+  "release_id": "3.3.42-cloudflare-upload-retry",
+  "architecture": "fully-split-three-worker-cloudflare-upload-retry",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -9,13 +9,14 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "completes Telegram smart button styling so every non-empty button receives a style",
-    "expands danger matching for destructive, blocking, reset and disconnect actions",
-    "expands success matching for purchases, renewals, gifts, free trials, discounts, referrals and positive transactions",
-    "maps navigation, account, training, reports and informational actions to primary blue",
-    "falls back unknown buttons to primary instead of leaving them colourless",
-    "preserves custom style rules including explicit default overrides",
-    "keeps all 3.3.40 representative webhook fail-open protections",
+    "retries transient Cloudflare Worker upload failures for Core, Edge and Processor",
+    "recognizes Cloudflare API codes 10013 and 10035 as retryable",
+    "retries HTTP 408, 409, 425, 429, 500, 502, 503 and 504 with exponential backoff",
+    "rebuilds multipart FormData for every retry so consumed request bodies are never reused",
+    "preserves existing Worker bindings through bindings_inherit=strict",
+    "adds retry protection to Python helper binding and live-usage Durable Object provisioning",
+    "keeps full smart button color coverage from 3.3.41",
+    "does not change the database schema",
     "README files are excluded"
   ],
   "deployment": {
@@ -26,40 +27,60 @@
       "Core: PROCESSOR_WORKER",
       "Processor: EDGE_WORKER and CORE_WORKER",
       "Edge: CORE_WORKER"
-    ]
+    ],
+    "retry_policy": {
+      "attempts": 4,
+      "backoff_ms": "1550, 3100, 5850",
+      "retryable_cloudflare_codes": [
+        10013,
+        10035
+      ],
+      "retryable_http_statuses": [
+        408,
+        409,
+        425,
+        429,
+        500,
+        502,
+        503,
+        504
+      ]
+    }
   },
   "validation": {
     "worker_syntax": "passed: core, edge, processor",
-    "smart_style_full_coverage": "passed: every non-empty unknown button falls back to primary",
-    "sample_menu_regression": "passed: buy/renew/gift/trial/discount are success; management/account/help/orders are primary; destructive actions are danger",
-    "custom_rules_precedence": "preserved: explicit rules are evaluated before smart mode",
+    "retry_simulation": "passed: two code-10013 failures followed by successful third upload",
+    "non_retryable_simulation": "passed: validation code 10021 stops immediately",
+    "multipart_rebuild": "passed: a fresh FormData body is created for every attempt",
+    "smart_style_full_coverage": "preserved from 3.3.41",
     "database_schema": "unchanged from 3.3.40",
     "zip_integrity": "pending final archive test",
-    "live_api": "not run; requires production Cloudflare, D1 and Telegram credentials"
+    "live_api": "not run; requires production Cloudflare credentials"
   },
   "limitations": [
-    "Telegram button styles remain limited to primary, success, danger, or default.",
-    "An explicit custom rule using default intentionally leaves that matching button uncoloured."
+    "A platform-wide Cloudflare outage can still delay deployment after all retry attempts are exhausted.",
+    "The retry logic becomes active after this Core version has been deployed; the first installation attempt is still performed by the currently installed Core.",
+    "Telegram button styles remain limited to primary, success, danger, or default."
   ],
-  "title": "تکمیل رنگ‌بندی هوشمند همه کلیدها",
-  "summary": "در حالت هوشمند دیگر هیچ کلید معتبری بدون رنگ باقی نمی‌ماند؛ عملیات مثبت سبز، عملیات خطرناک قرمز و سایر کلیدها آبی می‌شوند.",
+  "title": "مهار خطای موقت انتشار Cloudflare",
+  "summary": "خطاهای موقت Cloudflare مانند 10013 و 10035 دیگر با اولین پاسخ ناموفق انتشار را متوقف نمی‌کنند و آپلود هر Worker تا چهار بار با بدنه تازه تکرار می‌شود.",
   "changes": [
-    "افزودن fallback آبی برای تمام کلیدهای ناشناخته.",
-    "گسترش واژه‌های تشخیص خرید، تمدید، هدیه، تست رایگان، تخفیف و زیرمجموعه‌گیری.",
-    "گسترش واژه‌های تشخیص حساب کاربری، آموزش، راهنما، پیشنهاد، سفارش‌ها و اطلاعات.",
-    "حفظ اولویت قوانین اختصاصی و امکان default عمدی.",
-    "بدون تغییر دیتابیس یا Migration."
+    "افزودن Retry مرحله‌ای به انتشار Core، Edge و Processor.",
+    "ساخت مجدد FormData در هر تلاش برای جلوگیری از استفاده دوباره از بدنه مصرف‌شده.",
+    "افزودن Retry به Python Helper و Durable Object مصرف زنده.",
+    "ثبت HTTP Status، کد Cloudflare، CF-Ray و شماره تلاش در خطای نهایی.",
+    "حفظ کامل رنگ‌بندی هوشمند کلیدها بدون تغییر دیتابیس."
   ],
   "sha256": {
-    "core/worker.js": "82ef2246898d43e647393feb363c7eb2b29633eaf220ec4042ae426e173e4f9b",
-    "edge/worker.js": "a6d93c95612a44dd5c41351e86cebd601b3dd16611f16c154fb5b2f4347ddff5",
-    "processor/worker.js": "08abdfa63373e10136ffcdefd13d550c832ccb7b3bcf122daa05d0abfd1d3375",
+    "core/worker.js": "a221bd79ce8c84c93489b4de8bc4825e081a957c21daf52d3ae5bdf5e8f3a251",
+    "edge/worker.js": "a94308359fd0914bdb0ad459a108a1d9bff3e89de8dcf3fb7405560b278918d7",
+    "processor/worker.js": "b572528d543107d354d3a7dec9c5191d34f0c15b7a48e074d877ac187aed162e",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "82ef2246898d43e647393feb363c7eb2b29633eaf220ec4042ae426e173e4f9b",
-    "edge/worker.js": "a6d93c95612a44dd5c41351e86cebd601b3dd16611f16c154fb5b2f4347ddff5",
-    "processor/worker.js": "08abdfa63373e10136ffcdefd13d550c832ccb7b3bcf122daa05d0abfd1d3375",
+    "core/worker.js": "a221bd79ce8c84c93489b4de8bc4825e081a957c21daf52d3ae5bdf5e8f3a251",
+    "edge/worker.js": "a94308359fd0914bdb0ad459a108a1d9bff3e89de8dcf3fb7405560b278918d7",
+    "processor/worker.js": "b572528d543107d354d3a7dec9c5191d34f0c15b7a48e074d877ac187aed162e",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }

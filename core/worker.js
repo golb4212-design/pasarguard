@@ -1,24 +1,24 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.41
+ * Version: 3.3.42
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.41';
+const APP_VERSION = '3.3.42';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
-  "3.3.41": Object.freeze({
+  "3.3.42": Object.freeze({
     central: Object.freeze([
-      { emoji: "🎨", text: "تکمیل حالت هوشمند رنگ کلیدها؛ هیچ کلید معتبر بدون رنگ باقی نمی‌ماند" },
-      { emoji: "🧠", text: "دسته‌بندی گسترده‌تر عملیات مخرب، مالی، مدیریتی، آموزشی و هدیه" },
-      { emoji: "🔵", text: "Fallback امن کلیدهای ناشناخته به رنگ آبی بدون تغییر متن یا عملکرد" }
+      { emoji: "☁️", text: "مهار خطای موقت Cloudflare با Retry خودکار برای انتشار Core، Edge و Processor" },
+      { emoji: "🔁", text: "تلاش مجدد مرحله‌ای برای خطاهای 10013، 10035، 429 و خطاهای موقت 5xx" },
+      { emoji: "🧾", text: "ثبت کد Cloudflare، HTTP Status، CF-Ray و شماره تلاش در خطای نهایی" }
     ]),
     reseller: Object.freeze([
-      { emoji: "✅", text: "رنگ‌دار شدن کامل کلیدهای منوی مشتری و مدیریت در حالت هوشمند" },
-      { emoji: "🟢", text: "خرید، تمدید، هدیه، تست رایگان و تخفیف سبز؛ عملیات خطرناک قرمز؛ سایر گزینه‌ها آبی" }
+      { emoji: "✅", text: "حفظ کامل رنگ‌بندی هوشمند همه کلیدها از نسخه 3.3.41" },
+      { emoji: "🛡", text: "خطای لحظه‌ای API کلادفلر دیگر با اولین پاسخ ناموفق، بروزرسانی را متوقف نمی‌کند" }
     ])
   }),
   "3.3.40": Object.freeze({
@@ -7340,6 +7340,70 @@ async function cloudflareJson(response, fallbackMessage, stage = "cloudflare_api
   return data;
 }
 
+function cloudflareUploadError(response, data, raw, fallbackMessage, stage, attempt) {
+  const apiErrors = Array.isArray(data?.errors) ? data.errors.filter(Boolean) : [];
+  const details = apiErrors.map(item => {
+    const code = item?.code !== undefined ? "[" + item.code + "] " : "";
+    return code + (item?.message || JSON.stringify(item));
+  }).filter(Boolean).join("؛ ");
+  const error = new Error(details || fallbackMessage || ("Cloudflare HTTP " + (response?.status || 0)));
+  error.name = "CloudflareApiError";
+  error.pythonStage = stage || "worker_upload";
+  error.httpStatus = Number(response?.status || 0);
+  error.cloudflareErrors = apiErrors;
+  error.cloudflareCode = Number(apiErrors?.[0]?.code || 0);
+  error.cloudflareResponse = String(raw || "").slice(0, 1800);
+  error.cloudflareRay = response?.headers?.get?.("cf-ray") || "";
+  error.uploadAttempt = Number(attempt || 1);
+  return error;
+}
+
+function cloudflareUploadRetryable(error) {
+  const status = Number(error?.httpStatus || 0);
+  const code = Number(error?.cloudflareCode || 0);
+  const message = String(error?.message || "").toLowerCase();
+  return [10013, 10035].includes(code) ||
+    [408, 409, 425, 429, 500, 502, 503, 504].includes(status) ||
+    /unknown error|temporar|internal error|multiple attempts|concurrent|try again|timeout|timed out|network|fetch failed/.test(message);
+}
+
+async function cloudflareWorkerUploadWithRetry(options = {}) {
+  const attempts = Math.max(1, Math.min(5, Number(options.attempts || 4)));
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    let response = null;
+    let raw = "";
+    let data = {};
+    try {
+      response = await fetch(options.url, {
+        method: "PUT",
+        headers: {
+          authorization: "Bearer " + options.token,
+          accept: "application/json",
+          "cache-control": "no-cache"
+        },
+        body: options.buildForm()
+      });
+      raw = await response.text().catch(() => "");
+      try { data = raw ? JSON.parse(raw) : {}; } catch (_) { data = {}; }
+      if (response.ok && data?.success !== false) {
+        return { response, data, attempt, retried: attempt > 1 };
+      }
+      lastError = cloudflareUploadError(response, data, raw, options.fallbackMessage, options.stage, attempt);
+    } catch (error) {
+      lastError = error?.name === "CloudflareApiError" ? error : Object.assign(
+        new Error(String(error?.message || error || options.fallbackMessage || "Cloudflare upload failed")),
+        { name: "CloudflareApiError", pythonStage: options.stage || "worker_upload", httpStatus: 0, cloudflareCode: 0, uploadAttempt: attempt }
+      );
+    }
+    if (attempt >= attempts || !cloudflareUploadRetryable(lastError)) throw lastError;
+    const delay = Math.min(12000, 1200 * (2 ** (attempt - 1)) + attempt * 350);
+    console.warn("Cloudflare Worker upload retry", { stage: options.stage || "worker_upload", attempt, delay, status: lastError?.httpStatus || 0, code: lastError?.cloudflareCode || 0, message: String(lastError?.message || "").slice(0, 300) });
+    await new Promise(resolve => setTimeout(resolve, delay));
+  }
+  throw lastError || new Error(options.fallbackMessage || "Cloudflare upload failed");
+}
+
 function pythonStageLabel(stage) {
   const labels = {
     load_settings: "خواندن تنظیمات",
@@ -7403,18 +7467,21 @@ async function uploadEmbeddedPythonHelper(settings, helperName) {
       "workers/tag": "pasargard-python-auto"
     }
   };
-  const form = new FormData();
-  form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
-  // This helper has no third-party dependencies. Cloudflare rejects a raw
-  // requirements.txt in direct API uploads and requires pywrangler only when
-  // packages must be bundled. Uploading entry.py alone is the correct path here.
-  form.append("entry.py", new Blob([PYTHON_HELPER_SOURCE], { type: "text/x-python" }), "entry.py");
-  const response = await fetch(cloudflareScriptBase(settings, helperName), {
-    method: "PUT",
-    headers: { authorization: "Bearer " + settings.cf_api_token },
-    body: form
+  await cloudflareWorkerUploadWithRetry({
+    url: cloudflareScriptBase(settings, helperName),
+    token: settings.cf_api_token,
+    stage: "upload_python_worker",
+    fallbackMessage: "ساخت Python Worker در Cloudflare ناموفق بود",
+    buildForm: () => {
+      const form = new FormData();
+      form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
+      // This helper has no third-party dependencies. Cloudflare rejects a raw
+      // requirements.txt in direct API uploads and requires pywrangler only when
+      // packages must be bundled. Uploading entry.py alone is the correct path here.
+      form.append("entry.py", new Blob([PYTHON_HELPER_SOURCE], { type: "text/x-python" }), "entry.py");
+      return form;
+    }
   });
-  await cloudflareJson(response, "ساخت Python Worker در Cloudflare ناموفق بود", "upload_python_worker");
   return { worker_name: helperName, files: ["entry.py"], dependencies: "builtin-workers-sdk", compatibility_flags: metadata.compatibility_flags, version: PYTHON_HELPER_VERSION };
 }
 
@@ -7495,15 +7562,18 @@ async function bindPythonHelperToMainWorker(settings, helperName) {
       "workers/tag": "pasargard-python-binding"
     }
   };
-  const form = new FormData();
-  form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
-  for (const module of bundle.modules) form.append(module.field, module.file, module.filename);
-  const response = await fetch(bundle.base + "?bindings_inherit=strict", {
-    method: "PUT",
-    headers: { authorization: "Bearer " + settings.cf_api_token },
-    body: form
+  await cloudflareWorkerUploadWithRetry({
+    url: bundle.base + "?bindings_inherit=strict",
+    token: settings.cf_api_token,
+    stage: "bind_python_helper",
+    fallbackMessage: "اتصال PY_HELPER به Worker اصلی ناموفق بود",
+    buildForm: () => {
+      const form = new FormData();
+      form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
+      for (const module of bundle.modules) form.append(module.field, module.file, module.filename);
+      return form;
+    }
   });
-  await cloudflareJson(response, "اتصال PY_HELPER به Worker اصلی ناموفق بود", "bind_python_helper");
   return { bound: true, changed: true, binding: "PY_HELPER" };
 }
 
@@ -8856,12 +8926,19 @@ async function deployEdgeWorkerFromGithub(env, force = false, targetVersion = ""
     keepBindings = Array.from(new Set((current?.result?.bindings || []).map(x => x.type).filter(Boolean)));
   } catch (_) {}
   const metadata = { main_module: "worker.js", compatibility_date: "2026-06-01", keep_bindings: keepBindings, annotations: { "workers/message": "BluePanel split Edge auto-update " + deployedVersion, "workers/tag": "bluepanel-edge-update" } };
-  const form = new FormData();
-  form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
-  form.append("worker.js", new Blob([code], { type: "application/javascript+module" }), "worker.js");
-  const response = await fetch(apiBase + "?bindings_inherit=strict", { method: "PUT", headers: { authorization: "Bearer " + settings.cf_api_token }, body: form });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || data.success === false) throw new Error(data?.errors?.[0]?.message || "Cloudflare Edge deploy failed");
+  const upload = await cloudflareWorkerUploadWithRetry({
+    url: apiBase + "?bindings_inherit=strict",
+    token: settings.cf_api_token,
+    stage: "deploy_edge_worker",
+    fallbackMessage: "Cloudflare Edge deploy failed",
+    buildForm: () => {
+      const form = new FormData();
+      form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
+      form.append("worker.js", new Blob([code], { type: "application/javascript+module" }), "worker.js");
+      return form;
+    }
+  });
+  const { response, data } = upload;
   const deploymentReceipt = bluePanelCloudflareUploadReceipt(data, response, deployedVersion, "edge");
   const subrequest_limit = await tryConfigureWorkerSubrequestLimit(settings, scriptName, 50000);
   const verification = await verifyEdgeDeploymentVersion(env, settings, scriptName, deployedVersion, deploymentReceipt, 3);
@@ -8904,12 +8981,19 @@ async function deployProcessorWorkerFromGithub(env, force = false, targetVersion
     keepBindings = Array.from(new Set((current?.result?.bindings || []).map(x => x.type).filter(Boolean)));
   } catch (_) {}
   const metadata = { main_module: "worker.js", compatibility_date: "2026-06-01", keep_bindings: keepBindings, annotations: { "workers/message": "BluePanel split Processor auto-update " + deployedVersion, "workers/tag": "bluepanel-processor-update" } };
-  const form = new FormData();
-  form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
-  form.append("worker.js", new Blob([workerCode], { type: "application/javascript+module" }), "worker.js");
-  const response = await fetch(apiBase + "?bindings_inherit=strict", { method: "PUT", headers: { authorization: "Bearer " + settings.cf_api_token }, body: form });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || data.success === false) throw new Error(data?.errors?.[0]?.message || "Cloudflare Processor deploy failed");
+  const upload = await cloudflareWorkerUploadWithRetry({
+    url: apiBase + "?bindings_inherit=strict",
+    token: settings.cf_api_token,
+    stage: "deploy_processor_worker",
+    fallbackMessage: "Cloudflare Processor deploy failed",
+    buildForm: () => {
+      const form = new FormData();
+      form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
+      form.append("worker.js", new Blob([workerCode], { type: "application/javascript+module" }), "worker.js");
+      return form;
+    }
+  });
+  const { response, data } = upload;
   const deploymentReceipt = bluePanelCloudflareUploadReceipt(data, response, deployedVersion, "processor");
   const subrequest_limit = await tryConfigureWorkerSubrequestLimit(settings, scriptName, 50000);
   let sourceVerification = deploymentReceipt.accepted === true
@@ -9085,18 +9169,19 @@ async function deploySelfFromGithub(env, force = false, prechecked = null) {
       "workers/tag": "github-auto-update"
     }
   };
-  const form = new FormData();
-  form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
-  form.append("worker.js", new Blob([code], { type: "application/javascript+module" }), "worker.js");
-  const response = await fetch(apiBase + "?bindings_inherit=strict", {
-    method: "PUT",
-    headers: { authorization: "Bearer " + settings.cf_api_token },
-    body: form
+  const upload = await cloudflareWorkerUploadWithRetry({
+    url: apiBase + "?bindings_inherit=strict",
+    token: settings.cf_api_token,
+    stage: "deploy_core_worker",
+    fallbackMessage: "Cloudflare deploy failed",
+    buildForm: () => {
+      const form = new FormData();
+      form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
+      form.append("worker.js", new Blob([code], { type: "application/javascript+module" }), "worker.js");
+      return form;
+    }
   });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || data.success === false) {
-    throw new Error(data?.errors?.[0]?.message || "Cloudflare deploy failed");
-  }
+  const { response, data } = upload;
   const subrequest_limit = await tryConfigureWorkerSubrequestLimit(settings, settings.cf_worker_name, 50000);
   await setSettings(env, {
     auto_update_last_worker_sha: codeSha,
@@ -16969,18 +17054,21 @@ async function provisionLiveUsageDurableObject(env, options = {}) {
       "workers/tag": "bluepanel-live-usage-v319"
     }
   };
-  const form = new FormData();
-  form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
-  for (const module of bundle.modules) form.append(module.field, module.file, module.filename);
-  const response = await fetch(bundle.base + "?bindings_inherit=strict", {
-    method: "PUT",
-    headers: { authorization: "Bearer " + settings.cf_api_token },
-    body: form
-  });
-  let data = {};
-  try { data = await response.json(); } catch (_) {}
-  if (!response.ok || data?.success === false) {
-    const message = cleanText(data?.errors?.[0]?.message || data?.messages?.[0]?.message || ("Cloudflare HTTP " + response.status), 900);
+  try {
+    await cloudflareWorkerUploadWithRetry({
+      url: bundle.base + "?bindings_inherit=strict",
+      token: settings.cf_api_token,
+      stage: "provision_live_usage_durable_object",
+      fallbackMessage: "ساخت Durable Object مصرف زنده ناموفق بود",
+      buildForm: () => {
+        const form = new FormData();
+        form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
+        for (const module of bundle.modules) form.append(module.field, module.file, module.filename);
+        return form;
+      }
+    });
+  } catch (error) {
+    const message = cleanText(error?.message || error || "Cloudflare upload failed", 900);
     await setSettings(env, { live_usage_provision_status:"failed", live_usage_provision_error:message, live_usage_provisioned_at:nowIso() });
     throw new Error("ساخت Durable Object مصرف زنده ناموفق بود: " + message);
   }
