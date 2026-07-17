@@ -1,15 +1,26 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.38
+ * Version: 3.3.39
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.38';
+const APP_VERSION = '3.3.39';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.39": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🚑", text: "رفع CORE_RECOVERY_MODE ناشی از عبور جدول reseller_bots از سقف ۱۰۰ ستون D1" },
+      { emoji: "🗂", text: "انتقال تنظیمات ایموجی پرمیوم و رنگ کلیدها به مخزن کلید-مقدار موجود بدون ALTER TABLE" },
+      { emoji: "🛡", text: "مهاجرت سازگار تنظیمات نسخه 3.3.38 و حفظ کامل قابلیت‌های جدید تلگرام" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "✅", text: "بازگشت پایدار ربات‌ها و پنل نمایندگی بدون افزودن ستون جدید به reseller_bots" },
+      { emoji: "🎨", text: "ذخیره مستقل ظاهر کلیدها در reseller_bot_texts با بکاپ و بازیابی کامل" }
+    ])
+  }),
   "3.3.38": Object.freeze({
     central: Object.freeze([
       { emoji: "✨", text: "پشتیبانی از Custom Emoji پرمیوم روی کلیدهای ربات مرکزی و نمایندگی" },
@@ -467,7 +478,7 @@ function currentReleaseNotes() {
 }
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
-  "brand_name","welcome_text","support_username","telegram_ui_json","card_holder","card_number","bank_name","iban",
+  "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
   "trial_enabled","trial_data_limit_bytes","trial_duration_days","trial_duration_hours",
   "referral_reward_toman","referral_reward_type","referral_reward_percent","referral_banner_file_id","referral_banner_file_type",
   "recharge_bonus_percent","forward_enabled","join_enabled","join_channels_json",
@@ -558,7 +569,7 @@ let errorCenterSchemaPromise = null;
 
 // Persistent schema marker: avoids replaying the full D1 migration sweep whenever
 // Cloudflare starts a fresh isolate after an idle period.
-const DB_SCHEMA_REVISION = "3.3.38-telegram-button-ui";
+const DB_SCHEMA_REVISION = "3.3.39-telegram-ui-kv-storage";
 
 let settingsCache = null;
 
@@ -1090,7 +1101,6 @@ CREATE TABLE IF NOT EXISTS reseller_bots (
   brand_name TEXT NOT NULL,
   welcome_text TEXT,
   support_username TEXT,
-  telegram_ui_json TEXT NOT NULL DEFAULT '{}',
   card_holder TEXT NOT NULL,
   card_number TEXT NOT NULL,
   bank_name TEXT NOT NULL,
@@ -2350,7 +2360,6 @@ async function ensureDbInternal(env) {
       ["payment_wallet_enabled", "INTEGER NOT NULL DEFAULT 1"],
       ["payment_method_order", "TEXT NOT NULL DEFAULT 'card,blupal,wallet'"],
       ["payment_default_method", "TEXT NOT NULL DEFAULT 'card'"],
-      ["telegram_ui_json", "TEXT NOT NULL DEFAULT '{}'"],
     ],
     reseller_usage_events: [
       ["parent_bot_id", "TEXT"],
@@ -2482,6 +2491,20 @@ async function ensureDbInternal(env) {
     }
   }
 
+
+  // 3.3.39: D1 allows at most 100 columns per table. Some legacy reseller_bots
+  // tables are already at that ceiling, so Telegram UI settings must not use
+  // ALTER TABLE. Reuse reseller_bot_texts as a per-bot key-value store and copy
+  // any value written by 3.3.38 when that optional column happened to exist.
+  const resellerBotInfoForTelegramUi = await env.PASARGUARD_DB.prepare("PRAGMA table_info(reseller_bots)").all();
+  const resellerBotTelegramUiNames = new Set((resellerBotInfoForTelegramUi.results || []).map(row => String(row.name)));
+  if (resellerBotTelegramUiNames.has("telegram_ui_json")) {
+    const telegramUiMigrationTs = nowIso();
+    await env.PASARGUARD_DB.prepare(`
+      INSERT OR IGNORE INTO reseller_bot_texts(bot_id,text_key,text_value,updated_at)
+      SELECT id,?,COALESCE(NULLIF(TRIM(telegram_ui_json),''),'{}'),? FROM reseller_bots
+    `).bind(RESELLER_TELEGRAM_UI_TEXT_KEY, telegramUiMigrationTs).run();
+  }
 
   // 3.3.31: every category is owned by exactly one location. Legacy databases
   // sometimes reused one category across several locations; split those rows
@@ -3778,6 +3801,32 @@ function telegramUiStripModernFields(markup, options = {}) {
 
 function telegramUiModernFieldError(error) {
   return /(icon_custom_emoji_id|custom emoji|custom_emoji|button_style|style of the button|BUTTON_STYLE|BUTTON_TYPE_INVALID|can't use.*emoji|cannot use.*emoji|not allowed.*emoji|premium.*emoji)/i.test(String(error?.message || error || ""));
+}
+
+const RESELLER_TELEGRAM_UI_TEXT_KEY = "__telegram_ui_json";
+
+async function getResellerTelegramUiStoredValue(env, botId, legacyValue = "") {
+  let value = String(legacyValue || "");
+  if (!botId) return value || "{}";
+  try {
+    const row = await env.PASARGUARD_DB.prepare(
+      "SELECT text_value FROM reseller_bot_texts WHERE bot_id=? AND text_key=? LIMIT 1"
+    ).bind(botId, RESELLER_TELEGRAM_UI_TEXT_KEY).first();
+    if (row?.text_value != null && String(row.text_value).trim()) value = String(row.text_value);
+  } catch (error) {
+    if (!/no such table/i.test(String(error?.message || error))) throw error;
+  }
+  return value || "{}";
+}
+
+async function saveResellerTelegramUiStoredValue(env, botId, configSource) {
+  const ts = nowIso();
+  const value = JSON.stringify(normalizeTelegramUiConfig(configSource));
+  await env.PASARGUARD_DB.prepare(`
+    INSERT INTO reseller_bot_texts(bot_id,text_key,text_value,updated_at) VALUES(?,?,?,?)
+    ON CONFLICT(bot_id,text_key) DO UPDATE SET text_value=excluded.text_value,updated_at=excluded.updated_at
+  `).bind(botId, RESELLER_TELEGRAM_UI_TEXT_KEY, value, ts).run();
+  return value;
 }
 
 let telegramReplyRouteSchemaReady = false;
@@ -10265,7 +10314,7 @@ async function getResellerCubepayConfig(env,botId){if(!botId)return{...RESELLER_
 
 async function hydrateResellerBotRelations(env, bot) {
   if (!bot) return null;
-  const [relation,plisio,cubepay,growth] = await Promise.all([
+  const [relation,plisio,cubepay,growth,telegramUiJson] = await Promise.all([
     env.PASARGUARD_DB.prepare(`
     SELECT a.title AS agency_title,a.panel_username,a.panel_password_enc,a.status AS agency_status,a.remote_manager_id,
            u.telegram_id AS owner_telegram_id,u.username AS owner_username,u.first_name AS owner_first_name,
@@ -10273,8 +10322,8 @@ async function hydrateResellerBotRelations(env, bot) {
            CASE WHEN a.panel_password_enc IS NULL THEN 0 ELSE 1 END AS agency_has_password
     FROM users u LEFT JOIN agencies a ON a.id=?
     WHERE u.id=?
-  `).bind(bot.agency_id, bot.user_id).first(),getResellerPlisioConfig(env,bot.id),getResellerCubepayConfig(env,bot.id),getResellerGrowthSettings(env,bot.id)]);
-  return { ...bot,...RESELLER_PLISIO_DEFAULTS,...RESELLER_CUBEPAY_DEFAULTS,...RESELLER_GROWTH_DEFAULTS,...(plisio||{}),...(cubepay||{}),...(growth||{}), ...(relation || {}) };
+  `).bind(bot.agency_id, bot.user_id).first(),getResellerPlisioConfig(env,bot.id),getResellerCubepayConfig(env,bot.id),getResellerGrowthSettings(env,bot.id),getResellerTelegramUiStoredValue(env,bot.id,bot.telegram_ui_json)]);
+  return { ...bot,telegram_ui_json:telegramUiJson,...RESELLER_PLISIO_DEFAULTS,...RESELLER_CUBEPAY_DEFAULTS,...RESELLER_GROWTH_DEFAULTS,...(plisio||{}),...(cubepay||{}),...(growth||{}), ...(relation || {}) };
 }
 const RESELLER_GROWTH_DEFAULTS = Object.freeze({
   auto_renew_enabled:1,smart_recommendations_enabled:1,upsell_enabled:1,favorite_plan_enabled:1,
@@ -12191,6 +12240,7 @@ async function deliverResellerSnapshotDocument(env, bot, raw, snapshotId, snapsh
 function resellerSnapshotSettings(bot) {
   const out = {};
   for (const key of RESELLER_BACKUP_FIELDS) out[key] = bot?.[key] ?? null;
+  out.telegram_ui_json = bot?.telegram_ui_json || JSON.stringify(normalizeTelegramUiConfig(bot));
   return out;
 }
 
