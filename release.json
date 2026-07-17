@@ -1,7 +1,7 @@
 {
-  "version": "3.3.42",
-  "release_id": "3.3.42-cloudflare-upload-retry",
-  "architecture": "fully-split-three-worker-cloudflare-upload-retry",
+  "version": "3.3.43",
+  "release_id": "3.3.43-balanced-three-color-smart-buttons",
+  "architecture": "fully-split-three-worker-balanced-telegram-button-palette",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -9,13 +9,13 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "retries transient Cloudflare Worker upload failures for Core, Edge and Processor",
-    "recognizes Cloudflare API codes 10013 and 10035 as retryable",
-    "retries HTTP 408, 409, 425, 429, 500, 502, 503 and 504 with exponential backoff",
-    "rebuilds multipart FormData for every retry so consumed request bodies are never reused",
-    "preserves existing Worker bindings through bindings_inherit=strict",
-    "adds retry protection to Python helper binding and live-usage Durable Object provisioning",
-    "keeps full smart button color coverage from 3.3.41",
+    "uses all three Telegram button accent styles in normal customer menus",
+    "maps purchases, renewals, payments and wallet actions to success green",
+    "maps offers, gifts, discounts, free trials and warnings to attention red",
+    "maps account, services, orders, support and management actions to primary blue",
+    "keeps custom text-to-style rules higher priority than smart classification",
+    "keeps every valid smart-mode button coloured",
+    "preserves premium custom emoji support and Cloudflare upload retry logic",
     "does not change the database schema",
     "README files are excluded"
   ],
@@ -27,60 +27,39 @@
       "Core: PROCESSOR_WORKER",
       "Processor: EDGE_WORKER and CORE_WORKER",
       "Edge: CORE_WORKER"
-    ],
-    "retry_policy": {
-      "attempts": 4,
-      "backoff_ms": "1550, 3100, 5850",
-      "retryable_cloudflare_codes": [
-        10013,
-        10035
-      ],
-      "retryable_http_statuses": [
-        408,
-        409,
-        425,
-        429,
-        500,
-        502,
-        503,
-        504
-      ]
-    }
+    ]
   },
   "validation": {
     "worker_syntax": "passed: core, edge, processor",
-    "retry_simulation": "passed: two code-10013 failures followed by successful third upload",
-    "non_retryable_simulation": "passed: validation code 10021 stops immediately",
-    "multipart_rebuild": "passed: a fresh FormData body is created for every attempt",
-    "smart_style_full_coverage": "preserved from 3.3.41",
+    "smart_palette_mapping": "passed: purchase/renewal=success, offers/gifts/trials=danger, account/navigation=primary",
     "database_schema": "unchanged from 3.3.40",
-    "zip_integrity": "pending final archive test",
-    "live_api": "not run; requires production Cloudflare credentials"
+    "zip_integrity": "passed: archive tested with unzip -t; 9 entries; no README",
+    "live_api": "not run; requires production Telegram and Cloudflare credentials"
   },
   "limitations": [
-    "A platform-wide Cloudflare outage can still delay deployment after all retry attempts are exhausted.",
-    "The retry logic becomes active after this Core version has been deployed; the first installation attempt is still performed by the currently installed Core.",
-    "Telegram button styles remain limited to primary, success, danger, or default."
+    "Telegram currently exposes only primary blue, success green, danger red, and the default app-specific style.",
+    "The exact shade is rendered by each Telegram client and can vary with the selected theme.",
+    "Red is intentionally used for promotions and high-attention actions as well as destructive actions to create a balanced three-colour customer menu."
   ],
-  "title": "مهار خطای موقت انتشار Cloudflare",
-  "summary": "خطاهای موقت Cloudflare مانند 10013 و 10035 دیگر با اولین پاسخ ناموفق انتشار را متوقف نمی‌کنند و آپلود هر Worker تا چهار بار با بدنه تازه تکرار می‌شود.",
+  "title": "پالت سه‌رنگ متعادل کلیدهای تلگرام",
+  "summary": "حالت هوشمند دیگر به آبی و سبز محدود نیست؛ پیشنهادها، هدایا، تخفیف‌ها و تست رایگان قرمز، عملیات مالی سبز و مسیرهای مدیریتی آبی نمایش داده می‌شوند.",
   "changes": [
-    "افزودن Retry مرحله‌ای به انتشار Core، Edge و Processor.",
-    "ساخت مجدد FormData در هر تلاش برای جلوگیری از استفاده دوباره از بدنه مصرف‌شده.",
-    "افزودن Retry به Python Helper و Durable Object مصرف زنده.",
-    "ثبت HTTP Status، کد Cloudflare، CF-Ray و شماره تلاش در خطای نهایی.",
-    "حفظ کامل رنگ‌بندی هوشمند کلیدها بدون تغییر دیتابیس."
+    "افزودن دسته توجه و پیشنهاد برای استفاده هدفمند از رنگ قرمز.",
+    "حفظ رنگ سبز برای خرید، تمدید، پرداخت، شارژ و عملیات مثبت.",
+    "حفظ رنگ آبی برای حساب، مدیریت، سفارش‌ها، آموزش و پشتیبانی.",
+    "به‌روزرسانی عنوان حالت هوشمند در پنل نماینده و پنل مرکزی.",
+    "حفظ قوانین رنگ سفارشی، ایموجی پرمیوم و Retry انتشار Cloudflare."
   ],
   "sha256": {
-    "core/worker.js": "a221bd79ce8c84c93489b4de8bc4825e081a957c21daf52d3ae5bdf5e8f3a251",
-    "edge/worker.js": "a94308359fd0914bdb0ad459a108a1d9bff3e89de8dcf3fb7405560b278918d7",
-    "processor/worker.js": "b572528d543107d354d3a7dec9c5191d34f0c15b7a48e074d877ac187aed162e",
+    "core/worker.js": "3a0b2f87ef26e66832054cdcc508313cd7aa24eee6d0fec95c0cca3449d1d3ac",
+    "edge/worker.js": "2bf8d094ac1b967806ed0e74cdd5f98d1bfe5a23ade21d7051b6ec61caa3b445",
+    "processor/worker.js": "18c9b7f5d104e18e2c32c18e993dbdf63afec86a90cf3fa4fbfb2df2d6def4c5",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "a221bd79ce8c84c93489b4de8bc4825e081a957c21daf52d3ae5bdf5e8f3a251",
-    "edge/worker.js": "a94308359fd0914bdb0ad459a108a1d9bff3e89de8dcf3fb7405560b278918d7",
-    "processor/worker.js": "b572528d543107d354d3a7dec9c5191d34f0c15b7a48e074d877ac187aed162e",
+    "core/worker.js": "3a0b2f87ef26e66832054cdcc508313cd7aa24eee6d0fec95c0cca3449d1d3ac",
+    "edge/worker.js": "2bf8d094ac1b967806ed0e74cdd5f98d1bfe5a23ade21d7051b6ec61caa3b445",
+    "processor/worker.js": "18c9b7f5d104e18e2c32c18e993dbdf63afec86a90cf3fa4fbfb2df2d6def4c5",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }

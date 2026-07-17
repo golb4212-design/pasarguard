@@ -1,11 +1,11 @@
 /* BLUEPANEL_PROCESSOR_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.42
+ * Version: 3.3.43
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = '3.3.42';
+const APP_VERSION = '3.3.43';
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
@@ -450,10 +450,20 @@ function telegramUiNormalizeMatchText(value) {
 function telegramUiSmartStyle(text) {
   const value = telegramUiNormalizeMatchText(text);
   if (!value) return "";
-  if (/(حذف|پاک|رد سفارش|رد درخواست|مسدود|توقف|غیرفعال|لغو|باطل|خروج|بستن|منقضی|قطع اتصال)/.test(value)) return "danger";
-  if (/(تأیید|تایید|خرید|پرداخت|شارژ|ثبت|ذخیره|ساخت|افزایش|تمدید|فعال کردن|فعال‌کردن|تحویل|ارسال|تسویه|اتصال)/.test(value)) return "success";
-  if (/(مدیریت|تنظیمات|گزارش|آمار|کیف پول|پنل|سرویس|ربات|منوی اصلی|خانه|بروزرسانی|به روزرسانی|ورود|مشاهده)/.test(value)) return "primary";
-  return "";
+
+  // Red is reserved for destructive actions and high-attention offers.
+  // Telegram only exposes three accent styles; using danger for promotions
+  // gives customer menus a balanced three-colour palette without random colours.
+  if (/(حذف|پاک|رد(?: سفارش| درخواست)?|مسدود|توقف|غیرفعال|لغو|باطل|خروج|بستن|منقضی|قطع(?: اتصال)?|تعلیق|محروم|ریست|بازنشانی|هشدار|اخطار|بدهی|تخفیف|هدیه|رایگان|جایزه|قرعه|کوپن|آفر|پیشنهاد(?: ویژه| هوشمند)?|ویژه)/.test(value)) return "danger";
+
+  // Green is used for positive transactional actions.
+  if (/(تأیید|تایید|خرید|پرداخت|شارژ|ثبت|ذخیره|ساخت|ایجاد|افزایش|افزودن|تمدید|فعال(?: کردن|‌کردن|سازی)?|تحویل|ارسال|تسویه|اتصال|بازکردن|راه‌اندازی|راه اندازی|دریافت|برداشت|واریز)/.test(value)) return "success";
+
+  // Blue is used for navigation, account, support and management actions.
+  if (/(مدیریت|تنظیمات|گزارش|آمار|کیف پول|پنل|سرویس|ربات|منوی اصلی|خانه|بروزرسانی|به روزرسانی|ورود|مشاهده|حساب|کاربری|آموزش|راهنما|سفارش|پشتیبانی|قوانین|سؤال|سوال|درباره|اعلان|تاریخچه|وضعیت|پروفایل|کد|لینک|بازگشت|لیست|جستجو|اطلاعات|جزئیات|امنیت|تیم|فعالیت|موجودی|زیرمجموعه|دعوت)/.test(value)) return "primary";
+
+  // Keep every button coloured in smart mode while avoiding arbitrary red/green.
+  return "primary";
 }
 
 function telegramUiResolveButtonStyle(text, configSource = {}) {
@@ -3325,7 +3335,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_PROCESSOR_VERSION='3.3.42';
+const BLUEPANEL_PROCESSOR_VERSION='3.3.43';
 let processorSchemaPromise=null;
 function processorJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 
