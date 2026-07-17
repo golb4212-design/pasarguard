@@ -1,6 +1,6 @@
 {
-  "version": "3.3.35",
-  "release_id": "3.3.35-dashboard-union-order-by-login-fix",
+  "version": "3.3.36",
+  "release_id": "3.3.36-reseller-dashboard-ambiguous-upstream-debt-fix",
   "architecture": "fully-split-three-worker-dual-panel-cascading-ledger-native-reply-keyboard",
   "files": {
     "core": "core/worker.js",
@@ -9,10 +9,9 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "master dashboard usage events combine PasarGuard and Marzban rows through an explicitly aliased union subquery",
-    "compound-query ordering now targets a real projected created_at column",
-    "reseller dashboard login no longer fails while loading cascading usage reports",
-    "all previous rollout, dual-panel, location catalog and cascading billing capabilities are preserved",
+    "reseller master dashboard debt summary now qualifies shared_backend_accounts.upstream_unpaid_toman with alias a",
+    "the dashboard bootstrap no longer fails after successful reseller-panel authentication with SQLITE_ERROR ambiguous column name",
+    "all previous union ordering, dual-panel, location catalog and cascading billing capabilities are preserved",
     "README files are excluded"
   ],
   "deployment": {
@@ -21,31 +20,31 @@
   },
   "validation": {
     "worker_syntax": "passed: core, edge, processor",
-    "sqlite_union_regression": "passed: PasarGuard and Marzban rows load and sort by projected created_at without compound ORDER BY error",
+    "sqlite_ambiguity_regression": "passed: original query reproduces ambiguity; qualified query returns shared-account debt correctly",
     "zip_integrity": "passed: archive test succeeded and no README file is included",
     "live_api": "not run; requires production Cloudflare, D1 and Telegram credentials"
   },
   "limitations": [
     "Bots with invalid/revoked tokens remain in error state and cannot be updated until their token is corrected."
   ],
-  "title": "رفع خطای ورود پنل نمایندگی در گزارش حسابداری مستر",
-  "summary": "کوئری ترکیبی رویدادهای مصرف پاسارگارد و مرزبان در یک زیرکوئری با ستون‌های هم‌نام و مرتب‌سازی معتبر بازنویسی شد تا ورود پنل نمایندگی دیگر با خطای ORDER BY متوقف نشود.",
+  "title": "رفع خطای D1 ورود پنل نمایندگی",
+  "summary": "ستون بدهی بالادست در کوئری خلاصه حسابداری مستر با نام جدول مشخص شد تا پس از ورود، داشبورد نمایندگی بدون خطای ambiguous column name بارگذاری شود.",
   "changes": [
-    "بازنویسی UNION گزارش مصرف مستر با نام‌گذاری صریح تمام ستون‌ها.",
-    "انتقال ORDER BY به بیرون از UNION و مرتب‌سازی روی created_at واقعی خروجی.",
-    "حفظ ساختار داده گزارش مصرف پاسارگارد و مرزبان بدون تغییر نام فیلدهای رابط.",
-    "جلوگیری از تبدیل خطای گزارش حسابداری به خطای ورود پنل نمایندگی."
+    "تغییر SUM(upstream_unpaid_toman) به SUM(a.upstream_unpaid_toman) در کوئری downlineSummary.",
+    "حذف ابهام بین ستون هم‌نام در shared_backend_accounts و reseller_bots.",
+    "افزایش نسخه سه Worker و رابط‌های کش‌شده به 3.3.36.",
+    "حفظ ساختار دیتابیس و عدم نیاز به migration جدید."
   ],
   "sha256": {
-    "core/worker.js": "0166171a99ba954675fa08c0c8910a1deae8604e5059368ac66733e37f6b9d26",
-    "edge/worker.js": "4f731056df9dc34955932fcfefba5c66d5cc8569acb266562c224276138e9c70",
-    "processor/worker.js": "a728000f3227ddad4052e5879eb6d720f710c901de84d35ff90aef3dd73baf07",
+    "core/worker.js": "242003aeb741d152c7bb5d913fdc9ab4b133f9dab572cdaf9302e8a3f9451aab",
+    "edge/worker.js": "c58bf66fa1b1a26022d42a30287268f07212463db9a520625bf6ac0db30c3232",
+    "processor/worker.js": "7be65b18fd227d2df89f942ae09dacd3891df03eadb0613c2a853da5de2a6a83",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "0166171a99ba954675fa08c0c8910a1deae8604e5059368ac66733e37f6b9d26",
-    "edge/worker.js": "4f731056df9dc34955932fcfefba5c66d5cc8569acb266562c224276138e9c70",
-    "processor/worker.js": "a728000f3227ddad4052e5879eb6d720f710c901de84d35ff90aef3dd73baf07",
+    "core/worker.js": "242003aeb741d152c7bb5d913fdc9ab4b133f9dab572cdaf9302e8a3f9451aab",
+    "edge/worker.js": "c58bf66fa1b1a26022d42a30287268f07212463db9a520625bf6ac0db30c3232",
+    "processor/worker.js": "7be65b18fd227d2df89f942ae09dacd3891df03eadb0613c2a853da5de2a6a83",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }

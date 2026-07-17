@@ -1,15 +1,26 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.35
+ * Version: 3.3.36
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.35';
+const APP_VERSION = '3.3.36';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.36": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🧩", text: "رفع خطای D1 در بارگذاری داشبورد مستر پس از ورود پنل نمایندگی" },
+      { emoji: "🧾", text: "مشخص‌کردن صریح ستون بدهی مرزبان در کوئری مشترک حسابداری" },
+      { emoji: "✅", text: "جلوگیری از خطای ambiguous column name: upstream_unpaid_toman" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "🔐", text: "ورود پنل نمایندگی و بارگذاری گزارش زیرمجموعه‌ها بدون توقف انجام می‌شود" },
+      { emoji: "📊", text: "خلاصه بدهی بالادست مستر از جدول درست محاسبه می‌شود" }
+    ])
+  }),
   "3.3.35": Object.freeze({
     central: Object.freeze([
       { emoji: "🔄", text: "همگام‌سازی پیوسته همه ربات‌های موجود در هر اجرای Cron به‌جای یک فاز از چهار فاز" },
