@@ -1,7 +1,7 @@
 {
-  "version": "3.3.43",
-  "release_id": "3.3.43-balanced-three-color-smart-buttons",
-  "architecture": "fully-split-three-worker-balanced-telegram-button-palette",
+  "version": "3.3.44",
+  "release_id": "3.3.44-reseller-premium-emoji-picker",
+  "architecture": "fully-split-three-worker-reseller-premium-emoji-manager",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -9,13 +9,14 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "uses all three Telegram button accent styles in normal customer menus",
-    "maps purchases, renewals, payments and wallet actions to success green",
-    "maps offers, gifts, discounts, free trials and warnings to attention red",
-    "maps account, services, orders, support and management actions to primary blue",
-    "keeps custom text-to-style rules higher priority than smart classification",
-    "keeps every valid smart-mode button coloured",
-    "preserves premium custom emoji support and Cloudflare upload retry logic",
+    "adds an in-bot premium emoji manager to every reseller bot settings menu",
+    "shows a paginated catalog of 98 emojis currently used by reseller menus and buttons",
+    "lets the reseller tap an ordinary emoji and send one Telegram premium emoji as its replacement",
+    "extracts custom_emoji_id automatically from Telegram message entities",
+    "supports replacing, removing one mapping, clearing all mappings, and toggling premium emoji display",
+    "uses the premium icon as a true replacement on actionable buttons instead of duplicating the ordinary emoji",
+    "stores mappings in the existing reseller_bot_texts settings record",
+    "preserves balanced smart button colours and Cloudflare upload retry logic",
     "does not change the database schema",
     "README files are excluded"
   ],
@@ -31,35 +32,37 @@
   },
   "validation": {
     "worker_syntax": "passed: core, edge, processor",
-    "smart_palette_mapping": "passed: purchase/renewal=success, offers/gifts/trials=danger, account/navigation=primary",
+    "emoji_catalog": "passed: 98 canonical-unique entries; covers all static emoji literals used in button text; callback_data remains below Telegram limit",
+    "reseller_flow": "static validation passed: view, callbacks, permission routing, session capture, save/remove/clear/toggle",
     "database_schema": "unchanged from 3.3.40",
     "zip_integrity": "passed: archive tested with unzip -t; 9 entries; no README",
     "live_api": "not run; requires production Telegram and Cloudflare credentials"
   },
   "limitations": [
-    "Telegram currently exposes only primary blue, success green, danger red, and the default app-specific style.",
-    "The exact shade is rendered by each Telegram client and can vary with the selected theme.",
-    "Red is intentionally used for promotions and high-attention actions as well as destructive actions to create a balanced three-colour customer menu."
+    "The reseller must send exactly one Telegram custom emoji; ordinary emoji messages do not contain a custom_emoji_id.",
+    "Telegram controls whether a bot is eligible to use custom emoji icons based on the bot owner and platform requirements.",
+    "The exact appearance of premium emoji and button accents depends on the Telegram client and theme."
   ],
-  "title": "پالت سه‌رنگ متعادل کلیدهای تلگرام",
-  "summary": "حالت هوشمند دیگر به آبی و سبز محدود نیست؛ پیشنهادها، هدایا، تخفیف‌ها و تست رایگان قرمز، عملیات مالی سبز و مسیرهای مدیریتی آبی نمایش داده می‌شوند.",
+  "title": "مدیریت تعاملی ایموجی‌های پرمیوم نماینده",
+  "summary": "نماینده از داخل تنظیمات ربات، فهرست ایموجی‌های استفاده‌شده را می‌بیند؛ روی هر مورد می‌زند و با ارسال یک ایموجی پرمیوم، همان مورد را در کلیدهای ربات جایگزین می‌کند.",
   "changes": [
-    "افزودن دسته توجه و پیشنهاد برای استفاده هدفمند از رنگ قرمز.",
-    "حفظ رنگ سبز برای خرید، تمدید، پرداخت، شارژ و عملیات مثبت.",
-    "حفظ رنگ آبی برای حساب، مدیریت، سفارش‌ها، آموزش و پشتیبانی.",
-    "به‌روزرسانی عنوان حالت هوشمند در پنل نماینده و پنل مرکزی.",
-    "حفظ قوانین رنگ سفارشی، ایموجی پرمیوم و Retry انتشار Cloudflare."
+    "افزودن گزینه «ایموجی‌های پرمیوم» به تنظیمات داخل ربات نماینده.",
+    "نمایش فهرست صفحه‌بندی‌شده ۹۸ ایموجی به‌کاررفته با علامت وضعیت جایگزینی.",
+    "دریافت مستقیم ایموجی پرمیوم و استخراج خودکار Custom Emoji ID از پیام تلگرام.",
+    "افزودن حذف تکی، پاک‌کردن همه و کلید فعال/غیرفعال‌سازی نمایش.",
+    "حذف ایموجی معمولی از متن کلیدهای عملیاتی پس از ثبت جایگزین پرمیوم برای جلوگیری از نمایش تکراری.",
+    "حفظ ذخیره‌سازی قبلی بدون ستون و Migration جدید."
   ],
   "sha256": {
-    "core/worker.js": "3a0b2f87ef26e66832054cdcc508313cd7aa24eee6d0fec95c0cca3449d1d3ac",
-    "edge/worker.js": "2bf8d094ac1b967806ed0e74cdd5f98d1bfe5a23ade21d7051b6ec61caa3b445",
-    "processor/worker.js": "18c9b7f5d104e18e2c32c18e993dbdf63afec86a90cf3fa4fbfb2df2d6def4c5",
+    "core/worker.js": "b38c18d5adb3143d34c32e4eab8372b581a29df647fbece81c7aece1e37a0e9b",
+    "edge/worker.js": "4dd6327af2090b12c47b4b3504c1d69f9e18dd22046676ef623a8750114fb3c7",
+    "processor/worker.js": "bdd76688c45afb5f41d36f7643a34cb252ec52531646711d55864a3c5dcb8ae0",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "3a0b2f87ef26e66832054cdcc508313cd7aa24eee6d0fec95c0cca3449d1d3ac",
-    "edge/worker.js": "2bf8d094ac1b967806ed0e74cdd5f98d1bfe5a23ade21d7051b6ec61caa3b445",
-    "processor/worker.js": "18c9b7f5d104e18e2c32c18e993dbdf63afec86a90cf3fa4fbfb2df2d6def4c5",
+    "core/worker.js": "b38c18d5adb3143d34c32e4eab8372b581a29df647fbece81c7aece1e37a0e9b",
+    "edge/worker.js": "4dd6327af2090b12c47b4b3504c1d69f9e18dd22046676ef623a8750114fb3c7",
+    "processor/worker.js": "bdd76688c45afb5f41d36f7643a34cb252ec52531646711d55864a3c5dcb8ae0",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }

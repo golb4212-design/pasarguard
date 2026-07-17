@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.43
+ * Version: 3.3.44
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = '3.3.43';
+const APP_VERSION = '3.3.44';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -878,7 +878,7 @@ function resellerViewPermission(view) {
     wallets: "wallets", stats: "stats", users: "users", user: "users",
     texts: "texts", promos: "promos", tickets: "tickets", ticket: "tickets",
     settings: "settings", settings_identity: "settings", settings_loyalty: "settings",
-    settings_support: "settings", settings_automation: "settings",
+    settings_support: "settings", settings_automation: "settings", emojis: "settings",
     payments: "settings", payment_methods: "settings", plisio: "settings", campaigns: "campaigns", staff: "owner", audit: "audit", children: "owner",
     executive: "reports", automation: "automation", security: "security", health: "health", backups: "backups"
   })[String(view || "home")] || "dashboard";
@@ -903,6 +903,7 @@ function resellerCallbackPermission(data) {
   if (value.startsWith("owner:plan")) return "plans";
   if (value.startsWith("owner:category") || value.startsWith("owner:location") || value.startsWith("owner:catalog")) return "catalog";
   if (value.startsWith("owner:payment") || value.startsWith("owner:methods") || value.startsWith("owner:plisio") || value.startsWith("owner:cubepay") || value === "owner:payments" || value === "owner:payment_methods") return "settings";
+  if (value === "owner:emojis" || value.startsWith("owner:emoji:")) return "settings";
   if (value.startsWith("owner:setting") || value === "owner:card" || value === "owner:panel" || value.startsWith("owner:agency") || value === "owner:toggle") return "settings";
   if (value === "owner:stats") return "stats";
   if (value === "owner:users") return "users";
@@ -1092,6 +1093,43 @@ function telegramUiConfigEmojiText(source = {}) {
   return Object.entries(normalizeTelegramUiConfig(source).emoji_map).map(([key, value]) => key + "=" + value).join("\n");
 }
 
+const RESELLER_EMOJI_CATALOG = Object.freeze(["↩️", "🏠", "⏸", "➕", "✅", "▶️", "💳", "🔄", "📦", "🧾", "🛒", "⚙️", "❌", "🔑", "👥", "📣", "♻️", "🔗", "🎁", "🎫", "🌍", "📋", "⭐", "💰", "🧭", "⚡", "✏️", "🎯", "🚀", "👤", "🎟", "👑", "⚠️", "⏱", "🗑", "📤", "🗓", "🔐", "📅", "↪️", "🗄", "📊", "💸", "💬", "📚", "🖥", "🏅", "🧹", "🪙", "🧪", "➖", "🛡", "🌐", "📝", "📈", "🩺", "🔒", "📱", "🏷", "🆘", "🖼", "🎉", "⏳", "📉", "🕒", "📢", "📭", "⬆️", "⌨️", "❓", "🤖", "🍎", "🔁", "🧰", "🚦", "💠", "🕑", "🛟", "🏦", "↕️", "🧮", "🪪", "🕐", "🕕", "🕓", "📁", "🗂", "👁", "🟢", "🔔", "⛔️", "◀️", "✍️", "👋", "📘", "😛", "🚨", "🧵"]);
+const RESELLER_EMOJI_PAGE_SIZE = 24;
+
+function resellerEmojiCanonical(value) {
+  return String(value || "").replace(/[\ufe0e\ufe0f]/g, "").trim();
+}
+
+function resellerEmojiMapEntry(configSource, emoji) {
+  const config = normalizeTelegramUiConfig(configSource);
+  const wanted = resellerEmojiCanonical(emoji);
+  for (const [key, value] of Object.entries(config.emoji_map || {})) {
+    if (resellerEmojiCanonical(key) === wanted) return { key, value: String(value) };
+  }
+  return null;
+}
+
+function resellerEmojiRemoveFromMap(configSource, emoji) {
+  const config = normalizeTelegramUiConfig(configSource);
+  const wanted = resellerEmojiCanonical(emoji);
+  for (const key of Object.keys(config.emoji_map || {})) {
+    if (resellerEmojiCanonical(key) === wanted) delete config.emoji_map[key];
+  }
+  return config;
+}
+
+function telegramCustomEmojiFromMessage(message = {}) {
+  const entities = [
+    ...(Array.isArray(message.entities) ? message.entities : []),
+    ...(Array.isArray(message.caption_entities) ? message.caption_entities : [])
+  ].filter(item => item?.type === "custom_emoji" && /^\d{5,30}$/.test(String(item.custom_emoji_id || "")));
+  if (!entities.length) return null;
+  const entity = entities[0];
+  const source = String(message.text ?? message.caption ?? "");
+  const alternative = source.slice(Number(entity.offset || 0), Number(entity.offset || 0) + Number(entity.length || 0));
+  return { id: String(entity.custom_emoji_id), alternative, count: entities.length };
+}
+
 function telegramUiNormalizeMatchText(value) {
   return String(value || "")
     .replace(/[\u200c\u200e\u200f\u061c\ufe0f]/g, "")
@@ -1149,6 +1187,22 @@ function telegramUiEmojiMatch(text, configSource = {}) {
   return null;
 }
 
+function telegramUiEmojiKeyIsSingleEmoji(value) {
+  const raw = String(value || "").trim();
+  if (!raw || /[\p{L}\p{N}]/u.test(raw)) return false;
+  return /\p{Extended_Pictographic}/u.test(raw);
+}
+
+function telegramUiRemoveMappedEmoji(text, emojiKey) {
+  const source = String(text || "");
+  const key = String(emojiKey || "");
+  if (!source || !key || !telegramUiEmojiKeyIsSingleEmoji(key)) return source;
+  const plainKey = key.replace(/\ufe0f/g, "");
+  let output = source.replace(key, "");
+  if (output === source && plainKey !== key) output = source.replace(plainKey, "");
+  return output.replace(/\s+/g, " ").trim() || source;
+}
+
 function telegramUiDecorateButton(button, configSource = {}) {
   const out = typeof button === "string" ? { text: button } : { ...(button || {}) };
   const originalText = String(out.text || "");
@@ -1159,10 +1213,18 @@ function telegramUiDecorateButton(button, configSource = {}) {
   if (!out.icon_custom_emoji_id) {
     const emoji = telegramUiEmojiMatch(originalText, configSource);
     if (emoji) {
-      // Keep the original button text byte-for-byte. Reply keyboards send their
-      // text back as a user message; changing it here breaks stored routes and
-      // makes old keyboards appear unresponsive after an update.
       out.icon_custom_emoji_id = emoji.emojiId;
+      // Inline/actionable source buttons are safe to rewrite because their
+      // operation is carried by callback_data/url. Reply-route conversion stores
+      // the rewritten label and still resolves old keyboards after emoji changes.
+      const actionable = Boolean(
+        out.callback_data || out.url || out.copy_text || out.web_app ||
+        out.switch_inline_query != null || out.switch_inline_query_current_chat != null ||
+        out.login_url?.url
+      );
+      if (actionable && telegramUiEmojiKeyIsSingleEmoji(emoji.key)) {
+        out.text = telegramUiRemoveMappedEmoji(originalText, emoji.key);
+      }
     }
   }
   return out;
@@ -7732,6 +7794,7 @@ async function resellerOwnerRender(env, bot, account, view = "home", extra = {})
   else if (view === "settings_loyalty") rendered = await botSalesSettingsGroupView(env, account, "loyalty");
   else if (view === "settings_support") rendered = await botSalesSettingsGroupView(env, account, "support");
   else if (view === "settings_automation") rendered = await botSalesSettingsGroupView(env, account, "automation");
+  else if (view === "emojis") rendered = await resellerOwnerEmojiManagerView(env, bot, account, extra.page);
   else if (view === "payments") rendered = await resellerOwnerPaymentsView(env, bot, account);
   else if (view === "payment_methods") rendered = await resellerOwnerPaymentMethodsView(env, bot, account);
   else if (view === "plisio") rendered = await resellerOwnerPlisioView(env, bot, account);
@@ -7853,7 +7916,7 @@ async function resellerOwnerHandleCallback(env, bot, callback) {
     "owner:group:communications": "group_communications", "owner:group:system": "group_system",
     "owner:plans": "plans", "owner:orders": "orders", "owner:services": "services", "owner:catalog": "catalog", "owner:wallets": "wallets",
     "owner:stats": "stats", "owner:users": "users", "owner:texts": "texts", "owner:promos": "promos",
-    "owner:tickets": "tickets", "owner:settings": "settings",
+    "owner:tickets": "tickets", "owner:settings": "settings", "owner:emojis": "emojis",
     "owner:settings:identity": "settings_identity", "owner:settings:loyalty": "settings_loyalty",
     "owner:settings:support": "settings_support", "owner:settings:automation": "settings_automation",
     "owner:payments": "payments", "owner:payment_methods": "payment_methods", "owner:plisio": "plisio", "owner:cubepay": "cubepay", "owner:campaigns": "campaigns", "owner:staff": "staff", "owner:audit": "audit",
@@ -7864,6 +7927,59 @@ async function resellerOwnerHandleCallback(env, bot, callback) {
     try { await resellerAudit(env, bot, account, "callback_action", { data }); } catch (_) {}
   }
   if (nav[data]) return resellerOwnerSendOrEdit(env, bot, target, nav[data]);
+  if (data.startsWith("owner:emoji:page:")) {
+    const page = Math.max(0, Math.min(20, Number(data.slice("owner:emoji:page:".length)) || 0));
+    return resellerOwnerSendOrEdit(env, bot, target, "emojis", { page });
+  }
+  if (data.startsWith("owner:emoji:set:")) {
+    const index = Number(data.slice("owner:emoji:set:".length));
+    if (!Number.isInteger(index) || index < 0 || index >= RESELLER_EMOJI_CATALOG.length) throw new Error("ایموجی انتخاب‌شده معتبر نیست");
+    const emoji = RESELLER_EMOJI_CATALOG[index];
+    const page = Math.floor(index / RESELLER_EMOJI_PAGE_SIZE);
+    const current = resellerEmojiMapEntry(bot, emoji);
+    await salesSessionSet(env, bot.id, account.user.telegram_id, "owner_premium_emoji_pick", { emoji, index, page });
+    const rows = [];
+    if (current) rows.push([{ text: "🗑 حذف جایگزینی فعلی", callback_data: "owner:emoji:remove:" + index }]);
+    rows.push([{ text: "↩️ بازگشت به فهرست", callback_data: "owner:emoji:page:" + page }]);
+    return resellerOwnerPrompt(env, bot, chatId,
+      "😛 <b>جایگزینی ایموجی " + botEscape(emoji) + "</b>\n━━━━━━━━━━━━━━\n" +
+      "اکنون فقط <b>یک ایموجی پرمیوم</b> را در یک پیام ارسال کنید. شناسه اختصاصی آن به‌صورت خودکار خوانده و به جای " + botEscape(emoji) + " در کلیدهای ربات استفاده می‌شود.\n\n" +
+      "برای تغییر بعدی، دوباره از فهرست یک ایموجی را انتخاب کنید.", rows);
+  }
+  if (data.startsWith("owner:emoji:remove:")) {
+    const index = Number(data.slice("owner:emoji:remove:".length));
+    if (!Number.isInteger(index) || index < 0 || index >= RESELLER_EMOJI_CATALOG.length) throw new Error("ایموجی انتخاب‌شده معتبر نیست");
+    const emoji = RESELLER_EMOJI_CATALOG[index];
+    const fresh = await getResellerBotById(env, bot.id) || bot;
+    const config = resellerEmojiRemoveFromMap(fresh, emoji);
+    await saveResellerTelegramUiStoredValue(env, bot.id, config);
+    await salesSessionClear(env, bot.id, account.user.telegram_id);
+    await resellerAudit(env, bot, account, "premium_emoji_mapping_removed", { emoji });
+    try { await resellerTelegramApi(env, bot, "answerCallbackQuery", { callback_query_id: callback.id, text: "جایگزینی حذف شد", show_alert: false }); } catch (_) {}
+    return resellerOwnerSendOrEdit(env, await getResellerBotById(env, bot.id), target, "emojis", { page: Math.floor(index / RESELLER_EMOJI_PAGE_SIZE) });
+  }
+  if (data === "owner:emoji:toggle") {
+    const fresh = await getResellerBotById(env, bot.id) || bot;
+    const config = normalizeTelegramUiConfig(fresh);
+    config.premium_emoji_enabled = !config.premium_emoji_enabled;
+    await saveResellerTelegramUiStoredValue(env, bot.id, config);
+    await resellerAudit(env, bot, account, "premium_emoji_display_toggled", { enabled: config.premium_emoji_enabled });
+    return resellerOwnerSendOrEdit(env, await getResellerBotById(env, bot.id), target, "emojis");
+  }
+  if (data === "owner:emoji:clear:yes") {
+    const fresh = await getResellerBotById(env, bot.id) || bot;
+    const config = normalizeTelegramUiConfig(fresh);
+    config.emoji_map = {};
+    await saveResellerTelegramUiStoredValue(env, bot.id, config);
+    await salesSessionClear(env, bot.id, account.user.telegram_id);
+    await resellerAudit(env, bot, account, "premium_emoji_mappings_cleared", {});
+    return resellerOwnerSendOrEdit(env, await getResellerBotById(env, bot.id), target, "emojis");
+  }
+  if (data === "owner:emoji:clear") {
+    return resellerOwnerPrompt(env, bot, chatId,
+      "🧹 <b>پاک‌کردن همه جایگزینی‌ها؟</b>\n━━━━━━━━━━━━━━\nهمه ایموجی‌های پرمیوم ثبت‌شده این ربات حذف می‌شوند و کلیدها دوباره از ایموجی‌های معمولی استفاده می‌کنند.",
+      [[{ text: "🧹 بله، همه پاک شوند", callback_data: "owner:emoji:clear:yes" }], [{ text: "لغو", callback_data: "owner:emojis" }]]);
+  }
   if (data.startsWith("osv:v:")) return resellerOwnerSendOrEdit(env,bot,target,"service",{serviceId:data.slice("osv:v:".length)});
   if (data.startsWith("osv:r:")) {
     const serviceId=data.slice("osv:r:".length);
@@ -8718,6 +8834,38 @@ async function resellerOwnerHandleSession(env, bot, account, message, session) {
     await resellerOwnerSendOrEdit(env, await getResellerBotById(env, bot.id), { account, chatId }, view);
     return true;
   };
+  if (session.state === "owner_premium_emoji_pick") {
+    const emoji = String(session.data?.emoji || "");
+    const index = Number(session.data?.index);
+    const catalogMatch = RESELLER_EMOJI_CATALOG.some(item => resellerEmojiCanonical(item) === resellerEmojiCanonical(emoji));
+    if (!catalogMatch) throw new Error("انتخاب ایموجی منقضی یا نامعتبر است؛ دوباره از فهرست انتخاب کنید");
+    const picked = telegramCustomEmojiFromMessage(message);
+    if (!picked || picked.count !== 1) throw new Error("فقط یک ایموجی پرمیوم تلگرام ارسال کنید؛ پیام چندایموجی یا ایموجی معمولی پذیرفته نمی‌شود");
+    const fresh = await getResellerBotById(env, bot.id) || bot;
+    const config = resellerEmojiRemoveFromMap(fresh, emoji);
+    config.emoji_map[emoji] = picked.id;
+    config.premium_emoji_enabled = true;
+    await saveResellerTelegramUiStoredValue(env, bot.id, config);
+    await salesSessionClear(env, bot.id, account.user.telegram_id);
+    await resellerAudit(env, bot, account, "premium_emoji_mapping_saved", { emoji, custom_emoji_id: picked.id });
+    const page = Number.isInteger(index) && index >= 0 ? Math.floor(index / RESELLER_EMOJI_PAGE_SIZE) : Math.max(0, Number(session.data?.page || 0));
+    try {
+      await resellerTelegramApi(env, bot, "sendMessage", {
+        chat_id: chatId,
+        text: "✅ ایموجی پرمیوم برای " + emoji + " ذخیره شد و جایگزینی آن فعال است.",
+        reply_markup: { inline_keyboard: [[{
+          text: "پیش‌نمایش جایگزینی",
+          callback_data: "owner:emoji:page:" + page,
+          icon_custom_emoji_id: picked.id,
+          style: "success"
+        }]] }
+      });
+    } catch (_) {
+      await resellerTelegramApi(env, bot, "sendMessage", { chat_id: chatId, text: "✅ ایموجی پرمیوم برای " + emoji + " ذخیره شد و جایگزینی آن فعال است." });
+    }
+    await resellerOwnerSendOrEdit(env, await getResellerBotById(env, bot.id), { account, chatId }, "emojis", { page });
+    return true;
+  }
   if (session.state === "owner_bot_token") {
     resellerRequirePermission(account, "owner");
     try { await resellerTelegramApi(env, bot, "deleteMessage", { chat_id: chatId, message_id: message.message_id }); } catch (_) {}
@@ -10047,9 +10195,54 @@ async function botSalesSettingsView(env,account){
       [{text:"⏱ بستن خودکار تیکت",callback_data:"bot:sales:setting:ticket_auto_close"}],
       [{text:Number(bot.daily_report_enabled||0)===1?'خاموش‌کردن گزارش':'فعال‌کردن گزارش',callback_data:"bot:sales:setting:daily_report_toggle"},{text:"🕒 ساعت گزارش",callback_data:"bot:sales:setting:daily_report_hour"}],
       [{text:Number(bot.join_enabled||0)===1?'خاموش‌کردن جوین':'فعال‌کردن جوین',callback_data:"bot:sales:setting:join_toggle"},{text:"📢 تعیین کانال‌ها",callback_data:"bot:sales:setting:join_channels"}],
+      [{text:"😛 ایموجی‌های پرمیوم",callback_data:"owner:emojis"}],
       [{text:"📤 کپی و فوروارد",callback_data:"bot:sales:setting:forward"}],
       [{text:"↩️ مدیریت ربات",callback_data:"bot:sales"}]
     ]}};
+}
+
+async function resellerOwnerEmojiManagerView(env, bot, account, page = 0) {
+  resellerRequirePermission(account, "settings");
+  const fresh = await getResellerBotById(env, bot.id) || bot;
+  const config = normalizeTelegramUiConfig(fresh);
+  const total = RESELLER_EMOJI_CATALOG.length;
+  const maxPage = Math.max(0, Math.ceil(total / RESELLER_EMOJI_PAGE_SIZE) - 1);
+  const currentPage = Math.max(0, Math.min(maxPage, Number(page || 0)));
+  const start = currentPage * RESELLER_EMOJI_PAGE_SIZE;
+  const items = RESELLER_EMOJI_CATALOG.slice(start, start + RESELLER_EMOJI_PAGE_SIZE);
+  const mappedCount = RESELLER_EMOJI_CATALOG.filter(emoji => resellerEmojiMapEntry(config, emoji)).length;
+  const rows = [];
+  for (let offset = 0; offset < items.length; offset += 4) {
+    rows.push(items.slice(offset, offset + 4).map((emoji, column) => {
+      const index = start + offset + column;
+      const mapped = resellerEmojiMapEntry(config, emoji);
+      return {
+        text: emoji + (mapped ? " ✓" : ""),
+        callback_data: "owner:emoji:set:" + index
+      };
+    }));
+  }
+  const navigation = [];
+  if (currentPage > 0) navigation.push({ text: "◀️ صفحه قبل", callback_data: "owner:emoji:page:" + (currentPage - 1) });
+  navigation.push({ text: (currentPage + 1) + " / " + (maxPage + 1), callback_data: "owner:emoji:page:" + currentPage });
+  if (currentPage < maxPage) navigation.push({ text: "صفحه بعد ▶️", callback_data: "owner:emoji:page:" + (currentPage + 1) });
+  rows.push(navigation);
+  rows.push([
+    {
+      text: config.premium_emoji_enabled ? "⏸ غیرفعال‌کردن جایگزینی" : "▶️ فعال‌کردن جایگزینی",
+      callback_data: "owner:emoji:toggle"
+    }
+  ]);
+  if (mappedCount > 0) rows.push([{ text: "🧹 پاک‌کردن همه جایگزینی‌ها", callback_data: "owner:emoji:clear" }]);
+  rows.push([{ text: "↩️ تنظیمات ربات", callback_data: "owner:settings" }]);
+  return {
+    text: "😛 <b>مدیریت ایموجی‌های پرمیوم</b>\n━━━━━━━━━━━━━━\n" +
+      "ایموجی‌های منو و کلیدها: <b>" + botMoney(total) + "</b>\n" +
+      "جایگزین‌شده: <b>" + botMoney(mappedCount) + "</b>\n" +
+      "وضعیت نمایش: <b>" + (config.premium_emoji_enabled ? "فعال ✅" : "غیرفعال ⏸") + "</b>\n\n" +
+      "روی هر ایموجی بزنید و سپس همان ایموجی پرمیوم دلخواه را در یک پیام ارسال کنید. علامت <b>✓</b> یعنی برای آن مورد جایگزین ثبت شده است.",
+    reply_markup: { inline_keyboard: rows }
+  };
 }
 
 async function botSalesSettingsGroupView(env,account,group){
@@ -10064,7 +10257,8 @@ async function botSalesSettingsGroupView(env,account,group){
       "🖼 بنر زیرمجموعه: <b>"+(bot.referral_banner_file_id?'ثبت شده':'ثبت نشده')+"</b>"
     ],rows:[
       [{text:"🏷 نام برند",callback_data:"bot:sales:setting:brand"},{text:"🆘 آیدی پشتیبانی",callback_data:"bot:sales:setting:support"}],
-      [{text:"🖼 بنر زیرمجموعه",callback_data:"bot:sales:setting:referral_banner"}]
+      [{text:"🖼 بنر زیرمجموعه",callback_data:"bot:sales:setting:referral_banner"}],
+      [{text:"😛 ایموجی‌های پرمیوم",callback_data:"owner:emojis"}]
     ]},
     loyalty:{title:"🎁 فروش و وفاداری",summary:"تست رایگان، پورسانت، بونس و کش‌بک مشتریان.",lines:[
       "🎁 تست: <b>"+(Number(bot.trial_enabled||0)===1?'فعال':'غیرفعال')+"</b> · "+botMoney(trialMb)+" MB · "+botMoney(trialHours)+" ساعت",

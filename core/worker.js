@@ -1,15 +1,27 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.43
+ * Version: 3.3.44
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.43';
+const APP_VERSION = '3.3.44';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.44": Object.freeze({
+    central: Object.freeze([
+      { emoji: "😛", text: "افزودن مدیریت تعاملی ایموجی‌های پرمیوم داخل خود ربات نماینده" },
+      { emoji: "🧩", text: "استخراج فهرست ایموجی‌های کلیدها و جایگزینی هر مورد بدون ورود دستی Custom Emoji ID" },
+      { emoji: "🛡", text: "حفظ تنظیمات در مخزن موجود و بدون افزودن ستون یا Migration جدید" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "✨", text: "نمایش فهرست صفحه‌بندی‌شده ایموجی‌های به‌کاررفته در منوهای ربات" },
+      { emoji: "👆", text: "انتخاب ایموجی معمولی و دریافت مستقیم ایموجی پرمیوم ارسالی نماینده" },
+      { emoji: "🧹", text: "امکان تعویض، حذف تکی، پاک‌کردن همه و فعال یا غیرفعال‌کردن جایگزینی‌ها" }
+    ])
+  }),
   "3.3.43": Object.freeze({
     central: Object.freeze([
       { emoji: "🎨", text: "بازطراحی حالت هوشمند با پالت سه‌رنگ متعادل برای منوهای تلگرام" },
@@ -3782,6 +3794,22 @@ function telegramUiEmojiMatch(text, configSource = {}) {
   return null;
 }
 
+function telegramUiEmojiKeyIsSingleEmoji(value) {
+  const raw = String(value || "").trim();
+  if (!raw || /[\p{L}\p{N}]/u.test(raw)) return false;
+  return /\p{Extended_Pictographic}/u.test(raw);
+}
+
+function telegramUiRemoveMappedEmoji(text, emojiKey) {
+  const source = String(text || "");
+  const key = String(emojiKey || "");
+  if (!source || !key || !telegramUiEmojiKeyIsSingleEmoji(key)) return source;
+  const plainKey = key.replace(/\ufe0f/g, "");
+  let output = source.replace(key, "");
+  if (output === source && plainKey !== key) output = source.replace(plainKey, "");
+  return output.replace(/\s+/g, " ").trim() || source;
+}
+
 function telegramUiDecorateButton(button, configSource = {}) {
   const out = typeof button === "string" ? { text: button } : { ...(button || {}) };
   const originalText = String(out.text || "");
@@ -3792,10 +3820,18 @@ function telegramUiDecorateButton(button, configSource = {}) {
   if (!out.icon_custom_emoji_id) {
     const emoji = telegramUiEmojiMatch(originalText, configSource);
     if (emoji) {
-      // Keep the original button text byte-for-byte. Reply keyboards send their
-      // text back as a user message; changing it here breaks stored routes and
-      // makes old keyboards appear unresponsive after an update.
       out.icon_custom_emoji_id = emoji.emojiId;
+      // Inline/actionable source buttons are safe to rewrite because their
+      // operation is carried by callback_data/url. Reply-route conversion stores
+      // the rewritten label and still resolves old keyboards after emoji changes.
+      const actionable = Boolean(
+        out.callback_data || out.url || out.copy_text || out.web_app ||
+        out.switch_inline_query != null || out.switch_inline_query_current_chat != null ||
+        out.login_url?.url
+      );
+      if (actionable && telegramUiEmojiKeyIsSingleEmoji(emoji.key)) {
+        out.text = telegramUiRemoveMappedEmoji(originalText, emoji.key);
+      }
     }
   }
   return out;
