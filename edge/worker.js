@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.46
+ * Version: 3.3.47
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = '3.3.46';
+const APP_VERSION = '3.3.47';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -1212,17 +1212,12 @@ function telegramUiRemoveMappedEmoji(text, emojiKey) {
   const key = String(emojiKey || "");
   if (!source || !key || !telegramUiEmojiKeyIsSingleEmoji(key)) return source;
 
-  // A Telegram keyboard button accepts exactly one custom icon, rendered before
-  // its label. When the same ordinary emoji appears more than once in the label
-  // (for example: "🌍 لوکیشن هوایی 🌍"), keeping any occurrence in `text`
-  // produces a mixed premium/ordinary result. Remove every visual variant from
-  // the label and let icon_custom_emoji_id be the single premium representation.
+  // Telegram exposes one icon_custom_emoji_id per button. Remove exactly one
+  // ordinary occurrence because that occurrence is replaced by the premium icon;
+  // preserve any additional emoji intentionally used elsewhere in the label.
   const plainKey = key.replace(/\ufe0f/g, "");
-  const variants = Array.from(new Set([key, plainKey, plainKey + "\ufe0f"]))
-    .filter(Boolean)
-    .sort((a, b) => b.length - a.length);
-  let output = source;
-  for (const variant of variants) output = output.split(variant).join("");
+  let output = source.replace(key, "");
+  if (output === source && plainKey !== key) output = source.replace(plainKey, "");
   return output.replace(/\s+/g, " ").trim() || source;
 }
 
