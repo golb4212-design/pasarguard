@@ -1,14 +1,14 @@
 /* BLUEPANEL_PROCESSOR_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.38
+ * Version: 3.3.39
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = '3.3.38';
+const APP_VERSION = '3.3.39';
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
-  "brand_name","welcome_text","support_username","telegram_ui_json","card_holder","card_number","bank_name","iban",
+  "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
   "trial_enabled","trial_data_limit_bytes","trial_duration_days","trial_duration_hours",
   "referral_reward_toman","referral_reward_type","referral_reward_percent","referral_banner_file_id","referral_banner_file_type",
   "recharge_bonus_percent","forward_enabled","join_enabled","join_channels_json",
@@ -552,6 +552,22 @@ function telegramUiStripModernFields(markup, options = {}) {
 
 function telegramUiModernFieldError(error) {
   return /(icon_custom_emoji_id|custom emoji|custom_emoji|button_style|style of the button|BUTTON_STYLE|BUTTON_TYPE_INVALID|can't use.*emoji|cannot use.*emoji|not allowed.*emoji|premium.*emoji)/i.test(String(error?.message || error || ""));
+}
+
+const RESELLER_TELEGRAM_UI_TEXT_KEY = "__telegram_ui_json";
+
+async function getResellerTelegramUiStoredValue(env, botId, legacyValue = "") {
+  let value = String(legacyValue || "");
+  if (!botId) return value || "{}";
+  try {
+    const row = await env.PASARGUARD_DB.prepare(
+      "SELECT text_value FROM reseller_bot_texts WHERE bot_id=? AND text_key=? LIMIT 1"
+    ).bind(botId, RESELLER_TELEGRAM_UI_TEXT_KEY).first();
+    if (row?.text_value != null && String(row.text_value).trim()) value = String(row.text_value);
+  } catch (error) {
+    if (!/no such table/i.test(String(error?.message || error))) throw error;
+  }
+  return value || "{}";
 }
 
 let telegramReplyRouteSchemaReady = false;
@@ -1143,15 +1159,15 @@ async function ensureResellerGrowthSettingsRow(env,botId){
 
 async function hydrateResellerBotRelations(env, bot) {
   if (!bot) return null;
-  const [relation,growth] = await Promise.all([env.PASARGUARD_DB.prepare(`
+  const [relation,growth,telegramUiJson] = await Promise.all([env.PASARGUARD_DB.prepare(`
     SELECT a.title AS agency_title,a.panel_username,a.panel_password_enc,a.status AS agency_status,a.remote_manager_id,
            u.telegram_id AS owner_telegram_id,u.username AS owner_username,u.first_name AS owner_first_name,
            u.last_name AS owner_last_name,u.wallet_balance AS owner_wallet_balance,
            CASE WHEN a.panel_password_enc IS NULL THEN 0 ELSE 1 END AS agency_has_password
     FROM users u LEFT JOIN agencies a ON a.id=?
     WHERE u.id=?
-  `).bind(bot.agency_id, bot.user_id).first(),getResellerGrowthSettings(env,bot.id)]);
-  return { ...bot, ...RESELLER_GROWTH_DEFAULTS, ...(growth || {}), ...(relation || {}) };
+  `).bind(bot.agency_id, bot.user_id).first(),getResellerGrowthSettings(env,bot.id),getResellerTelegramUiStoredValue(env,bot.id,bot.telegram_ui_json)]);
+  return { ...bot, telegram_ui_json: telegramUiJson, ...RESELLER_GROWTH_DEFAULTS, ...(growth || {}), ...(relation || {}) };
 }
 
 async function getResellerBotById(env, botId) {
@@ -2889,6 +2905,7 @@ async function deliverResellerSnapshotDocument(env, bot, raw, snapshotId, snapsh
 function resellerSnapshotSettings(bot) {
   const out = {};
   for (const key of RESELLER_BACKUP_FIELDS) out[key] = bot?.[key] ?? null;
+  out.telegram_ui_json = bot?.telegram_ui_json || JSON.stringify(normalizeTelegramUiConfig(bot));
   return out;
 }
 
@@ -3281,7 +3298,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_PROCESSOR_VERSION='3.3.38';
+const BLUEPANEL_PROCESSOR_VERSION='3.3.39';
 let processorSchemaPromise=null;
 function processorJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 
