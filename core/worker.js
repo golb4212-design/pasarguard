@@ -1,16 +1,16 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.32
+ * Version: 3.3.33
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.32';
+const APP_VERSION = '3.3.33';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
-  "3.3.32": Object.freeze({
+  "3.3.33": Object.freeze({
     central: Object.freeze([
       { emoji: "🗄", text: "مهاجرت اجباری ستون location_id دسته‌بندی‌ها روی دیتابیس‌های قدیمی" },
       { emoji: "🛡", text: "اعتبارسنجی واقعی ساختار کاتالوگ حتی در صورت وجود نشانگر اشتباه نسخه دیتابیس" },
@@ -512,7 +512,7 @@ let errorCenterSchemaPromise = null;
 
 // Persistent schema marker: avoids replaying the full D1 migration sweep whenever
 // Cloudflare starts a fresh isolate after an idle period.
-const DB_SCHEMA_REVISION = "3.3.32-location-category-column";
+const DB_SCHEMA_REVISION = "3.3.33-location-category-column";
 
 let settingsCache = null;
 
