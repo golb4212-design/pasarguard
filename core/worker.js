@@ -1,15 +1,27 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.37
+ * Version: 3.3.38
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.37';
+const APP_VERSION = '3.3.38';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.38": Object.freeze({
+    central: Object.freeze([
+      { emoji: "✨", text: "پشتیبانی از Custom Emoji پرمیوم روی کلیدهای ربات مرکزی و نمایندگی" },
+      { emoji: "🎨", text: "رنگ‌بندی کلیدها با حالت هوشمند یا ثابت: آبی، سبز و قرمز" },
+      { emoji: "🛡", text: "Fallback خودکار به کلید معمولی در صورت ردشدن قابلیت جدید توسط تلگرام" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "⚙️", text: "افزودن تنظیمات ظاهر کلیدها و نگاشت Custom Emoji ID در پنل کامل ربات" },
+      { emoji: "🧩", text: "قانون رنگ سفارشی براساس متن هر کلید، بدون نیاز به ویرایش دستی منوها" },
+      { emoji: "✅", text: "ذخیره مستقل تنظیمات ظاهر برای هر ربات نماینده و مستر" }
+    ])
+  }),
   "3.3.37": Object.freeze({
     central: Object.freeze([
       { emoji: "🧩", text: "جداسازی اجرای هر بکاپ در یک Invocation مستقل Worker دوم" },
@@ -455,7 +467,7 @@ function currentReleaseNotes() {
 }
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
-  "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
+  "brand_name","welcome_text","support_username","telegram_ui_json","card_holder","card_number","bank_name","iban",
   "trial_enabled","trial_data_limit_bytes","trial_duration_days","trial_duration_hours",
   "referral_reward_toman","referral_reward_type","referral_reward_percent","referral_banner_file_id","referral_banner_file_type",
   "recharge_bonus_percent","forward_enabled","join_enabled","join_channels_json",
@@ -546,7 +558,7 @@ let errorCenterSchemaPromise = null;
 
 // Persistent schema marker: avoids replaying the full D1 migration sweep whenever
 // Cloudflare starts a fresh isolate after an idle period.
-const DB_SCHEMA_REVISION = "3.3.33-location-category-column";
+const DB_SCHEMA_REVISION = "3.3.38-telegram-button-ui";
 
 let settingsCache = null;
 
@@ -727,6 +739,7 @@ const DEFAULT_SETTINGS = {
   central_report_last_daily_date: "",
   min_recharge: "100000",
   support_username: "",
+  telegram_ui_json: '{"premium_emoji_enabled":false,"style_mode":"default","style_rules":[],"emoji_map":{}}',
   blupal_base_url: "https://blupal.net/api",
   blupal_api_key: "",
   blupal_card_number: "",
@@ -1077,6 +1090,7 @@ CREATE TABLE IF NOT EXISTS reseller_bots (
   brand_name TEXT NOT NULL,
   welcome_text TEXT,
   support_username TEXT,
+  telegram_ui_json TEXT NOT NULL DEFAULT '{}',
   card_holder TEXT NOT NULL,
   card_number TEXT NOT NULL,
   bank_name TEXT NOT NULL,
@@ -2336,6 +2350,7 @@ async function ensureDbInternal(env) {
       ["payment_wallet_enabled", "INTEGER NOT NULL DEFAULT 1"],
       ["payment_method_order", "TEXT NOT NULL DEFAULT 'card,blupal,wallet'"],
       ["payment_default_method", "TEXT NOT NULL DEFAULT 'card'"],
+      ["telegram_ui_json", "TEXT NOT NULL DEFAULT '{}'"],
     ],
     reseller_usage_events: [
       ["parent_bot_id", "TEXT"],
@@ -2925,6 +2940,7 @@ function adminSettings(settings) {
     plisio_last_verified_at: settings.plisio_last_verified_at || "",
     plisio_last_error: settings.plisio_last_error || "",
     support_username: settings.support_username || "",
+    telegram_ui: normalizeTelegramUiConfig(settings),
     blupal_base_url: settings.blupal_base_url || "https://blupal.net/api",
     blupal_card_number: settings.blupal_card_number || "",
     payment_poll_enabled: settings.payment_poll_enabled === "true",
@@ -3545,6 +3561,225 @@ async function decryptSecret(value, env) {
 }
 
 
+const TELEGRAM_BUTTON_STYLES = Object.freeze(new Set(["primary", "success", "danger"]));
+const TELEGRAM_UI_DEFAULT = Object.freeze({
+  premium_emoji_enabled: false,
+  style_mode: "default",
+  style_rules: Object.freeze([]),
+  emoji_map: Object.freeze({})
+});
+
+function telegramUiStyleValue(value, allowDefault = false) {
+  const raw = String(value || "").trim().toLowerCase();
+  const aliases = {
+    blue: "primary", "آبی": "primary", primary: "primary",
+    green: "success", "سبز": "success", success: "success",
+    red: "danger", "قرمز": "danger", danger: "danger",
+    normal: "default", default: "default", "معمولی": "default", "پیش فرض": "default", "پیش‌فرض": "default"
+  };
+  const normalized = aliases[raw] || raw;
+  if (TELEGRAM_BUTTON_STYLES.has(normalized)) return normalized;
+  return allowDefault && normalized === "default" ? "default" : "";
+}
+
+function normalizeTelegramUiConfig(source = {}) {
+  let raw = source;
+  if (source && typeof source === "object" && !Array.isArray(source)) {
+    if (source.telegram_ui && typeof source.telegram_ui === "object") raw = source.telegram_ui;
+    else if (Object.prototype.hasOwnProperty.call(source, "telegram_ui_json")) raw = source.telegram_ui_json;
+  }
+  if (typeof raw === "string") {
+    try { raw = JSON.parse(raw || "{}"); } catch (_) { raw = {}; }
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) raw = {};
+  const requestedMode = String(raw.style_mode || "").trim().toLowerCase();
+  const mode = requestedMode === "smart" ? "smart" : (telegramUiStyleValue(requestedMode, true) || "default");
+  const rules = [];
+  for (const item of Array.isArray(raw.style_rules) ? raw.style_rules : []) {
+    const match = String(item?.match || "").replace(/\s+/g, " ").trim().slice(0, 80);
+    const style = telegramUiStyleValue(item?.style, true);
+    if (match && style && rules.length < 80) rules.push({ match, style });
+  }
+  const emojiMap = {};
+  const entries = raw.emoji_map && typeof raw.emoji_map === "object" && !Array.isArray(raw.emoji_map)
+    ? Object.entries(raw.emoji_map) : [];
+  for (const [key, value] of entries) {
+    const name = String(key || "").replace(/\s+/g, " ").trim().slice(0, 80);
+    const emojiId = String(value || "").trim();
+    if (name && /^\d{5,30}$/.test(emojiId) && Object.keys(emojiMap).length < 120) emojiMap[name] = emojiId;
+  }
+  return {
+    premium_emoji_enabled: raw.premium_emoji_enabled === true || Number(raw.premium_emoji_enabled || 0) === 1 || String(raw.premium_emoji_enabled).toLowerCase() === "true",
+    style_mode: mode,
+    style_rules: rules,
+    emoji_map: emojiMap
+  };
+}
+
+function telegramUiParseStyleRulesText(value) {
+  const rules = [];
+  for (const line of String(value || "").split(/\r?\n/)) {
+    const text = line.trim();
+    if (!text || text.startsWith("#")) continue;
+    const match = text.match(/^(.+?)\s*(?:=|:|→|=>)\s*([^=:\s]+)\s*$/);
+    if (!match) continue;
+    const phrase = match[1].replace(/\s+/g, " ").trim().slice(0, 80);
+    const style = telegramUiStyleValue(match[2], true);
+    if (phrase && style && rules.length < 80) rules.push({ match: phrase, style });
+  }
+  return rules;
+}
+
+function telegramUiParseEmojiMapText(value) {
+  const map = {};
+  for (const line of String(value || "").split(/\r?\n/)) {
+    const text = line.trim();
+    if (!text || text.startsWith("#")) continue;
+    const match = text.match(/^(.+?)\s*(?:=|:|→|=>)\s*(\d{5,30})\s*$/);
+    if (!match) continue;
+    const phrase = match[1].replace(/\s+/g, " ").trim().slice(0, 80);
+    if (phrase && Object.keys(map).length < 120) map[phrase] = match[2];
+  }
+  return map;
+}
+
+function telegramUiConfigFromInput(input = {}, currentSource = {}) {
+  const current = normalizeTelegramUiConfig(currentSource);
+  const modeInput = input.telegram_style_mode ?? input.style_mode;
+  const rulesInput = input.telegram_style_rules_text ?? input.style_rules_text;
+  const emojiInput = input.telegram_emoji_map_text ?? input.emoji_map_text;
+  const premiumInput = input.telegram_premium_emoji_enabled ?? input.premium_emoji_enabled;
+  return normalizeTelegramUiConfig({
+    premium_emoji_enabled: premiumInput === undefined ? current.premium_emoji_enabled : premiumInput,
+    style_mode: modeInput === undefined ? current.style_mode : modeInput,
+    style_rules: rulesInput === undefined ? current.style_rules : telegramUiParseStyleRulesText(rulesInput),
+    emoji_map: emojiInput === undefined ? current.emoji_map : telegramUiParseEmojiMapText(emojiInput)
+  });
+}
+
+function telegramUiConfigRulesText(source = {}) {
+  return normalizeTelegramUiConfig(source).style_rules.map(item => item.match + "=" + item.style).join("\n");
+}
+
+function telegramUiConfigEmojiText(source = {}) {
+  return Object.entries(normalizeTelegramUiConfig(source).emoji_map).map(([key, value]) => key + "=" + value).join("\n");
+}
+
+function telegramUiNormalizeMatchText(value) {
+  return String(value || "")
+    .replace(/[\u200c\u200e\u200f\u061c\ufe0f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function telegramUiSmartStyle(text) {
+  const value = telegramUiNormalizeMatchText(text);
+  if (!value) return "";
+  if (/(حذف|پاک|رد سفارش|رد درخواست|مسدود|توقف|غیرفعال|لغو|باطل|خروج|بستن|منقضی|قطع اتصال)/.test(value)) return "danger";
+  if (/(تأیید|تایید|خرید|پرداخت|شارژ|ثبت|ذخیره|ساخت|افزایش|تمدید|فعال کردن|فعال‌کردن|تحویل|ارسال|تسویه|اتصال)/.test(value)) return "success";
+  if (/(مدیریت|تنظیمات|گزارش|آمار|کیف پول|پنل|سرویس|ربات|منوی اصلی|خانه|بروزرسانی|به روزرسانی|ورود|مشاهده)/.test(value)) return "primary";
+  return "";
+}
+
+function telegramUiResolveButtonStyle(text, configSource = {}) {
+  const config = normalizeTelegramUiConfig(configSource);
+  const normalized = telegramUiNormalizeMatchText(text);
+  for (const rule of config.style_rules) {
+    const needle = telegramUiNormalizeMatchText(rule.match);
+    if (needle && normalized.includes(needle)) return rule.style === "default" ? "" : rule.style;
+  }
+  if (TELEGRAM_BUTTON_STYLES.has(config.style_mode)) return config.style_mode;
+  return config.style_mode === "smart" ? telegramUiSmartStyle(text) : "";
+}
+
+function telegramUiEmojiMatch(text, configSource = {}) {
+  const config = normalizeTelegramUiConfig(configSource);
+  if (!config.premium_emoji_enabled) return null;
+  const original = String(text || "");
+  const normalized = telegramUiNormalizeMatchText(original);
+  const entries = Object.entries(config.emoji_map).sort((a, b) => b[0].length - a[0].length);
+  const prefixless = original.replace(/^[\s\u200e\u200f\u061c]*/, "");
+  for (const [key, emojiId] of entries) {
+    const keyNormalized = telegramUiNormalizeMatchText(key);
+    if (keyNormalized && prefixless.startsWith(key)) return { key, emojiId, isPrefix: true };
+  }
+  for (const [key, emojiId] of entries) {
+    const keyNormalized = telegramUiNormalizeMatchText(key);
+    if (!keyNormalized) continue;
+    if (normalized === keyNormalized || normalized.includes(keyNormalized)) return { key, emojiId, isPrefix: false };
+  }
+  return null;
+}
+
+function telegramUiDecorateButton(button, configSource = {}) {
+  const out = typeof button === "string" ? { text: button } : { ...(button || {}) };
+  const originalText = String(out.text || "");
+  if (!out.style) {
+    const style = telegramUiResolveButtonStyle(originalText, configSource);
+    if (style) out.style = style;
+  }
+  if (!out.icon_custom_emoji_id) {
+    const emoji = telegramUiEmojiMatch(originalText, configSource);
+    if (emoji) {
+      out.icon_custom_emoji_id = emoji.emojiId;
+      if (emoji.isPrefix) {
+        const leading = originalText.match(/^[\s\u200e\u200f\u061c]*/)?.[0] || "";
+        let rest = originalText.slice(leading.length + emoji.key.length).replace(/^[\ufe0f\u200c\u200d\s]+/, "");
+        if (rest) out.text = rest;
+      }
+    }
+  }
+  return out;
+}
+
+function telegramUiDecorateReplyMarkup(markup, configSource = {}) {
+  if (!markup || typeof markup !== "object") return markup;
+  const out = { ...markup };
+  if (Array.isArray(markup.inline_keyboard)) {
+    out.inline_keyboard = markup.inline_keyboard.map(row => Array.isArray(row) ? row.map(button => telegramUiDecorateButton(button, configSource)) : row);
+  }
+  if (Array.isArray(markup.keyboard)) {
+    out.keyboard = markup.keyboard.map(row => Array.isArray(row) ? row.map(button => telegramUiDecorateButton(button, configSource)) : row);
+  }
+  return out;
+}
+
+function telegramUiMarkupModernFields(markup) {
+  let emoji = false, style = false;
+  for (const key of ["inline_keyboard", "keyboard"]) {
+    for (const row of Array.isArray(markup?.[key]) ? markup[key] : []) {
+      for (const button of Array.isArray(row) ? row : []) {
+        if (button && typeof button === "object") {
+          if (button.icon_custom_emoji_id) emoji = true;
+          if (button.style) style = true;
+        }
+      }
+    }
+  }
+  return { emoji, style };
+}
+
+function telegramUiStripModernFields(markup, options = {}) {
+  if (!markup || typeof markup !== "object") return markup;
+  const out = { ...markup };
+  for (const key of ["inline_keyboard", "keyboard"]) {
+    if (!Array.isArray(markup[key])) continue;
+    out[key] = markup[key].map(row => Array.isArray(row) ? row.map(button => {
+      if (!button || typeof button !== "object") return button;
+      const next = { ...button };
+      if (options.emoji) delete next.icon_custom_emoji_id;
+      if (options.style) delete next.style;
+      return next;
+    }) : row);
+  }
+  return out;
+}
+
+function telegramUiModernFieldError(error) {
+  return /(icon_custom_emoji_id|custom emoji|custom_emoji|button_style|style of the button|BUTTON_STYLE|BUTTON_TYPE_INVALID|can't use.*emoji|cannot use.*emoji|not allowed.*emoji|premium.*emoji)/i.test(String(error?.message || error || ""));
+}
+
 let telegramReplyRouteSchemaReady = false;
 
 async function ensureTelegramReplyRouteSchema(env) {
@@ -3582,7 +3817,7 @@ function telegramReplyButtonText(value, fallback, seen) {
   return text;
 }
 
-function telegramReplyKeyboardPlan(inlineKeyboard) {
+function telegramReplyKeyboardPlan(inlineKeyboard, uiConfig = {}) {
   const rows = [];
   const routes = [];
   const seen = new Set();
@@ -3591,19 +3826,24 @@ function telegramReplyKeyboardPlan(inlineKeyboard) {
     const row = [];
     for (const button of Array.isArray(sourceRow) ? sourceRow : []) {
       ordinal += 1;
-      const text = telegramReplyButtonText(button?.text, "گزینه " + ordinal, seen);
-      if (button?.web_app?.url) {
-        row.push({ text, web_app: { url: String(button.web_app.url) } });
+      const styledButton = telegramUiDecorateButton(button, uiConfig);
+      const text = telegramReplyButtonText(styledButton?.text, "گزینه " + ordinal, seen);
+      const replyButton = { text };
+      if (styledButton?.icon_custom_emoji_id) replyButton.icon_custom_emoji_id = String(styledButton.icon_custom_emoji_id);
+      if (styledButton?.style) replyButton.style = String(styledButton.style);
+      if (styledButton?.web_app?.url) {
+        replyButton.web_app = { url: String(styledButton.web_app.url) };
+        row.push(replyButton);
         continue;
       }
-      row.push({ text });
+      row.push(replyButton);
       let action = null;
-      if (button?.callback_data) action = { kind: "callback", data: String(button.callback_data) };
-      else if (button?.url) action = { kind: "url", value: String(button.url) };
-      else if (button?.copy_text?.text != null) action = { kind: "copy", value: String(button.copy_text.text) };
-      else if (button?.switch_inline_query != null) action = { kind: "text", value: String(button.switch_inline_query || "") };
-      else if (button?.switch_inline_query_current_chat != null) action = { kind: "text", value: String(button.switch_inline_query_current_chat || "") };
-      else if (button?.login_url?.url) action = { kind: "url", value: String(button.login_url.url) };
+      if (styledButton?.callback_data) action = { kind: "callback", data: String(styledButton.callback_data) };
+      else if (styledButton?.url) action = { kind: "url", value: String(styledButton.url) };
+      else if (styledButton?.copy_text?.text != null) action = { kind: "copy", value: String(styledButton.copy_text.text) };
+      else if (styledButton?.switch_inline_query != null) action = { kind: "text", value: String(styledButton.switch_inline_query || "") };
+      else if (styledButton?.switch_inline_query_current_chat != null) action = { kind: "text", value: String(styledButton.switch_inline_query_current_chat || "") };
+      else if (styledButton?.login_url?.url) action = { kind: "url", value: String(styledButton.login_url.url) };
       if (action) routes.push({ text, action });
     }
     if (row.length) rows.push(row);
@@ -3695,8 +3935,10 @@ function telegramUiFallbackMessagePayload(payload, replyMarkup = undefined) {
   return fallback;
 }
 
-async function telegramUiApi(env, botScope, token, method, body) {
+async function telegramUiApi(env, botScope, token, method, body, uiSource = {}) {
+  const uiConfig = normalizeTelegramUiConfig(uiSource);
   const payload = { ...(body || {}) };
+  if (payload.reply_markup) payload.reply_markup = telegramUiDecorateReplyMarkup(payload.reply_markup, uiConfig);
   if (method === "answerCallbackQuery" && String(payload.callback_query_id || "").startsWith("reply-keyboard-")) {
     return { ok: true, result: true };
   }
@@ -3728,7 +3970,7 @@ async function telegramUiApi(env, botScope, token, method, body) {
     return telegramApiWithToken(token, method, payload);
   }
 
-  const plan = telegramReplyKeyboardPlan(inlineKeyboard);
+  const plan = telegramReplyKeyboardPlan(inlineKeyboard, uiConfig);
   if (!plan.markup.keyboard.length) {
     if (chatId != null) await telegramReplaceReplyRoutes(env, botScope, chatId, [], null);
     const without = { ...payload };
@@ -3786,7 +4028,7 @@ async function telegramUiApi(env, botScope, token, method, body) {
 async function telegramApi(env, method, body) {
   const settings = await getSettings(env);
   if (!settings.bot_token) throw new Error("توکن ربات در پنل مدیریت تنظیم نشده است");
-  return telegramUiApi(env, "central", settings.bot_token, method, body);
+  return telegramUiApi(env, "central", settings.bot_token, method, body, settings);
 }
 
 async function notifyTelegramUser(env, telegramId, text) {
@@ -9137,14 +9379,38 @@ function botSupportUrl(settings) {
 
 async function telegramApiWithToken(token, method, body) {
   if (!token) throw new Error("توکن ربات تنظیم نشده است");
-  const response = await fetch("https://api.telegram.org/bot" + token + "/" + method, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body || {})
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || data.ok === false) throw new Error(data.description || "Telegram API error");
-  return data;
+  const send = async payload => {
+    const response = await fetch("https://api.telegram.org/bot" + token + "/" + method, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload || {})
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.ok === false) {
+      const error = new Error(data.description || "Telegram API error");
+      error.telegram_error_code = data.error_code || response.status;
+      throw error;
+    }
+    return data;
+  };
+  const payload = body || {};
+  try {
+    return await send(payload);
+  } catch (error) {
+    const modern = telegramUiMarkupModernFields(payload?.reply_markup);
+    if ((!modern.emoji && !modern.style) || !telegramUiModernFieldError(error)) throw error;
+    let retryPayload = payload;
+    let lastError = error;
+    if (modern.emoji) {
+      retryPayload = { ...retryPayload, reply_markup: telegramUiStripModernFields(retryPayload.reply_markup, { emoji: true }) };
+      try { return await send(retryPayload); } catch (nextError) { lastError = nextError; }
+    }
+    if (modern.style) {
+      retryPayload = { ...retryPayload, reply_markup: telegramUiStripModernFields(retryPayload.reply_markup, { emoji: true, style: true }) };
+      try { return await send(retryPayload); } catch (nextError) { lastError = nextError; }
+    }
+    throw lastError;
+  }
 }
 
 
@@ -10624,7 +10890,7 @@ async function replaceResellerBotToken(env, bot, rawToken, options = {}) {
 }
 
 async function resellerTelegramApi(env, bot, method, body) {
-  return telegramUiApi(env, "reseller:" + String(bot.id), await resellerBotToken(env, bot), method, body);
+  return telegramUiApi(env, "reseller:" + String(bot.id), await resellerBotToken(env, bot), method, body, bot);
 }
 
 async function configureResellerBot(env, bot, origin = "") {
@@ -16301,15 +16567,18 @@ async function centralAdminAction(request, env) {
       });
     }
     if (action === "save_service_settings") {
+      const currentSettings = await getSettings(env);
+      const telegramUi = telegramUiConfigFromInput(body, currentSettings);
       const values={
         brand_name:cleanText(body.brand_name,120)||"BluePanel",
         support_username:cleanText(body.support_username,160),
         central_trial_enabled:body.central_trial_enabled?"true":"false",
         central_trial_data_limit_bytes:String(clampInt(body.central_trial_data_limit_mb||1024,1,1048576)*1048576),
         central_trial_duration_hours:String(clampInt(body.central_trial_duration_hours||24,1,720)),
-        central_recharge_bonus_percent:String(Math.max(0,Math.min(100,Number(body.central_recharge_bonus_percent||0))))
+        central_recharge_bonus_percent:String(Math.max(0,Math.min(100,Number(body.central_recharge_bonus_percent||0)))),
+        telegram_ui_json:JSON.stringify(telegramUi)
       };
-      await setSettings(env,values);await audit(env,auth.user.id,"central_service_settings_updated",values);return json({success:true,message:"تنظیمات خدمات مرکزی ذخیره شد"});
+      await setSettings(env,values);await audit(env,auth.user.id,"central_service_settings_updated",{...values,telegram_ui:telegramUi});return json({success:true,message:"تنظیمات خدمات مرکزی و ظاهر کلیدها ذخیره شد"});
     }
     if (action === "save_channels") {
       const channels=parseJoinChannels(Array.isArray(body.channels)?body.channels:[]);const enabled=Boolean(body.enabled&&channels.length);
