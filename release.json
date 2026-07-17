@@ -1,7 +1,7 @@
 {
-  "version": "3.3.36",
-  "release_id": "3.3.36-reseller-dashboard-ambiguous-upstream-debt-fix",
-  "architecture": "fully-split-three-worker-dual-panel-cascading-ledger-native-reply-keyboard",
+  "version": "3.3.37",
+  "release_id": "3.3.37-backup-invocation-isolation",
+  "architecture": "fully-split-three-worker-backup-job-isolation",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -9,42 +9,55 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "reseller master dashboard debt summary now qualifies shared_backend_accounts.upstream_unpaid_toman with alias a",
-    "the dashboard bootstrap no longer fails after successful reseller-panel authentication with SQLITE_ERROR ambiguous column name",
-    "all previous union ordering, dual-panel, location catalog and cascading billing capabilities are preserved",
+    "automatic backups are limited to one reseller per scheduled invocation and are executed through Edge",
+    "manual backup-all requests are queued in Processor and one backup job receives an isolated invocation",
+    "backup status and error report messages are deferred to the normal outbox so the file upload invocation stays below Cloudflare subrequest limits",
+    "failed automatic backups wait 30 minutes before retrying and queued manual backups use at least five minutes of backoff",
+    "duplicate pending manual backup jobs for the same bot are deduplicated",
+    "all previous dashboard, union ordering, location catalog and cascading billing fixes are preserved",
     "README files are excluded"
   ],
   "deployment": {
     "automatic_provisioning": "upload ZIP through the central bot",
-    "db_schema_revision": "3.3.33-location-category-column"
+    "db_schema_revision": "3.3.33-location-category-column",
+    "required_bindings": [
+      "Core: PROCESSOR_WORKER",
+      "Processor: EDGE_WORKER and CORE_WORKER",
+      "Edge: CORE_WORKER"
+    ]
   },
   "validation": {
     "worker_syntax": "passed: core, edge, processor",
-    "sqlite_ambiguity_regression": "passed: original query reproduces ambiguity; qualified query returns shared-account debt correctly",
-    "zip_integrity": "passed: archive test succeeded and no README file is included",
+    "backup_isolation_static_regression": "passed: one automatic backup per scheduled invocation; one queued manual backup per heavy queue invocation",
+    "backup_retry_static_regression": "passed: 30-minute auto retry cooldown, 5-minute queue backoff, terminal failure after five queued attempts",
+    "backup_report_deferral": "passed: backup report events remain in outbox for later delivery",
+    "zip_integrity": "passed: archive test succeeded; exact six-file layout; no README",
     "live_api": "not run; requires production Cloudflare, D1 and Telegram credentials"
   },
   "limitations": [
-    "Bots with invalid/revoked tokens remain in error state and cannot be updated until their token is corrected."
+    "Bots with invalid or revoked Telegram tokens cannot deliver backup files until their token is corrected.",
+    "Manual group backups are asynchronous and are processed one by one to protect the Worker invocation limit."
   ],
-  "title": "رفع خطای D1 ورود پنل نمایندگی",
-  "summary": "ستون بدهی بالادست در کوئری خلاصه حسابداری مستر با نام جدول مشخص شد تا پس از ورود، داشبورد نمایندگی بدون خطای ambiguous column name بارگذاری شود.",
+  "title": "رفع Too many subrequests در بکاپ ربات‌ها",
+  "summary": "بکاپ‌ها از اجرای شلوغ Cron جدا شدند: در هر Invocation فقط یک فایل بکاپ ساخته و ارسال می‌شود و بکاپ گروهی نیز از طریق صف Processor به‌صورت مرحله‌ای اجرا می‌شود.",
   "changes": [
-    "تغییر SUM(upstream_unpaid_toman) به SUM(a.upstream_unpaid_toman) در کوئری downlineSummary.",
-    "حذف ابهام بین ستون هم‌نام در shared_backend_accounts و reseller_bots.",
-    "افزایش نسخه سه Worker و رابط‌های کش‌شده به 3.3.36.",
-    "حفظ ساختار دیتابیس و عدم نیاز به migration جدید."
+    "افزودن مسیر داخلی امن /__bluepanel/service/reseller-backup در Edge Worker.",
+    "اجرای حداکثر یک بکاپ خودکار در هر اجرای زمان‌بندی‌شده و توقف سایر کارهای سنگین همان Invocation.",
+    "انتقال پشتیبان‌گیری گروهی Core به صف Processor و پردازش یک فایل در هر Invocation.",
+    "جلوگیری از ارسال فوری پیام‌های گزارش بکاپ در همان Invocation و واگذاری آن‌ها به Outbox.",
+    "افزودن جلوگیری از صف تکراری، Backoff و توقف تلاش پس از پنج خطای متوالی برای کارهای بکاپ دستی.",
+    "عدم نیاز به Migration جدید دیتابیس."
   ],
   "sha256": {
-    "core/worker.js": "242003aeb741d152c7bb5d913fdc9ab4b133f9dab572cdaf9302e8a3f9451aab",
-    "edge/worker.js": "c58bf66fa1b1a26022d42a30287268f07212463db9a520625bf6ac0db30c3232",
-    "processor/worker.js": "7be65b18fd227d2df89f942ae09dacd3891df03eadb0613c2a853da5de2a6a83",
+    "core/worker.js": "a452e07ac9328f7e06c30ea915c5f5fe118f779aa1a4d789ecf14138370b81b8",
+    "edge/worker.js": "6d68d1fd4ba825815b0969a5b9b8e094cc1659f38ac7c59a1817fa47b419bd14",
+    "processor/worker.js": "bd10b98a0317dd555e3e5f6dd4a5d0c0a8601e4d72db57941b35b1d255a736ae",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "242003aeb741d152c7bb5d913fdc9ab4b133f9dab572cdaf9302e8a3f9451aab",
-    "edge/worker.js": "c58bf66fa1b1a26022d42a30287268f07212463db9a520625bf6ac0db30c3232",
-    "processor/worker.js": "7be65b18fd227d2df89f942ae09dacd3891df03eadb0613c2a853da5de2a6a83",
+    "core/worker.js": "a452e07ac9328f7e06c30ea915c5f5fe118f779aa1a4d789ecf14138370b81b8",
+    "edge/worker.js": "6d68d1fd4ba825815b0969a5b9b8e094cc1659f38ac7c59a1817fa47b419bd14",
+    "processor/worker.js": "bd10b98a0317dd555e3e5f6dd4a5d0c0a8601e4d72db57941b35b1d255a736ae",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }

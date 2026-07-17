@@ -1,11 +1,11 @@
 /* BLUEPANEL_PROCESSOR_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.36
+ * Version: 3.3.37
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = '3.3.36';
+const APP_VERSION = '3.3.37';
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
@@ -2712,20 +2712,56 @@ async function createResellerSnapshot(env, bot, actorTelegramId = "system", snap
   }
 }
 
-async function processResellerAutoBackups(env, limit = 50) {
+async function dispatchResellerSnapshotToEdge(env, botId, actorTelegramId = "system", snapshotType = "auto") {
+  if (!env.EDGE_WORKER || typeof env.EDGE_WORKER.fetch !== "function") {
+    throw new Error("EDGE_WORKER برای اجرای مستقل بکاپ متصل نیست");
+  }
+  const response = await env.EDGE_WORKER.fetch(new Request("https://bluepanel-edge.internal/__bluepanel/service/reseller-backup", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "accept": "application/json",
+      "x-bluepanel-service-hop": "processor-to-edge-backup"
+    },
+    body: JSON.stringify({
+      bot_id: String(botId || ""),
+      actor_telegram_id: String(actorTelegramId || "system"),
+      snapshot_type: snapshotType === "manual" ? "manual" : "auto"
+    })
+  }));
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.success === false) {
+    throw new Error(data?.error || ("Edge backup HTTP " + response.status));
+  }
+  return data;
+}
+
+async function processResellerAutoBackups(env, limit = 1) {
   const now = new Date();
   const dateKey = now.toISOString().slice(0,10);
   const hour = now.getUTCHours();
-  const rows = await env.PASARGUARD_DB.prepare(`SELECT * FROM reseller_bots
+  const retryCutoff = new Date(Date.now()-30*60*1000).toISOString();
+  const row = await env.PASARGUARD_DB.prepare(`SELECT id,last_backup_at FROM reseller_bots
     WHERE status='active' AND COALESCE(auto_backup_enabled,1)=1 AND COALESCE(backup_hour_utc,2)<=?
-      AND (last_backup_at IS NULL OR substr(last_backup_at,1,10)<>?) ORDER BY updated_at LIMIT ?`)
-    .bind(hour,dateKey,Math.max(1,Math.min(200,Number(limit||50)))).all();
-  let success=0, failed=0;
-  for (const bot of rows.results || []) {
-    try { await createResellerSnapshot(env,bot,"system","auto"); success += 1; }
-    catch (_) { failed += 1; }
+      AND (last_backup_at IS NULL OR substr(last_backup_at,1,10)<>?)
+      AND (COALESCE(last_backup_status,'')<>'failed' OR updated_at<=?)
+    ORDER BY updated_at LIMIT 1`)
+    .bind(hour,dateKey,retryCutoff).first();
+  if (!row?.id) return { checked:0, success:0, failed:0, skipped:0, isolated:true };
+  try {
+    if (env.EDGE_WORKER && typeof env.EDGE_WORKER.fetch === "function") {
+      const result = await dispatchResellerSnapshotToEdge(env,row.id,"system","auto");
+      return { checked:1, success:result?.skipped?0:1, failed:0, skipped:result?.skipped?1:0, isolated:true };
+    }
+    const bot = await getResellerBotById(env,row.id);
+    if (!bot) throw new Error("ربات نماینده پیدا نشد");
+    await createResellerSnapshot(env,bot,"system","auto");
+    return { checked:1, success:1, failed:0, skipped:0, isolated:false };
+  } catch (error) {
+    const message=cleanText(error?.message||error,500),ts=nowIso();
+    try{await env.PASARGUARD_DB.prepare("UPDATE reseller_bots SET last_backup_status='failed',last_backup_error=?,updated_at=? WHERE id=?").bind(message,ts,row.id).run();}catch(_){}
+    return { checked:1, success:0, failed:1, skipped:0, isolated:Boolean(env.EDGE_WORKER), error:message };
   }
-  return { success, failed };
 }
 
 async function runResellerHealthCheck(env, bot) {
@@ -2995,7 +3031,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_PROCESSOR_VERSION='3.3.19';
+const BLUEPANEL_PROCESSOR_VERSION='3.3.37';
 let processorSchemaPromise=null;
 function processorJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 
@@ -3254,9 +3290,43 @@ async function ensureProcessorDb(env){if(!env.PROCESSOR_DB)throw new Error('PROC
  'CREATE TABLE IF NOT EXISTS processor_metrics (id INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL,status INTEGER NOT NULL DEFAULT 0,duration_ms INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL)'
 ])await env.PROCESSOR_DB.prepare(sql).run();return true})().catch(e=>{processorSchemaPromise=null;throw e});return processorSchemaPromise}
 function processorId(){const b=crypto.getRandomValues(new Uint8Array(18));return 'job_'+btoa(String.fromCharCode(...b)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
-async function processorQueue(request,env){await ensureProcessorDb(env);const b=await request.json();const id=processorId(),ts=nowIso();await env.PROCESSOR_DB.prepare("INSERT INTO processor_jobs(id,method,path_query,headers_json,body_text,status,attempts,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,'pending',0,?,?,?)").bind(id,String(b.method||'POST'),String(b.path_query||'/'),JSON.stringify(b.headers||{}),String(b.body_text||''),ts,ts,ts).run();return processorJson({success:true,queued:true,id})}
-async function processorDeliver(env,id){const row=await env.PROCESSOR_DB.prepare('SELECT * FROM processor_jobs WHERE id=?').bind(id).first();if(!row||row.status!=='pending')return{skipped:true};if(!env.EDGE_WORKER||typeof env.EDGE_WORKER.fetch!=='function')throw new Error('EDGE_WORKER متصل نیست');const headers=new Headers(JSON.parse(row.headers_json||'{}'));headers.set('x-bluepanel-service-hop','processor-to-edge');const r=await env.EDGE_WORKER.fetch(new Request('https://bluepanel-edge.internal'+row.path_query,{method:row.method,headers,body:['GET','HEAD'].includes(row.method)?undefined:row.body_text}));if(r.ok){await env.PROCESSOR_DB.prepare("UPDATE processor_jobs SET status='delivered',updated_at=? WHERE id=?").bind(nowIso(),id).run();return{delivered:true}}const attempts=Number(row.attempts||0)+1,next=new Date(Date.now()+Math.min(3600000,1000*Math.pow(2,Math.min(attempts,10)))).toISOString();await env.PROCESSOR_DB.prepare("UPDATE processor_jobs SET attempts=?,next_attempt_at=?,last_error=?,updated_at=? WHERE id=?").bind(attempts,next,'HTTP '+r.status,nowIso(),id).run();return{delivered:false}}
-async function processorRunQueue(env,limit=12){await ensureProcessorDb(env);const rows=await env.PROCESSOR_DB.prepare("SELECT id FROM processor_jobs WHERE status='pending' AND next_attempt_at<=? ORDER BY created_at LIMIT ?").bind(nowIso(),Math.max(1,Math.min(24,Number(limit||12)))).all();let delivered=0,failed=0;for(let i=0;i<(rows.results||[]).length;i+=4){const results=await Promise.all((rows.results||[]).slice(i,i+4).map(async x=>{try{return await processorDeliver(env,x.id)}catch(e){failed++;return null}}));for(const r of results)if(r?.delivered)delivered++;}return{checked:(rows.results||[]).length,delivered,failed}}
+async function processorQueue(request,env){await ensureProcessorDb(env);const b=await request.json(),method=String(b.method||'POST'),pathQuery=String(b.path_query||'/'),headersJson=JSON.stringify(b.headers||{}),bodyText=String(b.body_text||'');if(pathQuery==='/__bluepanel/service/reseller-backup'){const existing=await env.PROCESSOR_DB.prepare("SELECT id FROM processor_jobs WHERE status='pending' AND path_query=? AND body_text=? LIMIT 1").bind(pathQuery,bodyText).first();if(existing?.id)return processorJson({success:true,queued:true,deduplicated:true,id:existing.id})}const id=processorId(),ts=nowIso();await env.PROCESSOR_DB.prepare("INSERT INTO processor_jobs(id,method,path_query,headers_json,body_text,status,attempts,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,'pending',0,?,?,?)").bind(id,method,pathQuery,headersJson,bodyText,ts,ts,ts).run();return processorJson({success:true,queued:true,id})}
+async function processorDeliver(env,id){
+  const row=await env.PROCESSOR_DB.prepare('SELECT * FROM processor_jobs WHERE id=?').bind(id).first();
+  if(!row||row.status!=='pending')return{skipped:true};
+  const isBackup=String(row.path_query||'')==='/__bluepanel/service/reseller-backup';
+  const fail=async message=>{
+    const attempts=Number(row.attempts||0)+1,ts=nowIso(),errorText=cleanText(message||'delivery failed',500);
+    if(isBackup&&attempts>=5){
+      await env.PROCESSOR_DB.prepare("UPDATE processor_jobs SET status='failed',attempts=?,last_error=?,updated_at=? WHERE id=?")
+        .bind(attempts,errorText,ts,id).run();
+      return{delivered:false,heavy:true,terminal:true,attempts,error:errorText};
+    }
+    const baseDelay=Math.min(3600000,1000*Math.pow(2,Math.min(attempts,10)));
+    const delay=isBackup?Math.max(300000,baseDelay):baseDelay;
+    const next=new Date(Date.now()+delay).toISOString();
+    await env.PROCESSOR_DB.prepare("UPDATE processor_jobs SET attempts=?,next_attempt_at=?,last_error=?,updated_at=? WHERE id=?")
+      .bind(attempts,next,errorText,ts,id).run();
+    return{delivered:false,heavy:isBackup,attempts,error:errorText};
+  };
+  if(!env.EDGE_WORKER||typeof env.EDGE_WORKER.fetch!=='function')return fail('EDGE_WORKER متصل نیست');
+  try{
+    const headers=new Headers(JSON.parse(row.headers_json||'{}'));
+    headers.set('x-bluepanel-service-hop',isBackup?'processor-to-edge-backup':'processor-to-edge');
+    const response=await env.EDGE_WORKER.fetch(new Request('https://bluepanel-edge.internal'+row.path_query,{method:row.method,headers,body:['GET','HEAD'].includes(row.method)?undefined:row.body_text}));
+    if(response.ok){
+      await env.PROCESSOR_DB.prepare("UPDATE processor_jobs SET status='delivered',last_error=NULL,updated_at=? WHERE id=?").bind(nowIso(),id).run();
+      return{delivered:true,heavy:isBackup};
+    }
+    let detail='HTTP '+response.status;
+    try{const data=await response.json();if(data?.error)detail+=' · '+cleanText(data.error,350);}catch(_){}
+    return fail(detail);
+  }catch(error){
+    return fail(error?.message||error);
+  }
+}
+async function processorRunBackupQueue(env){await ensureProcessorDb(env);const backup=await env.PROCESSOR_DB.prepare("SELECT id FROM processor_jobs WHERE status='pending' AND next_attempt_at<=? AND path_query='/__bluepanel/service/reseller-backup' ORDER BY created_at LIMIT 1").bind(nowIso()).first();if(!backup?.id)return{checked:0,delivered:0,failed:0,heavy:false,kind:'backup'};try{const result=await processorDeliver(env,backup.id);return{checked:1,delivered:result?.delivered?1:0,failed:result?.delivered?0:1,heavy:true,kind:'backup'}}catch(e){return{checked:1,delivered:0,failed:1,heavy:true,kind:'backup',error:String(e?.message||e)}}}
+async function processorRunQueue(env,limit=12){await ensureProcessorDb(env);const rows=await env.PROCESSOR_DB.prepare("SELECT id FROM processor_jobs WHERE status='pending' AND next_attempt_at<=? AND path_query<>'/__bluepanel/service/reseller-backup' ORDER BY created_at LIMIT ?").bind(nowIso(),Math.max(1,Math.min(24,Number(limit||12)))).all();let delivered=0,failed=0;for(let i=0;i<(rows.results||[]).length;i+=4){const results=await Promise.all((rows.results||[]).slice(i,i+4).map(async x=>{try{return await processorDeliver(env,x.id)}catch(e){failed++;return null}}));for(const r of results)if(r?.delivered)delivered++;}return{checked:(rows.results||[]).length,delivered,failed,heavy:false}}
 function processorRuntimeBinding(env,name){const value=env?.[name];return{name,exact_key_present:Object.prototype.hasOwnProperty.call(env||{},name),value_present:value!==undefined&&value!==null,fetch_callable:Boolean(value&&typeof value.fetch==='function'),constructor_name:value?.constructor?.name||''}}
 async function processorLocalHealth(env){let db=false,error='';try{await ensureProcessorDb(env);await env.PROCESSOR_DB.prepare('SELECT 1 AS ok').first();db=true}catch(e){error=String(e?.message||e)}const coreBinding=processorRuntimeBinding(env,'CORE_WORKER'),edgeBinding=processorRuntimeBinding(env,'EDGE_WORKER');const coreDetected=coreBinding.fetch_callable,edgeDetected=edgeBinding.fetch_callable;let pending=0;try{pending=Number((await env.PROCESSOR_DB.prepare("SELECT COUNT(*) AS c FROM processor_jobs WHERE status='pending'").first())?.c||0)}catch(_){}return{ok:db,cluster_ready:db&&coreDetected&&edgeDetected,role:'bluepanel-processor',version:APP_VERSION,database_query_ok:db,binding_detected:true,core_binding_detected:coreDetected,edge_binding_detected:edgeDetected,core_ok:coreDetected,edge_ok:edgeDetected,core_probe:{binding_detected:coreDetected,healthy:coreDetected,mode:'runtime_binding_presence',detail:coreDetected?'CORE_WORKER در Runtime شناسایی شد':'CORE_WORKER در Runtime وجود ندارد',error:coreDetected?'':'CORE_WORKER متصل نیست'},edge_probe:{binding_detected:edgeDetected,healthy:edgeDetected,mode:'runtime_binding_presence',detail:edgeDetected?'EDGE_WORKER در Runtime شناسایی شد':'EDGE_WORKER در Runtime وجود ندارد',error:edgeDetected?'':'EDGE_WORKER متصل نیست'},runtime_bindings:{CORE_WORKER:coreBinding,EDGE_WORKER:edgeBinding},pending_jobs:pending,split_runtime:true,bundle:'processor',verification_mode:'cycle_safe_local',error}}
 async function processorProbePeer(binding,url,expectedRole,name){const started=Date.now();if(!binding||typeof binding.fetch!=='function')return{binding_detected:false,healthy:false,reachable:false,latency_ms:0,error:name+' متصل نیست'};try{const timeout=new Promise((_,reject)=>setTimeout(()=>reject(new Error('مهلت پاسخ تمام شد')),2500));const response=await Promise.race([binding.fetch(new Request(url,{headers:{'x-bluepanel-service-hop':'processor-public-health','accept':'application/json'}})),timeout]);const raw=await response.text();let data={};try{data=raw?JSON.parse(raw):{}}catch(_){return{binding_detected:true,healthy:false,reachable:true,http_status:response.status,latency_ms:Date.now()-started,error:'پاسخ JSON نیست'}}const healthy=response.ok&&data.role===expectedRole&&data.database_query_ok!==false;return{binding_detected:true,healthy,reachable:true,http_status:response.status,latency_ms:Date.now()-started,response_role:data.role||'',response_version:data.version||'',error:healthy?'':(data.error||'پاسخ ناسالم')}}catch(e){return{binding_detected:true,healthy:false,reachable:false,latency_ms:Date.now()-started,error:String(e?.message||e)}}}
@@ -3293,7 +3363,6 @@ async function runProcessorBusinessJobs(runtime, options = {}){
     if(options.skipUsage!==true)await safeStep("usage",()=>syncDownlineUsage(runtime,null,10));
     await safeStep("daily_reports",()=>processResellerDailyReports(runtime,5));
     await safeStep("central_report",()=>processCentralComprehensiveReport(runtime));
-    await safeStep("backups",()=>processResellerAutoBackups(runtime,5));
   }else if(phase===2){
     await safeStep("reseller_health",()=>processResellerScheduledHealth(runtime,5));
     await safeStep("license_notifications",()=>processResellerLicenseNotifications(runtime,10));
@@ -3321,6 +3390,6 @@ async function runProcessorBusinessJobs(runtime, options = {}){
 }
 
 export default {
- async fetch(request,env,ctx){const path=new URL(request.url).pathname.replace(/\/+$/,'')||'/';try{if(path==='/__bluepanel/service/queue'&&processorInternal(request)&&request.method==='POST')return processorQueue(request,env);if(path==='/__bluepanel/service/process'&&processorInternal(request)&&request.method==='POST'){const runtime=bluePanelRuntimeEnv(env,'bluepanel-processor');const queue=await processorRunQueue(env,12);const skipUsage=String(request.headers.get('x-bluepanel-live-usage-active')||'')==='true';const phaseHeader=request.headers.get('x-bluepanel-business-phase');const business=await runProcessorBusinessJobs(runtime,{skipUsage,phase:phaseHeader===null?undefined:Number(phaseHeader)});return processorJson({success:true,queue,business})}if((path==='/__bluepanel/service/processor-local-health'||path==='/__bluepanel/service/processor-health')&&processorInternal(request)){const h=await processorLocalHealth(env);return processorJson(h,h.ok?200:503,{'x-bluepanel-role':'bluepanel-processor','x-bluepanel-version':APP_VERSION})}if(path==='/health'){const h=await processorHealth(env);return processorJson(h,h.ok?200:503)}if(path==='/'&&request.method==='GET'){const h=await processorHealth(env);return new Response('<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{background:#07111f;color:#fff;font-family:Tahoma;padding:30px}.c{max-width:680px;margin:auto;background:#112944;padding:24px;border-radius:24px}.ok{color:#35d59a}.bad{color:#ff667b}</style><div class="c"><h1>BluePanel Processor</h1><p class="'+(h.ok?'ok':'bad')+'">'+(h.ok?'اتصال کامل برقرار است':'اتصال کامل نیست')+'</p><pre>'+JSON.stringify(h,null,2)+'</pre></div></html>',{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}})}return processorJson({success:false,error:'Not found'},404)}catch(error){console.error('processor fetch error',error);return processorJson({success:false,ok:false,role:'bluepanel-processor',version:APP_VERSION,error:String(error?.message||error),code:'PROCESSOR_RUNTIME_ERROR'},500)}},
- async scheduled(controller,env,ctx){ctx.waitUntil((async()=>{try{const runtime=bluePanelRuntimeEnv(env,'bluepanel-processor');await processorRunQueue(env,12);await runProcessorBusinessJobs(runtime);await env.PROCESSOR_DB.prepare("DELETE FROM processor_jobs WHERE status='delivered' AND updated_at<?").bind(new Date(Date.now()-86400000).toISOString()).run()}catch(error){console.error('processor scheduled error',error)}})())}
+ async fetch(request,env,ctx){const path=new URL(request.url).pathname.replace(/\/+$/,'')||'/';try{if(path==='/__bluepanel/service/queue'&&processorInternal(request)&&request.method==='POST')return processorQueue(request,env);if(path==='/__bluepanel/service/process'&&processorInternal(request)&&request.method==='POST'){const runtime=bluePanelRuntimeEnv(env,'bluepanel-processor');const skipUsage=String(request.headers.get('x-bluepanel-live-usage-active')||'')==='true';const phaseHeader=request.headers.get('x-bluepanel-business-phase');const phase=phaseHeader===null?processorBusinessPhase(4):Number(phaseHeader);let queue=await processorRunBackupQueue(env);if(!queue.heavy)queue=await processorRunQueue(env,12);const business=queue.heavy?{skipped:true,reason:'heavy_backup_queue_job'}:await runProcessorBusinessJobs(runtime,{skipUsage,phase});return processorJson({success:true,queue,business})}if((path==='/__bluepanel/service/processor-local-health'||path==='/__bluepanel/service/processor-health')&&processorInternal(request)){const h=await processorLocalHealth(env);return processorJson(h,h.ok?200:503,{'x-bluepanel-role':'bluepanel-processor','x-bluepanel-version':APP_VERSION})}if(path==='/health'){const h=await processorHealth(env);return processorJson(h,h.ok?200:503)}if(path==='/'&&request.method==='GET'){const h=await processorHealth(env);return new Response('<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{background:#07111f;color:#fff;font-family:Tahoma;padding:30px}.c{max-width:680px;margin:auto;background:#112944;padding:24px;border-radius:24px}.ok{color:#35d59a}.bad{color:#ff667b}</style><div class="c"><h1>BluePanel Processor</h1><p class="'+(h.ok?'ok':'bad')+'">'+(h.ok?'اتصال کامل برقرار است':'اتصال کامل نیست')+'</p><pre>'+JSON.stringify(h,null,2)+'</pre></div></html>',{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}})}return processorJson({success:false,error:'Not found'},404)}catch(error){console.error('processor fetch error',error);return processorJson({success:false,ok:false,role:'bluepanel-processor',version:APP_VERSION,error:String(error?.message||error),code:'PROCESSOR_RUNTIME_ERROR'},500)}},
+ async scheduled(controller,env,ctx){ctx.waitUntil((async()=>{try{const runtime=bluePanelRuntimeEnv(env,'bluepanel-processor'),phase=processorBusinessPhase(4);let queue=await processorRunBackupQueue(env);if(!queue.heavy){const autoBackup=await processResellerAutoBackups(runtime,1);if(Number(autoBackup?.checked||0)===0){queue=await processorRunQueue(env,12);await runProcessorBusinessJobs(runtime,{phase});}}await env.PROCESSOR_DB.prepare("DELETE FROM processor_jobs WHERE status='delivered' AND updated_at<?").bind(new Date(Date.now()-86400000).toISOString()).run()}catch(error){console.error('processor scheduled error',error)}})())}
 };

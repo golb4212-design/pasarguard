@@ -1,15 +1,26 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.36
+ * Version: 3.3.37
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.36';
+const APP_VERSION = '3.3.37';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.37": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🧩", text: "جداسازی اجرای هر بکاپ در یک Invocation مستقل Worker دوم" },
+      { emoji: "🛡", text: "رفع Too many subrequests هنگام بکاپ خودکار یا پشتیبان‌گیری گروهی" },
+      { emoji: "🔁", text: "ارسال مرحله‌ای بکاپ‌ها از Core و Processor به Edge با Service Binding" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "🗄", text: "فایل بکاپ بدون برخورد با سقف درخواست‌های اجرای Cron به گروه ارسال می‌شود" },
+      { emoji: "✅", text: "جلوگیری از ساخت بکاپ خودکار تکراری در اجرای هم‌زمان Cron" }
+    ])
+  }),
   "3.3.36": Object.freeze({
     central: Object.freeze([
       { emoji: "🧩", text: "رفع خطای D1 در بارگذاری داشبورد مستر پس از ورود پنل نمایندگی" },
@@ -9351,10 +9362,11 @@ async function queueReportEvent(env, botId, topicKey, title, messageHtml, dedupe
       ) VALUES(?,?,?,?,?,?,'pending','pending',0,?,?,?)
     `).bind(reportId, botId || null, topicKey, cleanText(title,160), cleanText(messageHtml,3500), cleanText(dedupeKey,220), ts, ts, ts).run();
     let delivery = null;
-    if (Number(inserted?.meta?.changes || 0) > 0) {
+    const deferDelivery = /^backup(?:-|:)/i.test(String(dedupeKey || ""));
+    if (Number(inserted?.meta?.changes || 0) > 0 && !deferDelivery) {
       delivery = await tryImmediateReportDelivery(env, reportId, botId || null, topicKey, cleanText(title,160), cleanText(messageHtml,3500));
     }
-    return { queued: Number(inserted?.meta?.changes || 0) > 0, id: reportId, delivery };
+    return { queued: Number(inserted?.meta?.changes || 0) > 0, id: reportId, delivery, deferred: deferDelivery };
   } catch (error) {
     console.error("queueReportEvent failed", error);
     return { queued: false, error: String(error?.message || error) };
@@ -12041,11 +12053,47 @@ async function runAllResellerHealthChecks(env, limit=20) {
   return {checked,failed};
 }
 
+async function queueResellerSnapshotFromCore(env, botId, actorTelegramId = "central-admin", snapshotType = "manual") {
+  if (!env.PROCESSOR_WORKER || typeof env.PROCESSOR_WORKER.fetch !== "function") {
+    throw new Error("PROCESSOR_WORKER برای صف مستقل بکاپ متصل نیست");
+  }
+  const backupBody = JSON.stringify({
+    bot_id: String(botId || ""),
+    actor_telegram_id: String(actorTelegramId || "central-admin"),
+    snapshot_type: snapshotType === "auto" ? "auto" : "manual"
+  });
+  const response = await env.PROCESSOR_WORKER.fetch(new Request("https://bluepanel-processor.internal/__bluepanel/service/queue", {
+    method: "POST",
+    headers: { "content-type": "application/json", "accept": "application/json", "x-bluepanel-service-hop": "core-to-processor-backup" },
+    body: JSON.stringify({
+      method: "POST",
+      path_query: "/__bluepanel/service/reseller-backup",
+      headers: { "content-type": "application/json", "accept": "application/json" },
+      body_text: backupBody
+    })
+  }));
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.success === false) throw new Error(data?.error || ("Processor queue HTTP " + response.status));
+  return data;
+}
+
 async function createAllResellerBackups(env, limit=50) {
-  const rows=await env.PASARGUARD_DB.prepare("SELECT * FROM reseller_bots WHERE status='active' ORDER BY updated_at LIMIT ?").bind(Math.max(1,Math.min(200,Number(limit||50)))).all();
-  let success=0,failed=0;
-  for(const bot of rows.results||[]){try{await createResellerSnapshot(env,bot,"central-admin","manual");success+=1;}catch(_){failed+=1;}}
-  return {success,failed};
+  const rows=await env.PASARGUARD_DB.prepare("SELECT id FROM reseller_bots WHERE status='active' ORDER BY updated_at LIMIT ?").bind(Math.max(1,Math.min(24,Number(limit||50)))).all();
+  const list=rows.results||[];
+  let success=0,failed=0,deduplicated=0;
+  if(env.PROCESSOR_WORKER&&typeof env.PROCESSOR_WORKER.fetch==="function"){
+    for(let offset=0;offset<list.length;offset+=4){
+      const results=await Promise.all(list.slice(offset,offset+4).map(async bot=>{
+        try{return await queueResellerSnapshotFromCore(env,bot.id,"central-admin","manual");}
+        catch(_){return null;}
+      }));
+      for(const result of results){if(result){success+=1;if(result.deduplicated)deduplicated+=1;}else failed+=1;}
+    }
+    return {checked:list.length,success,failed,queued:success,deduplicated,isolated:true,asynchronous:true};
+  }
+  const bot=list[0]?await getResellerBotById(env,list[0].id):null;
+  if(bot){try{await createResellerSnapshot(env,bot,"central-admin","manual");success+=1;}catch(_){failed+=1;}}
+  return {checked:bot?1:0,success,failed,queued:0,deduplicated:0,isolated:false,asynchronous:false,deferred:Math.max(0,list.length-1)};
 }
 
 async function botAdminResellerOpsView(env, account) {
@@ -13973,7 +14021,7 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
     if(!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
     const result=await createAllResellerBackups(env,8);
     await audit(env,account.user.id,"central_reseller_backup_all",result);
-    await botPrompt(env,chatId,"🗄 پشتیبان‌گیری گروهی پایان یافت.\nموفق: <b>"+botMoney(result.success)+"</b> · ناموفق: <b>"+botMoney(result.failed)+"</b>",[[{text:"↩️ مرکز پایداری",callback_data:"bot:admin:reseller_ops"}]]);
+    await botPrompt(env,chatId,(result.asynchronous?"🗄 بکاپ‌های گروهی در صف اجرای مستقل قرار گرفتند.\nدر صف: <b>"+botMoney(result.queued)+"</b> · ناموفق: <b>"+botMoney(result.failed)+"</b>":"🗄 یک مرحله پشتیبان‌گیری انجام شد.\nموفق: <b>"+botMoney(result.success)+"</b> · ناموفق: <b>"+botMoney(result.failed)+"</b>"),[[{text:"↩️ مرکز پایداری",callback_data:"bot:admin:reseller_ops"}]]);
     return;
   }
   if (data === "bot:admin:reseller_health_all") {
@@ -16285,7 +16333,7 @@ async function centralAdminAction(request, env) {
       const result=await runAllResellerHealthChecks(env,8);await audit(env,auth.user.id,"central_web_reseller_health_all",result);return json({success:true,message:"یک مرحله پایش ربات‌های نماینده انجام شد",result});
     }
     if (action === "reseller_backup_all") {
-      const result=await createAllResellerBackups(env,8);await audit(env,auth.user.id,"central_web_reseller_backup_all",result);return json({success:true,message:"یک مرحله پشتیبان‌گیری ربات‌های نماینده انجام شد",result});
+      const result=await createAllResellerBackups(env,8);await audit(env,auth.user.id,"central_web_reseller_backup_all",result);return json({success:true,message:result.asynchronous?"بکاپ ربات‌های نماینده در صف اجرای مستقل قرار گرفت":"یک مرحله پشتیبان‌گیری ربات‌های نماینده انجام شد",result});
     }
     if (action === "cluster_diagnose") {
       const result = await inspectThreeWorkerCluster(env);
