@@ -1,7 +1,7 @@
 {
-  "version": "3.3.45",
-  "release_id": "3.3.45-premium-emoji-message-text-fix",
-  "architecture": "fully-split-three-worker-premium-emoji-message-rendering",
+  "version": "3.3.46",
+  "release_id": "3.3.46-premium-emoji-duplicate-button-fix",
+  "architecture": "fully-split-three-worker-premium-emoji-duplicate-normalization",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -9,12 +9,11 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "applies reseller premium emoji mappings to message text and captions in addition to keyboard buttons",
-    "uses tg-emoji HTML tags for HTML messages and explicit custom_emoji MessageEntity objects for plain text",
-    "stores the actual alternative emoji received from Telegram so custom emoji entities wrap a valid fallback emoji",
-    "preserves existing HTML formatting and avoids replacing emoji inside code, pre, or existing tg-emoji tags",
-    "falls back automatically to ordinary emoji when Telegram rejects custom emoji eligibility or formatting",
-    "keeps the interactive reseller emoji picker and balanced smart button colours",
+    "removes every ordinary occurrence of a mapped emoji from a keyboard button label after assigning icon_custom_emoji_id",
+    "prevents mixed premium and ordinary copies when labels contain the same emoji at both ends",
+    "keeps all repeated mapped emoji as custom_emoji entities inside message text and captions",
+    "normalizes both emoji presentation-selector and plain variants when cleaning button labels",
+    "keeps existing smart button colours and the reseller premium emoji picker",
     "does not change the database schema",
     "README files are excluded"
   ],
@@ -30,36 +29,36 @@
   },
   "validation": {
     "worker_syntax": "passed: node --check for core, edge and processor",
-    "message_text_renderer": "passed: HTML tg-emoji, plain-text UTF-16 MessageEntity offsets, code/pre exclusion, and fallback stripping",
+    "button_duplicate_cleanup": "passed: repeated mapped emoji and FE0F/plain variants are all removed from the label",
+    "message_text_renderer": "passed: two repeated emoji produce two custom_emoji entities or two tg-emoji tags",
     "database_schema": "unchanged from 3.3.40",
     "zip_integrity": "passed: unzip -t; 9 entries; no README",
     "live_api": "not run; requires production Telegram and Cloudflare credentials"
   },
   "limitations": [
-    "Custom emoji rendering still depends on Telegram eligibility: an additional username purchased on Fragment or a Premium bot owner for directly sent messages.",
-    "Mappings created before 3.3.45 may use the original emoji as fallback until the reseller saves that mapping again; matching emoji normally works immediately.",
-    "The exact animation and appearance depend on the Telegram client and theme."
+    "Telegram supports only one icon_custom_emoji_id per keyboard button and always renders it before the label; multiple premium emoji cannot be embedded inside the button text.",
+    "For buttons containing the same mapped emoji multiple times, this release shows one premium icon and removes the ordinary duplicates.",
+    "Inside normal message text and captions, every repeated mapped emoji can still be rendered as a separate custom emoji entity.",
+    "Custom emoji rendering depends on Telegram eligibility and the Telegram client."
   ],
-  "title": "نمایش ایموجی پرمیوم در متن پیام‌ها",
-  "summary": "نگاشت ایموجی نماینده اکنون علاوه بر کلیدها، روی متن و کپشن پیام‌های ربات نیز به‌صورت Custom Emoji واقعی اعمال می‌شود.",
+  "title": "رفع نمایش نصفه ایموجی پرمیوم در کلیدها",
+  "summary": "وقتی یک ایموجی در یک کلید چند بار تکرار شده باشد، دیگر یک نمونه پرمیوم و یک نمونه معمولی کنار هم دیده نمی‌شود؛ یک آیکن پرمیوم باقی می‌ماند و نسخه‌های معمولی تکراری حذف می‌شوند.",
   "changes": [
-    "اعمال جایگزینی ایموجی پرمیوم روی متن و کپشن تمام پیام‌های خروجی ربات نماینده.",
-    "استفاده از تگ tg-emoji برای پیام‌های HTML و MessageEntity برای پیام‌های ساده.",
-    "ذخیره ایموجی جایگزین واقعی ارسالی نماینده برای جلوگیری از نادیده‌گرفتن Entity توسط تلگرام.",
-    "حفظ قالب‌بندی HTML و جلوگیری از دستکاری ایموجی داخل code، pre و tg-emoji موجود.",
-    "Fallback خودکار به ایموجی معمولی در صورت خطای دسترسی یا ناسازگاری کلاینت تلگرام.",
+    "حذف همه تکرارهای ایموجی معمولی از متن کلید پس از تنظیم icon_custom_emoji_id.",
+    "پشتیبانی از نسخه دارای Variation Selector و نسخه ساده همان ایموجی.",
+    "حفظ تبدیل تمام تکرارهای ایموجی در متن و کپشن پیام‌ها به Custom Emoji.",
     "بدون ستون یا Migration جدید."
   ],
   "sha256": {
-    "core/worker.js": "f3794364da89fc9d2f337c903b216467b69267aa59315b9b4c5bd437dad84ce2",
-    "edge/worker.js": "924fa4d52a38347f5f2f13da94021b8b5685db8b29025e1ac8606327c07f70b0",
-    "processor/worker.js": "f3a88d99143c7c3765ed33a2c658053bcfbbfcd506ceba33350853818cc73e61",
+    "core/worker.js": "d749174195c4755e5862adff513aa35a4fce3d7933cac2947d047443b48fd6b6",
+    "edge/worker.js": "22ae54bdce8f5a96a1d735a90eaa1a72cdc2f35d83a3ee45d79949d35bbcf627",
+    "processor/worker.js": "91c2d11333c2e3bcec44c67e420b8a7d06f531482ab8c64194bc19c4587564a6",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "f3794364da89fc9d2f337c903b216467b69267aa59315b9b4c5bd437dad84ce2",
-    "edge/worker.js": "924fa4d52a38347f5f2f13da94021b8b5685db8b29025e1ac8606327c07f70b0",
-    "processor/worker.js": "f3a88d99143c7c3765ed33a2c658053bcfbbfcd506ceba33350853818cc73e61",
+    "core/worker.js": "d749174195c4755e5862adff513aa35a4fce3d7933cac2947d047443b48fd6b6",
+    "edge/worker.js": "22ae54bdce8f5a96a1d735a90eaa1a72cdc2f35d83a3ee45d79949d35bbcf627",
+    "processor/worker.js": "91c2d11333c2e3bcec44c67e420b8a7d06f531482ab8c64194bc19c4587564a6",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }

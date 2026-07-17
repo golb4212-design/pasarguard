@@ -1,15 +1,26 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.45
+ * Version: 3.3.46
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.45';
+const APP_VERSION = '3.3.46';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.46": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🧩", text: "رفع نمایش ترکیبی ایموجی پرمیوم و معمولی در کلیدهایی که یک ایموجی را چند بار دارند" },
+      { emoji: "🧹", text: "حذف همه نسخه‌های معمولی همان ایموجی از متن کلید پس از افزودن آیکن پرمیوم" },
+      { emoji: "🛡", text: "حفظ جایگزینی همه تکرارهای ایموجی داخل متن پیام‌ها و کپشن‌ها" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "✨", text: "در هر کلید فقط آیکن پرمیوم نمایش داده می‌شود و نمونه معمولی تکراری باقی نمی‌ماند" },
+      { emoji: "💬", text: "در متن پیام، تمام تکرارهای ایموجی نگاشت‌شده به پرمیوم تبدیل می‌شوند" }
+    ])
+  }),
   "3.3.45": Object.freeze({
     central: Object.freeze([
       { emoji: "✨", text: "اعمال جایگزینی ایموجی پرمیوم داخل متن و کپشن پیام‌ها، نه فقط روی کلیدها" },
@@ -3826,9 +3837,18 @@ function telegramUiRemoveMappedEmoji(text, emojiKey) {
   const source = String(text || "");
   const key = String(emojiKey || "");
   if (!source || !key || !telegramUiEmojiKeyIsSingleEmoji(key)) return source;
+
+  // A Telegram keyboard button accepts exactly one custom icon, rendered before
+  // its label. When the same ordinary emoji appears more than once in the label
+  // (for example: "🌍 لوکیشن هوایی 🌍"), keeping any occurrence in `text`
+  // produces a mixed premium/ordinary result. Remove every visual variant from
+  // the label and let icon_custom_emoji_id be the single premium representation.
   const plainKey = key.replace(/\ufe0f/g, "");
-  let output = source.replace(key, "");
-  if (output === source && plainKey !== key) output = source.replace(plainKey, "");
+  const variants = Array.from(new Set([key, plainKey, plainKey + "\ufe0f"]))
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+  let output = source;
+  for (const variant of variants) output = output.split(variant).join("");
   return output.replace(/\s+/g, " ").trim() || source;
 }
 
