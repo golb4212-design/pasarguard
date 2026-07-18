@@ -1,16 +1,26 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.58
+ * Version: 3.4.0
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.58';
+const APP_VERSION = '3.4.0';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
-  "3.3.58": Object.freeze({
+  "3.4.0": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🖥", text: "نصب و اتصال خودکار BluePanel Server فقط با مشخصات SSH از مینی‌اپ مرکزی" },
+      { emoji: "🔐", text: "استفاده یک‌بارمصرف از رمز یا کلید SSH و حذف خودکار آن پس از تحویل به نصب‌کننده" },
+      { emoji: "⚙️", text: "ورود خودکار سرور به مدار، Heartbeat و اجرای مستقل فازهای نگهداری با مسیر جایگزین Worker" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "🚀", text: "پردازش‌های دوره‌ای با هماهنگ‌کننده سروری اجرا می‌شوند و Worker در زمان قطع سرور مسیر پشتیبان می‌ماند" }
+    ])
+  }),
+  "3.4.0": Object.freeze({
     central: Object.freeze([
       { emoji: "🧯", text: "تقسیم کامل Cron مرکزی به هشت Invocation سبک برای حذف خطای Too many subrequests" },
       { emoji: "🛟", text: "ارسال پیام تلگرام از مسیر اضطراری Processor وقتی بودجه درخواست Core تمام شده باشد" },
@@ -763,7 +773,7 @@ let errorCenterSchemaPromise = null;
 
 // Persistent schema marker: avoids replaying the full D1 migration sweep whenever
 // Cloudflare starts a fresh isolate after an idle period.
-const DB_SCHEMA_REVISION = "3.3.40-reseller-webhook-ui-fail-open";
+const DB_SCHEMA_REVISION = "3.4.0-server-bootstrap";
 
 let settingsCache = null;
 
@@ -2222,6 +2232,68 @@ CREATE TABLE IF NOT EXISTS report_outbox (
   FOREIGN KEY(bot_id) REFERENCES reseller_bots(id)
 );
 CREATE INDEX IF NOT EXISTS idx_report_outbox_due ON report_outbox(next_attempt_at,central_status,reseller_status,created_at);
+
+
+CREATE TABLE IF NOT EXISTS bluepanel_servers (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL DEFAULT 'BluePanel Server',
+  status TEXT NOT NULL DEFAULT 'online',
+  server_url TEXT,
+  token_hash TEXT NOT NULL,
+  server_version TEXT,
+  hostname TEXT,
+  os_info TEXT,
+  architecture TEXT,
+  last_heartbeat_at TEXT,
+  last_phase INTEGER,
+  last_phase_at TEXT,
+  last_phase_ok_at TEXT,
+  last_error TEXT,
+  registered_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bluepanel_servers_status ON bluepanel_servers(status,last_heartbeat_at DESC);
+
+CREATE TABLE IF NOT EXISTS server_bootstrap_jobs (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  ssh_host TEXT NOT NULL,
+  ssh_port INTEGER NOT NULL DEFAULT 22,
+  ssh_username TEXT NOT NULL DEFAULT 'root',
+  ssh_auth_type TEXT NOT NULL DEFAULT 'password',
+  ssh_credential_enc TEXT,
+  domain TEXT,
+  status TEXT NOT NULL DEFAULT 'queued',
+  progress TEXT,
+  claim_token_hash TEXT,
+  report_token_hash TEXT,
+  registration_code_hash TEXT,
+  registration_code_enc TEXT,
+  workflow_run_url TEXT,
+  error TEXT,
+  expires_at TEXT NOT NULL,
+  claimed_at TEXT,
+  connected_server_id TEXT,
+  finished_at TEXT,
+  created_by_user_id INTEGER,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_server_bootstrap_jobs_status ON server_bootstrap_jobs(status,updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_server_bootstrap_jobs_expiry ON server_bootstrap_jobs(expires_at);
+
+CREATE TABLE IF NOT EXISTS server_phase_runs (
+  job_id TEXT PRIMARY KEY,
+  server_id TEXT NOT NULL,
+  phase INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'running',
+  result_json TEXT NOT NULL DEFAULT '{}',
+  error TEXT,
+  started_at TEXT NOT NULL,
+  finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_server_phase_runs_server ON server_phase_runs(server_id,started_at DESC);
 
 `;
 
@@ -15089,7 +15161,7 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
     if (!account.isAdmin) throw new Error("دسترسی مدیر لازم است");
     const settings = await getSettings(env);
     if (!settings.github_repo) throw new Error("ابتدا مخزن GitHub را تنظیم کنید");
-    if (!settings.github_token) throw new Error("ابتدا توکن GitHub با دسترسی Contents: Read and write را ثبت کنید");
+    if (!settings.github_token) throw new Error("ابتدا توکن GitHub با دسترسی Contents: Read and write و Actions: Read and write را ثبت کنید");
     await botSetSession(env, account.user.telegram_id, "github_zip_upload", {});
     await botPrompt(env, chatId,
       "📦 <b>فایل ZIP بروزرسانی را ارسال کنید</b>\n\n" +
@@ -15105,7 +15177,7 @@ async function botHandleCallback(env, callback, origin, preloadedSettings = null
     await botSetSession(env, account.user.telegram_id, "setting_github_upload_token", {});
     await botPrompt(env, chatId,
       "🔐 <b>توکن GitHub را ارسال کنید</b>\n\n" +
-      "توکن Fine-grained باید برای مخزن موردنظر مجوز <b>Contents: Read and write</b> داشته باشد. پیام حاوی توکن پس از بررسی حذف می‌شود."
+      "توکن Fine-grained باید برای مخزن موردنظر مجوزهای <b>Contents: Read and write</b> و <b>Actions: Read and write</b> داشته باشد. پیام حاوی توکن پس از بررسی حذف می‌شود."
     );
     return;
   }
@@ -17305,6 +17377,11 @@ async function centralAdminBootstrap(request, env) {
       (SELECT MAX(created_at) FROM reseller_health_checks) AS last_health_at,
       (SELECT MAX(created_at) FROM reseller_snapshots) AS last_backup_at`).first()
   ]);
+  const [serverRows, serverJobRows] = await Promise.all([
+    env.PASARGUARD_DB.prepare("SELECT id,label,status,server_url,server_version,hostname,os_info,architecture,last_heartbeat_at,last_phase,last_phase_at,last_phase_ok_at,last_error,registered_at,created_at,updated_at FROM bluepanel_servers ORDER BY updated_at DESC LIMIT 20").all(),
+    env.PASARGUARD_DB.prepare("SELECT id,label,ssh_host,ssh_port,ssh_username,ssh_auth_type,domain,status,progress,workflow_run_url,error,expires_at,claimed_at,connected_server_id,finished_at,created_at,updated_at FROM server_bootstrap_jobs ORDER BY created_at DESC LIMIT 20").all()
+  ]);
+  const activeServer = await bluePanelActiveServer(env).catch(() => null);
   const origin = new URL(request.url).origin;
   const configuration = adminSettings(settings);
   configuration.python_helper_binding_detected = Boolean(env.PY_HELPER && typeof env.PY_HELPER.fetch === "function");
@@ -17346,6 +17423,9 @@ async function centralAdminBootstrap(request, env) {
     edge: { enabled: liveEdge.connected === true && settings.edge_worker_manual_disabled !== "true", binding_detected: liveEdge.binding_detected === true, core_binding_detected: liveEdge.core_binding_detected === true, processor_binding_detected: liveEdge.processor_binding_detected === true, core_ok: liveEdge.core_ok === true, processor_ok: liveEdge.processor_ok === true, database_query_ok: liveEdge.database_query_ok !== false, mode: "service_binding", status: settings.edge_worker_manual_disabled === "true" ? "disabled" : (liveEdge.status || "disconnected"), script_name: liveEdge.script_name || settings.edge_worker_script_name || "", last_check_at: liveEdge.diagnostics?.checked_at || settings.edge_worker_last_check_at || "", last_error: settings.edge_worker_manual_disabled === "true" ? "تقسیم بار از پنل غیرفعال شده است" : (liveEdge.error || settings.edge_worker_last_error || ""), version: liveEdge.version || settings.edge_worker_last_version || "", pending_jobs: Number(liveEdge.pending_jobs || 0), last_deployed_at: settings.edge_worker_last_deployed_at || "", probe: liveEdge.probe || null, core_probe: liveEdge.core_probe || liveEdge.diagnostics?.edge_to_core || null, processor_probe: liveEdge.processor_probe || liveEdge.diagnostics?.edge_to_processor || null, runtime_bindings: liveEdge.runtime_bindings || liveEdge.diagnostics?.runtime_bindings || null, diagnostics: liveEdge.diagnostics || null },
     processor: { enabled: liveProcessor.connected === true && settings.processor_worker_manual_disabled !== "true", binding_detected: liveProcessor.binding_detected === true, core_binding_detected: liveProcessor.core_binding_detected === true, edge_binding_detected: liveProcessor.edge_binding_detected === true, core_ok: liveProcessor.core_ok === true, edge_ok: liveProcessor.edge_ok === true, database_query_ok: liveProcessor.database_query_ok !== false, mode: "service_binding", status: settings.processor_worker_manual_disabled === "true" ? "disabled" : (liveProcessor.status || "disconnected"), script_name: liveProcessor.script_name || settings.processor_worker_script_name || "", last_check_at: liveProcessor.diagnostics?.checked_at || settings.processor_worker_last_check_at || "", last_error: settings.processor_worker_manual_disabled === "true" ? "پردازش Worker سوم از پنل غیرفعال شده است" : (liveProcessor.error || settings.processor_worker_last_error || ""), version: liveProcessor.version || settings.processor_worker_last_version || "", pending_jobs: Number(liveProcessor.pending_jobs || 0), processed_jobs: Number(liveProcessor.processed_jobs || 0), last_deployed_at: settings.processor_worker_last_deployed_at || "", probe: liveProcessor.probe || null, core_probe: liveProcessor.core_probe || liveProcessor.diagnostics?.processor_to_core || null, edge_probe: liveProcessor.edge_probe || liveProcessor.diagnostics?.processor_to_edge || null, runtime_bindings: liveProcessor.runtime_bindings || liveProcessor.diagnostics?.runtime_bindings || null, diagnostics: liveProcessor.diagnostics || null },
     live_usage: liveUsage,
+    server_runtime: { enabled: Boolean(activeServer), mode: activeServer ? "server_coordinator" : "worker_fallback", active_server_id: activeServer?.id || "", heartbeat_age_ms: Number(activeServer?.heartbeat_age_ms || 0), workflow_ready: Boolean(settings.github_repo && settings.github_token), workflow_file: BLUEPANEL_SERVER_WORKFLOW_FILE },
+    servers: serverRows.results || [],
+    server_bootstrap_jobs: serverJobRows.results || [],
     health: {
       database: true,
       central_bot: Boolean(settings.bot_token),
@@ -17355,6 +17435,7 @@ async function centralAdminBootstrap(request, env) {
       python_helper: Boolean(env.PY_HELPER && typeof env.PY_HELPER.fetch === "function"),
       edge_worker: liveEdge.connected === true && settings.edge_worker_manual_disabled !== "true",
       processor_worker: liveProcessor.connected === true && settings.processor_worker_manual_disabled !== "true",
+      server_coordinator: Boolean(activeServer),
       live_usage: liveUsage?.running === true && liveUsage?.success !== false,
       live_usage_binding: liveUsageNamespaceAvailable(env),
       live_usage_last_at: liveUsage?.finished_at || liveUsage?.failed_at || "",
@@ -17659,6 +17740,17 @@ async function centralAdminAction(request, env) {
     }
     if (action === "configure_central_bot") {
       await setupTelegramBot(request, env); return json({ success: true, message: "Webhook و منوی ربات مرکزی ترمیم شد" });
+    }
+    if (action === "server_bootstrap_create") {
+      const result = await bluePanelCreateServerBootstrap(request, env, auth, body);
+      return json({ success:true, message:"نصب خودکار سرور در GitHub Actions آغاز شد؛ اطلاعات SSH پس از Claim حذف می‌شود", result });
+    }
+    if (action === "server_disable") {
+      const serverId=cleanText(body.id||"",120); const row=await env.PASARGUARD_DB.prepare("SELECT id,label FROM bluepanel_servers WHERE id=?").bind(serverId).first();
+      if(!row)throw new Error("سرور پیدا نشد");
+      await env.PASARGUARD_DB.prepare("UPDATE bluepanel_servers SET status='disabled',token_hash=?,updated_at=? WHERE id=?").bind(await sha256Hex(randomHex(32)),nowIso(),serverId).run();
+      await audit(env,auth.user.id,"server_disabled",{server_id:serverId,label:row.label});
+      return json({success:true,message:"سرور از مدار خارج و توکن آن باطل شد"});
     }
     if (action === "update_check") {
       const result = await checkUpdate(env); await audit(env, auth.user.id, "central_dashboard_update_check", result); return json({ success: true, message: result.update_required ? "نسخه یا همگام‌سازی جدید پیدا شد" : "آخرین نسخه نصب است", result });
@@ -18109,7 +18201,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.3.58';
+const BLUEPANEL_CORE_VERSION = '3.4.0';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
@@ -18239,73 +18331,215 @@ function scheduleRequestTriggeredUpdate(env, ctx, path) {
   ctx.waitUntil(automaticUpdateTick(env,{source:"panel_request",intervalSeconds:30}).catch(async error=>{console.error("request auto update error",error);await reportCoreRuntimeError(env,'auto_update','REQUEST_AUTO_UPDATE_ERROR',error,{path});}));
 }
 
+
+const BLUEPANEL_SERVER_PHASE_COUNT = 8;
+const BLUEPANEL_SERVER_ONLINE_WINDOW_MS = 90000;
+const BLUEPANEL_SERVER_BOOTSTRAP_TTL_MS = 60 * 60 * 1000;
+const BLUEPANEL_SERVER_WORKFLOW_FILE = "bluepanel-server-bootstrap.yml";
+
+function bluePanelServerSafeHost(value) {
+  const host = cleanText(value || "", 255).trim().toLowerCase();
+  if (!host || host.includes("://") || /[\s/@\\]/.test(host)) throw new Error("IP یا دامنه SSH معتبر نیست");
+  if (!/^(?:[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?|\[[0-9a-f:]+\])$/i.test(host)) throw new Error("IP یا دامنه SSH معتبر نیست");
+  const plain = host.replace(/^\[|\]$/g, "");
+  if (["localhost","0.0.0.0","127.0.0.1","::1"].includes(plain)) throw new Error("سرور باید IP عمومی یا دامنه قابل دسترس از GitHub Actions داشته باشد");
+  if (/^(10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(plain)) throw new Error("IP خصوصی از GitHub Actions قابل دسترس نیست");
+  return plain;
+}
+function bluePanelServerSafeUsername(value) {
+  const username = cleanText(value || "root", 64).trim();
+  if (!/^[a-z_][a-z0-9_-]{0,31}$/i.test(username)) throw new Error("نام کاربری SSH معتبر نیست");
+  return username;
+}
+function bluePanelServerSafeDomain(value) {
+  const domain = cleanText(value || "", 255).trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  if (!domain) return "";
+  if (domain.includes("/") || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(domain)) throw new Error("دامنه aaPanel معتبر نیست");
+  return domain;
+}
+async function bluePanelActiveServer(env, maxAgeMs = BLUEPANEL_SERVER_ONLINE_WINDOW_MS) {
+  await ensureDb(env);
+  const row = await env.PASARGUARD_DB.prepare("SELECT * FROM bluepanel_servers WHERE status='online' ORDER BY last_heartbeat_at DESC LIMIT 1").first();
+  if (!row?.last_heartbeat_at) return null;
+  const age = Date.now() - Date.parse(row.last_heartbeat_at);
+  return Number.isFinite(age) && age >= 0 && age <= maxAgeMs ? { ...row, heartbeat_age_ms: age } : null;
+}
+async function bluePanelDispatchServerBootstrap(env, settings, payload) {
+  const repo = normalizeGithubRepo(settings.github_repo);
+  if (!repo) throw new Error("مخزن GitHub تنظیم نشده است");
+  const branch = cleanText(settings.github_branch || "main", 120) || "main";
+  const path = githubRepoApiPath(repo) + "/actions/workflows/" + encodeURIComponent(BLUEPANEL_SERVER_WORKFLOW_FILE) + "/dispatches";
+  await githubApiRequest(env, settings, "POST", path, { ref: branch, inputs: { core_url: payload.core_url, job_id: payload.job_id, claim_token: payload.claim_token, target_ref: branch } });
+  return { repository: repo, branch, workflow: BLUEPANEL_SERVER_WORKFLOW_FILE };
+}
+async function bluePanelCreateServerBootstrap(request, env, auth, body) {
+  const settings = await getSettings(env);
+  if (!String(settings.github_token || "").trim() || !String(settings.github_repo || "").trim()) throw new Error("ابتدا اتصال GitHub و توکن دارای Actions را تنظیم کنید");
+  const encryptionSource = String(settings.app_encryption_key || "").trim();
+  if (encryptionSource.length < 24 || encryptionSource === "change-me") throw new Error("APP_ENCRYPTION_KEY امن تنظیم نشده است؛ پیش از ثبت SSH کلید رمزنگاری برنامه را تنظیم کنید");
+  const host = bluePanelServerSafeHost(body.ssh_host);
+  const port = clampInt(body.ssh_port || 22, 1, 65535);
+  const username = bluePanelServerSafeUsername(body.ssh_username || "root");
+  const authType = String(body.ssh_auth_type || "password").toLowerCase() === "private_key" ? "private_key" : "password";
+  const credential = String(authType === "private_key" ? body.ssh_private_key : body.ssh_password || "").trim();
+  if (authType === "password" && (credential.length < 4 || credential.length > 1000)) throw new Error("رمز SSH معتبر نیست");
+  if (authType === "private_key" && (!/BEGIN [A-Z ]*PRIVATE KEY/.test(credential) || credential.length > 20000)) throw new Error("کلید خصوصی SSH معتبر نیست یا رمزگذاری‌شده است");
+  const domain = bluePanelServerSafeDomain(body.domain || "");
+  const label = cleanText(body.label || ("Server " + host), 80) || ("Server " + host);
+  const jobId = id("srvjob"), claimToken = randomHex(32), registrationCode = randomHex(24), ts = nowIso();
+  const expiresAt = new Date(Date.now() + BLUEPANEL_SERVER_BOOTSTRAP_TTL_MS).toISOString();
+  const credentialEnc = await encryptSecret(JSON.stringify({ auth_type: authType, secret: credential }), env);
+  const registrationCodeEnc = await encryptSecret(registrationCode, env);
+  await env.PASARGUARD_DB.prepare(`INSERT INTO server_bootstrap_jobs(id,label,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_credential_enc,domain,status,progress,claim_token_hash,registration_code_hash,registration_code_enc,expires_at,created_by_user_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
+    jobId,label,host,port,username,authType,credentialEnc,domain,"queued","در صف ارسال به GitHub Actions",await sha256Hex(claimToken),await sha256Hex(registrationCode),registrationCodeEnc,expiresAt,auth.user.id,ts,ts
+  ).run();
+  const coreUrl = new URL(request.url).origin;
+  try {
+    const dispatch = await bluePanelDispatchServerBootstrap(env, settings, { core_url: coreUrl, job_id: jobId, claim_token: claimToken });
+    await env.PASARGUARD_DB.prepare("UPDATE server_bootstrap_jobs SET status='dispatched',progress=?,updated_at=? WHERE id=?").bind("Workflow نصب در GitHub Actions آغاز شد",nowIso(),jobId).run();
+    await audit(env, auth.user.id, "server_bootstrap_dispatched", { job_id: jobId, host, port, username, auth_type: authType, domain, repository: dispatch.repository, branch: dispatch.branch });
+    return { job_id: jobId, status: "dispatched", expires_at: expiresAt, dispatch };
+  } catch (error) {
+    await env.PASARGUARD_DB.prepare("UPDATE server_bootstrap_jobs SET status='failed',error=?,ssh_credential_enc=NULL,registration_code_enc=NULL,claim_token_hash=NULL,finished_at=?,updated_at=? WHERE id=?").bind(cleanText(error?.message || error,1000),nowIso(),nowIso(),jobId).run();
+    throw error;
+  }
+}
+async function bluePanelBootstrapClaim(request, env) {
+  await ensureDb(env);
+  const body = await parseBody(request), jobId = cleanText(body.job_id || "", 120), claimToken = String(body.claim_token || "").trim();
+  if (!jobId || claimToken.length < 40) return fail("درخواست Claim معتبر نیست",400,"SERVER_BOOTSTRAP_CLAIM_INVALID");
+  const row = await env.PASARGUARD_DB.prepare("SELECT * FROM server_bootstrap_jobs WHERE id=?").bind(jobId).first();
+  if (!row) return fail("Job نصب پیدا نشد",404,"SERVER_BOOTSTRAP_NOT_FOUND");
+  if (Date.parse(row.expires_at || "") <= Date.now()) {
+    await env.PASARGUARD_DB.prepare("UPDATE server_bootstrap_jobs SET status='expired',error='مهلت Claim تمام شد',ssh_credential_enc=NULL,registration_code_enc=NULL,claim_token_hash=NULL,finished_at=?,updated_at=? WHERE id=?").bind(nowIso(),nowIso(),jobId).run();
+    return fail("مهلت نصب منقضی شده است",410,"SERVER_BOOTSTRAP_EXPIRED");
+  }
+  if (!row.claim_token_hash || await sha256Hex(claimToken) !== row.claim_token_hash || row.claimed_at) return fail("Claim قبلاً مصرف شده یا معتبر نیست",403,"SERVER_BOOTSTRAP_CLAIM_DENIED");
+  let credential, registrationCode;
+  try { credential = JSON.parse(await decryptSecret(row.ssh_credential_enc, env)); registrationCode = await decryptSecret(row.registration_code_enc, env); }
+  catch (_) { return fail("بازکردن اطلاعات نصب ناموفق بود",500,"SERVER_BOOTSTRAP_DECRYPT_FAILED"); }
+  const reportToken = randomHex(32), ts = nowIso();
+  await env.PASARGUARD_DB.prepare(`UPDATE server_bootstrap_jobs SET status='claimed',progress='اطلاعات یک‌بارمصرف تحویل نصب‌کننده شد',claimed_at=?,claim_token_hash=NULL,report_token_hash=?,ssh_credential_enc=NULL,registration_code_enc=NULL,updated_at=? WHERE id=?`).bind(ts,await sha256Hex(reportToken),ts,jobId).run();
+  return json({ success:true, job_id:jobId, report_token:reportToken, ssh:{host:row.ssh_host,port:Number(row.ssh_port||22),username:row.ssh_username,auth_type:row.ssh_auth_type,secret:String(credential?.secret||"")}, install:{label:row.label,domain:row.domain||"",registration_code:registrationCode,core_url:new URL(request.url).origin,server_port:8787} });
+}
+async function bluePanelBootstrapReport(request, env) {
+  await ensureDb(env);
+  const body = await parseBody(request), jobId = cleanText(body.job_id || "",120), token = String(body.report_token || "").trim();
+  const row = await env.PASARGUARD_DB.prepare("SELECT * FROM server_bootstrap_jobs WHERE id=?").bind(jobId).first();
+  if (!row || !row.report_token_hash || await sha256Hex(token) !== row.report_token_hash) return fail("توکن گزارش نصب معتبر نیست",403,"SERVER_BOOTSTRAP_REPORT_DENIED");
+  const allowed = new Set(["claimed","preparing","connecting","installing","waiting_registration","completed","failed"]), status = allowed.has(String(body.status||"")) ? String(body.status) : "installing";
+  const progress = cleanText(body.progress || "",500), error = cleanText(body.error || "",1500), workflowUrl = cleanText(body.workflow_run_url || "",700), terminal = ["completed","failed"].includes(status), ts = nowIso();
+  await env.PASARGUARD_DB.prepare(`UPDATE server_bootstrap_jobs SET status=?,progress=?,error=?,workflow_run_url=COALESCE(NULLIF(?,''),workflow_run_url),finished_at=CASE WHEN ? THEN ? ELSE finished_at END,report_token_hash=CASE WHEN ? THEN NULL ELSE report_token_hash END,updated_at=? WHERE id=?`).bind(status,progress,error,workflowUrl,terminal?1:0,ts,terminal?1:0,ts,jobId).run();
+  if (status === "failed") await incrementSystemErrorCenter(env,"server_bootstrap","", "SERVER_BOOTSTRAP_FAILED", error || progress || "نصب سرور ناموفق شد",{job_id:jobId,host:row.ssh_host,workflow_run_url:workflowUrl});
+  return json({success:true,accepted:true,status});
+}
+async function bluePanelRegisterServer(request, env) {
+  await ensureDb(env);
+  const body = await parseBody(request), registrationCode = String(body.registration_code || "").trim(), serverToken = String(body.server_token || "").trim(), serverId = cleanText(body.server_id || "",120);
+  if (registrationCode.length < 24 || serverToken.length < 40 || !/^srv_[a-z0-9_-]{8,100}$/i.test(serverId)) return fail("اطلاعات ثبت سرور معتبر نیست",400,"SERVER_REGISTER_INVALID");
+  const job = await env.PASARGUARD_DB.prepare("SELECT * FROM server_bootstrap_jobs WHERE registration_code_hash=? AND status NOT IN ('failed','expired') ORDER BY created_at DESC LIMIT 1").bind(await sha256Hex(registrationCode)).first();
+  if (!job || Date.parse(job.expires_at || "") <= Date.now()) return fail("کد ثبت سرور منقضی یا مصرف شده است",403,"SERVER_REGISTER_CODE_DENIED");
+  const ts = nowIso(), label = cleanText(body.label || job.label || "BluePanel Server",80);
+  await env.PASARGUARD_DB.prepare(`INSERT INTO bluepanel_servers(id,label,status,server_url,token_hash,server_version,hostname,os_info,architecture,last_heartbeat_at,registered_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET label=excluded.label,status='online',server_url=excluded.server_url,token_hash=excluded.token_hash,server_version=excluded.server_version,hostname=excluded.hostname,os_info=excluded.os_info,architecture=excluded.architecture,last_heartbeat_at=excluded.last_heartbeat_at,updated_at=excluded.updated_at`).bind(serverId,label,"online",cleanText(body.server_url||"",700),await sha256Hex(serverToken),cleanText(body.server_version||"",40),cleanText(body.hostname||"",120),cleanText(body.os_info||"",300),cleanText(body.architecture||"",80),ts,ts,ts,ts).run();
+  await env.PASARGUARD_DB.prepare("UPDATE server_bootstrap_jobs SET status='connected',progress='سرور نصب شد و Heartbeat برقرار است',registration_code_hash=NULL,connected_server_id=?,finished_at=?,updated_at=? WHERE id=?").bind(serverId,ts,ts,job.id).run();
+  await resolveSystemErrorCenter(env,{scope:"server_bootstrap",botId:"",errorCode:"SERVER_BOOTSTRAP_FAILED"});
+  try { await queueReportEvent(env,null,"system","سرور جدید وارد مدار شد","🖥 <b>BluePanel Server وارد مدار شد</b>\nنام: "+botEscape(label)+"\nسرور: <code>"+botEscape(serverId)+"</code>\nنسخه Agent: "+botEscape(body.server_version||"—"),"server_connected:"+serverId); } catch (_) {}
+  return json({success:true,registered:true,server_id:serverId,core_version:APP_VERSION,phase_count:BLUEPANEL_SERVER_PHASE_COUNT});
+}
+async function bluePanelAuthenticateServer(request, env) {
+  const serverId = cleanText(request.headers.get("x-bluepanel-server-id") || "",120), token = String(request.headers.get("x-bluepanel-server-token") || request.headers.get("authorization") || "").replace(/^Bearer\s+/i,"").trim();
+  if (!serverId || token.length < 40) return null;
+  const row = await env.PASARGUARD_DB.prepare("SELECT * FROM bluepanel_servers WHERE id=?").bind(serverId).first();
+  if (!row || row.status === "disabled" || await sha256Hex(token) !== row.token_hash) return null;
+  return row;
+}
+async function bluePanelServerHeartbeat(request, env) {
+  await ensureDb(env); const server = await bluePanelAuthenticateServer(request,env);
+  if (!server) return fail("احراز هویت سرور نامعتبر است",403,"SERVER_AUTH_DENIED");
+  const body = await parseBody(request), ts=nowIso(), status = String(body.status||"online")==="stopping" ? "stopping" : "online";
+  await env.PASARGUARD_DB.prepare(`UPDATE bluepanel_servers SET status=?,server_url=COALESCE(NULLIF(?,''),server_url),server_version=COALESCE(NULLIF(?,''),server_version),hostname=COALESCE(NULLIF(?,''),hostname),os_info=COALESCE(NULLIF(?,''),os_info),architecture=COALESCE(NULLIF(?,''),architecture),last_heartbeat_at=?,last_phase=?,last_phase_at=?,last_phase_ok_at=?,last_error=?,updated_at=? WHERE id=?`).bind(status,cleanText(body.public_url||"",700),cleanText(body.server_version||"",40),cleanText(body.hostname||"",120),cleanText(body.os_info||"",300),cleanText(body.architecture||"",80),ts,body.last_phase==null?server.last_phase:Number(body.last_phase),cleanText(body.last_phase_at||"",40),cleanText(body.last_phase_ok_at||"",40),cleanText(body.last_error||"",1000),ts,server.id).run();
+  return json({success:true,core_version:APP_VERSION,phase_count:BLUEPANEL_SERVER_PHASE_COUNT,server_mode:"coordinator"});
+}
+async function bluePanelServerRunPhase(request, env) {
+  await ensureDb(env); const server = await bluePanelAuthenticateServer(request,env);
+  if (!server) return fail("احراز هویت سرور نامعتبر است",403,"SERVER_AUTH_DENIED");
+  const body = await parseBody(request), phase = clampInt(body.phase,0,BLUEPANEL_SERVER_PHASE_COUNT-1), jobId = cleanText(body.job_id || ("server:"+server.id+":"+Date.now()+":"+phase),180);
+  const previous = await env.PASARGUARD_DB.prepare("SELECT * FROM server_phase_runs WHERE job_id=?").bind(jobId).first();
+  if (previous?.status === "completed") return json({success:true,deduplicated:true,phase,result:JSON.parse(previous.result_json||"{}"),core_version:APP_VERSION});
+  const ts=nowIso(); await env.PASARGUARD_DB.prepare("INSERT OR REPLACE INTO server_phase_runs(job_id,server_id,phase,status,result_json,error,started_at,finished_at) VALUES(?,?,?,?,?,?,?,NULL)").bind(jobId,server.id,phase,"running","{}","",ts).run();
+  try {
+    const result = await runBluePanelCoreMaintenancePhase(env,phase,"server:"+server.id), finished=nowIso();
+    await env.PASARGUARD_DB.batch([
+      env.PASARGUARD_DB.prepare("UPDATE server_phase_runs SET status='completed',result_json=?,error='',finished_at=? WHERE job_id=?").bind(JSON.stringify(result),finished,jobId),
+      env.PASARGUARD_DB.prepare("UPDATE bluepanel_servers SET status='online',last_heartbeat_at=?,last_phase=?,last_phase_at=?,last_phase_ok_at=?,last_error='',updated_at=? WHERE id=?").bind(finished,phase,ts,finished,finished,server.id)
+    ]);
+    return json({success:true,phase,result,core_version:APP_VERSION});
+  } catch (error) {
+    const message=cleanText(error?.message||error,1500),finished=nowIso();
+    await env.PASARGUARD_DB.batch([
+      env.PASARGUARD_DB.prepare("UPDATE server_phase_runs SET status='failed',error=?,finished_at=? WHERE job_id=?").bind(message,finished,jobId),
+      env.PASARGUARD_DB.prepare("UPDATE bluepanel_servers SET last_heartbeat_at=?,last_phase=?,last_phase_at=?,last_error=?,updated_at=? WHERE id=?").bind(finished,phase,ts,message,finished,server.id)
+    ]);
+    await reportCoreRuntimeError(env,"server_phase","SERVER_PHASE_"+phase+"_FAILED",error,{server_id:server.id,phase,job_id:jobId});
+    return fail(message,500,"SERVER_PHASE_FAILED");
+  }
+}
+
 function bluePanelMaintenancePhase(total = 8) {
   const date = new Date();
   const seed = Math.floor(Date.now() / 86400000) + date.getUTCHours() * 60 + date.getUTCMinutes();
   return ((seed % total) + total) % total;
 }
 
-async function runBluePanelCoreScheduledJobs(env) {
+async function runBluePanelCoreMaintenancePhase(env, forcedPhase, source = "cron") {
   await ensureDb(env);
-  const ts = nowIso();
-  const phase = bluePanelMaintenancePhase(8);
-  const work = { phase };
-
-  // Only cheap local cleanup is shared. Every network-heavy responsibility gets
-  // its own fresh scheduled invocation, so no phase can spend the request budget
-  // needed by another phase.
+  const ts = nowIso(), phase = clampInt(forcedPhase,0,BLUEPANEL_SERVER_PHASE_COUNT-1), work = { phase, source };
   await env.PASARGUARD_DB.batch([
     env.PASARGUARD_DB.prepare('DELETE FROM web_sessions WHERE expires_at<=?').bind(ts),
-    env.PASARGUARD_DB.prepare('DELETE FROM web_login_codes WHERE expires_at<=? OR (consumed_at IS NOT NULL AND consumed_at<=?)').bind(ts,new Date(Date.now()-3600000).toISOString())
+    env.PASARGUARD_DB.prepare('DELETE FROM web_login_codes WHERE expires_at<=? OR (consumed_at IS NOT NULL AND consumed_at<=?)').bind(ts,new Date(Date.now()-3600000).toISOString()),
+    env.PASARGUARD_DB.prepare("UPDATE server_bootstrap_jobs SET status='expired',error='مهلت نصب منقضی شد',ssh_credential_enc=NULL,registration_code_enc=NULL,claim_token_hash=NULL,report_token_hash=NULL,finished_at=?,updated_at=? WHERE status NOT IN ('connected','completed','failed','expired') AND expires_at<=?").bind(ts,ts,ts)
   ]);
-
-  if (phase === 0) {
-    const update = await automaticUpdateTick(env,{source:'cron',intervalSeconds:30});
-    work.automatic_update = update;
-    if (!update?.failed) await resolveSystemErrorCenter(env,{scope:'auto_update',botId:'',errorCode:'CORE_AUTOMATIC_UPDATE_FAILED'});
-  } else if (phase === 1) {
-    work.version_activation = await notifyVersionActivation(env);
-  } else if (phase === 2) {
-    work.cluster_health = await monitorClusterHealthAndReport(env);
-  } else if (phase === 3) {
-    work.reseller_menus = await syncAllResellerBotMenus(env,false,2);
-    work.manager_sync = await syncPasarguardManagersForAllUsers(env,1);
-  } else if (phase === 4) {
-    if (!liveUsageNamespaceAvailable(env)) work.usage = await syncUsage(env,6);
-    work.balance_reconcile = await reconcileAllAgencyBalanceStates(env,4);
-  } else if (phase === 5) {
-    work.trials = await processCentralTrialExpirations(env,4);
-    const settings = await getSettings(env);
-    if (plisioRateMode(settings)==='auto' && String(settings.plisio_fx_api_key||'').trim()) {
-      try { work.fx = await refreshCentralPlisioFxRate(env); }
-      catch (error) { await reportCoreRuntimeError(env,'core_cron','FX_REFRESH_ERROR',error,{phase}); }
-    }
-    if (settings.payment_poll_enabled==='true' && settings.blupal_api_key) work.payments = await pollPendingPayments(env,3);
-    if (settings.auto_delete_pending_invoices==='true') work.invoice_cleanup = await cleanupStalePendingInvoices(env,{settings,limit:5});
-  } else if (phase === 6) {
-    work.subrequest_limits = await ensureClusterSubrequestLimits(env);
-    work.python_helper = await automaticPythonHelperTick(env,{source:'cron'});
-  } else {
-    const processorResult = await triggerProcessorBusinessJobs(env,'core_cron_phase_'+phase);
-    work.processor = processorResult;
-    if (processorResult?.success===false) {
-      await reportCoreRuntimeError(env,'core_cron','PROCESSOR_TRIGGER_ERROR',new Error(String(processorResult.error||'Processor trigger failed')),{phase});
-    } else {
-      await resolveSystemErrorCenter(env,{scope:'core_cron',botId:'',errorCode:'CORE_PROCESSOR_TRIGGER_ERROR'});
-    }
+  if (phase === 0) { const update = await automaticUpdateTick(env,{source,intervalSeconds:30}); work.automatic_update=update; if (!update?.failed) await resolveSystemErrorCenter(env,{scope:'auto_update',botId:'',errorCode:'CORE_AUTOMATIC_UPDATE_FAILED'}); }
+  else if (phase === 1) work.version_activation = await notifyVersionActivation(env);
+  else if (phase === 2) work.cluster_health = await monitorClusterHealthAndReport(env);
+  else if (phase === 3) { work.reseller_menus=await syncAllResellerBotMenus(env,false,2); work.manager_sync=await syncPasarguardManagersForAllUsers(env,1); }
+  else if (phase === 4) { if(!liveUsageNamespaceAvailable(env))work.usage=await syncUsage(env,6); work.balance_reconcile=await reconcileAllAgencyBalanceStates(env,4); }
+  else if (phase === 5) {
+    work.trials=await processCentralTrialExpirations(env,4); const settings=await getSettings(env);
+    if(plisioRateMode(settings)==='auto'&&String(settings.plisio_fx_api_key||'').trim()){try{work.fx=await refreshCentralPlisioFxRate(env)}catch(error){await reportCoreRuntimeError(env,'core_cron','FX_REFRESH_ERROR',error,{phase,source})}}
+    if(settings.payment_poll_enabled==='true'&&settings.blupal_api_key)work.payments=await pollPendingPayments(env,3);
+    if(settings.auto_delete_pending_invoices==='true')work.invoice_cleanup=await cleanupStalePendingInvoices(env,{settings,limit:5});
+  } else if (phase === 6) { work.subrequest_limits=await ensureClusterSubrequestLimits(env); work.python_helper=await automaticPythonHelperTick(env,{source}); }
+  else {
+    const processorResult=await triggerProcessorBusinessJobs(env,String(source).replace(/[^a-z0-9_-]/gi,'_')+'_phase_'+phase); work.processor=processorResult;
+    if(processorResult?.success===false)await reportCoreRuntimeError(env,'core_cron','PROCESSOR_TRIGGER_ERROR',new Error(String(processorResult.error||'Processor trigger failed')),{phase,source});
+    else await resolveSystemErrorCenter(env,{scope:'core_cron',botId:'',errorCode:'CORE_PROCESSOR_TRIGGER_ERROR'});
   }
-
-  // Two rows are enough for fast delivery while retaining a reserve for telemetry.
-  try { work.report_flush = await processReportOutboxOnCore(env,2); }
-  catch (error) { await reportCoreRuntimeError(env,'core_cron','REPORT_FLUSH_ERROR',error,{phase}); }
-
-  const finished = nowIso();
+  try { work.report_flush=await processReportOutboxOnCore(env,2); } catch(error){await reportCoreRuntimeError(env,'core_cron','REPORT_FLUSH_ERROR',error,{phase,source});}
+  const finished=nowIso();
   await env.PASARGUARD_DB.batch([
     env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_core_cron_at',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(finished,finished),
     env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_core_cron_phase',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(String(phase),finished),
+    env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_core_cron_source',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(String(source),finished),
     env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_core_cron_result',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(JSON.stringify(work),finished)
   ]);
-  return { phase, finished_at: finished, work };
+  return {phase,source,finished_at:finished,work};
+}
+async function runBluePanelCoreScheduledJobs(env) {
+  await ensureDb(env);
+  const activeServer=await bluePanelActiveServer(env);
+  if(activeServer){
+    const ts=nowIso();
+    await env.PASARGUARD_DB.batch([
+      env.PASARGUARD_DB.prepare('DELETE FROM web_sessions WHERE expires_at<=?').bind(ts),
+      env.PASARGUARD_DB.prepare('DELETE FROM web_login_codes WHERE expires_at<=? OR (consumed_at IS NOT NULL AND consumed_at<=?)').bind(ts,new Date(Date.now()-3600000).toISOString()),
+      env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_core_cron_at',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(ts,ts),
+      env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_core_cron_source','server_delegated',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(ts),
+      env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_core_cron_result',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(JSON.stringify({delegated:true,server_id:activeServer.id,heartbeat_age_ms:activeServer.heartbeat_age_ms}),ts)
+    ]);
+    return {delegated:true,server_id:activeServer.id,heartbeat_age_ms:activeServer.heartbeat_age_ms,finished_at:ts};
+  }
+  return runBluePanelCoreMaintenancePhase(env,bluePanelMaintenancePhase(BLUEPANEL_SERVER_PHASE_COUNT),'worker_fallback');
 }
 
 export default {
@@ -18316,6 +18550,11 @@ export default {
       scheduleRequestTriggeredUpdate(env,ctx,path);
       if(request.method==='OPTIONS') return new Response(null,{status:204,headers:{'access-control-allow-origin':'*','access-control-allow-methods':'GET,POST,OPTIONS','access-control-allow-headers':'content-type,x-telegram-init-data,x-web-session,authorization,x-bluepanel-public-origin'}});
       if(path==='/__bluepanel/internal/d1'&&request.method==='POST') return bluePanelCoreD1Rpc(request,env);
+      if(path==='/__bluepanel/bootstrap/claim'&&request.method==='POST') return bluePanelBootstrapClaim(request,env);
+      if(path==='/__bluepanel/bootstrap/report'&&request.method==='POST') return bluePanelBootstrapReport(request,env);
+      if(path==='/__bluepanel/server/register'&&request.method==='POST') return bluePanelRegisterServer(request,env);
+      if(path==='/__bluepanel/server/heartbeat'&&request.method==='POST') return bluePanelServerHeartbeat(request,env);
+      if(path==='/__bluepanel/server/run-phase'&&request.method==='POST') return bluePanelServerRunPhase(request,env);
       if((path==='/__bluepanel/service/core-local-health'||path==='/__bluepanel/service/core-health')&&bluePanelInternalHost(request)){const h=await bluePanelCoreLocalHealth(env);return bluePanelCoreJson(h,h.ok?200:503,{'x-bluepanel-role':'bluepanel-core','x-bluepanel-version':APP_VERSION});}
       if(path==='/__bluepanel/service/reports/flush'&&request.method==='POST'&&bluePanelInternalHost(request)){await ensureDb(env);const result=await processReportOutboxOnCore(env,12);return bluePanelCoreJson({success:true,result});}
       if(path==='/health'){const h=await bluePanelCoreHealth(env);return bluePanelCoreJson(h,h.ok?200:503);}
