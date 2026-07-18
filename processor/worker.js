@@ -1,11 +1,11 @@
 /* BLUEPANEL_PROCESSOR_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.56
+ * Version: 3.3.57
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = '3.3.56';
+const APP_VERSION = '3.3.57';
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
@@ -1047,13 +1047,14 @@ async function telegramApiWithToken(token, method, body) {
 function reportScopeKey(botId = "") { return botId ? "reseller:" + String(botId) : "central"; }
 function reportTopicDefinition(scopeType, topicKey) { const aliases={services:"service_purchases",service:"service_purchases",imports:"service_imports",legacy:"service_imports",subscription_import:"service_imports",security:"errors",error:"errors",trials:"trial_accounts",trial:"trial_accounts",daily:"nightly",backup:"backups",announcement:"announcements",commission:"commissions",finance:"payments",purchases:"orders",other:"misc"};const normalizedKey=aliases[String(topicKey||"")]||String(topicKey||"overview");const list=scopeType==="central"?CENTRAL_REPORT_TOPICS:RESELLER_REPORT_TOPICS;return list.find(x=>x.key===normalizedKey)||list[0]; }
 async function queueReportEvent(env,botId,topicKey,title,messageHtml,dedupeKey){
-  const ts=nowIso();
+  const ts=nowIso(),reportId=id("rpt");
   try{
-    await env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO report_outbox(
+    const result=await env.PASARGUARD_DB.prepare(`INSERT OR IGNORE INTO report_outbox(
       id,bot_id,topic_key,title,message_html,dedupe_key,central_status,reseller_status,attempts,next_attempt_at,created_at,updated_at
     ) VALUES(?,?,?,?,?,?,'pending','pending',0,?,?,?)`)
-      .bind(id("rpt"),botId,topicKey,cleanText(title,160),cleanText(messageHtml,3500),cleanText(dedupeKey,220),ts,ts,ts).run();
-  }catch(_){}
+      .bind(reportId,botId,topicKey,cleanText(title,160),cleanText(messageHtml,3500),cleanText(dedupeKey,220),ts,ts,ts).run();
+    return{queued:Number(result?.meta?.changes||0)>0,id:reportId};
+  }catch(error){console.error("processor queueReportEvent failed",error);return{queued:false,error:String(error?.message||error)}}
 }
 async function ensureReportTopic(env,forum,scopeType,topicKey,apiCall){
   const scopeKey=forum.scope_key,definition=reportTopicDefinition(scopeType,topicKey);
@@ -1145,10 +1146,10 @@ async function syncConfiguredReportTopics(env,limit=10){
   return {checked:(rows.results||[]).length,forums,topics,failed};
 }
 
-async function processReportOutbox(env,limit=100){
+async function processReportOutbox(env,limit=100,preferredId=""){
   const rows=await env.PASARGUARD_DB.prepare(`SELECT * FROM report_outbox
     WHERE next_attempt_at<=? AND (central_status='pending' OR reseller_status='pending')
-    ORDER BY created_at LIMIT ?`).bind(nowIso(),Math.max(1,Math.min(300,Number(limit||100)))).all();
+    ORDER BY CASE WHEN id=? THEN 0 WHEN topic_key='errors' THEN 1 ELSE 2 END,created_at LIMIT ?`).bind(nowIso(),cleanText(preferredId||"",120),Math.max(1,Math.min(300,Number(limit||100)))).all();
   let delivered=0,failed=0;
   for(const row of rows.results||[]){
     let centralStatus=String(row.central_status||"pending");
@@ -3534,9 +3535,21 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_PROCESSOR_VERSION='3.3.56';
+const BLUEPANEL_PROCESSOR_VERSION='3.3.57';
 let processorSchemaPromise=null;
 function processorJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
+
+
+function processorErrorRedact(value){return String(value||"").replace(/\bBearer\s+[^\s,;]+/gi,"Bearer [REDACTED]").replace(/\b\d{6,12}:[A-Za-z0-9_-]{24,}\b/g,"[TELEGRAM_BOT_TOKEN]").replace(/((?:api[_-]?key|token|password|passwd|secret|authorization)[\s"']*[:=][\s"']*)[^,;\s"']+/gi,"$1[REDACTED]")}
+function processorErrorSlug(value,fallback="ERROR"){const slug=String(value||"").toUpperCase().replace(/[^A-Z0-9]+/g,"_").replace(/^_+|_+$/g,"").slice(0,72);return slug||fallback}
+function processorErrorShouldNotify(count){const n=Math.max(1,Number(count||1));return n<=3||[5,10,25,50,100,250,500,1000].includes(n)||(n>1000&&n%1000===0)}
+async function publishProcessorErrorAlert(env,row,context={}){
+  const count=Math.max(1,Number(row?.occurrence_count||1));if(!processorErrorShouldNotify(count))return{skipped:true};const botId=cleanText(row?.bot_id||"",120),ts=row?.last_seen_at||nowIso();
+  const q=await queueReportEvent(env,botId||null,"errors",count===1?"🚨 خطای جدید فوری":"🔁 تکرار خطای فعال","کد: <code>"+botEscape(row?.error_code||"UNKNOWN_ERROR")+"</code>\nبخش: <b>"+botEscape(row?.scope||"processor")+"</b>\n"+(botId?"ربات: <code>"+botEscape(botId)+"</code>\n":"")+"پیام: <code>"+botEscape(cleanText(row?.message||"خطای نامشخص",1200))+"</code>\nتکرار: <b>"+botMoney(count)+"</b>\nزمان: <code>"+botEscape(ts)+"</code>","processor-error:"+cleanText(row?.error_code||"UNKNOWN_ERROR",90)+":"+botId+":"+count);
+  if(q?.queued){try{await processReportOutbox(env,4,q.id)}catch(error){console.error("processor immediate error report flush failed",error)}}
+  return{queued:Boolean(q?.queued)};
+}
+async function reportProcessorRuntimeError(env,scope,label,error,context={}){return recordSystemError(env,scope||"processor_runtime",context?.botId||"","PROCESSOR_"+processorErrorSlug(label||error?.code||"RUNTIME_ERROR"),cleanText(processorErrorRedact(error?.message||error||"خطای نامشخص"),1500),{...context,role:"bluepanel-processor",version:APP_VERSION,stack:cleanText(processorErrorRedact(error?.stack||""),1800)})}
 
 async function recordSystemError(env, scope, botId, errorCode, message, context = {}) {
   const ts = nowIso();
@@ -3544,8 +3557,8 @@ async function recordSystemError(env, scope, botId, errorCode, message, context 
   const normalizedScope = cleanText(scope || "processor", 80);
   const normalizedBot = cleanText(botId || "", 120);
   const code = cleanText(errorCode || "UNKNOWN_ERROR", 120);
-  const text = cleanText(message || "خطای نامشخص", 1500);
-  const contextJson = JSON.stringify(context || {});
+  const text = cleanText(processorErrorRedact(message || "خطای نامشخص"), 1500);
+  let contextJson="{}";try{contextJson=processorErrorRedact(JSON.stringify(context||{}))}catch(_){}
   try {
     // Compatible with both the legacy four-column UNIQUE table and the new
     // partial unique index used during staged Core/Processor deployment.
@@ -3557,8 +3570,12 @@ async function recordSystemError(env, scope, botId, errorCode, message, context 
         message=?,context_json=?,occurrence_count=occurrence_count+CASE WHEN id=? THEN 0 ELSE 1 END,last_seen_at=?
       WHERE scope=? AND bot_id=? AND error_code=? AND status='open'`).bind(text,contextJson,rowId,ts,normalizedScope,normalizedBot,code)
     ]);
+    const row=await env.PASARGUARD_DB.prepare("SELECT scope,bot_id,error_code,message,occurrence_count,last_seen_at FROM system_error_center WHERE scope=? AND bot_id=? AND error_code=? AND status='open' ORDER BY last_seen_at DESC LIMIT 1").bind(normalizedScope,normalizedBot,code).first();
+    if(row)await publishProcessorErrorAlert(env,row,context);
+    return{ok:true,count:Number(row?.occurrence_count||1)};
   } catch (error) {
     console.error("processor error center write skipped", error);
+    return{ok:false,error:String(error?.message||error)};
   }
 }
 
@@ -3927,6 +3944,6 @@ async function runProcessorBusinessJobs(runtime, options = {}){
 }
 
 export default {
- async fetch(request,env,ctx){const path=new URL(request.url).pathname.replace(/\/+$/,'')||'/';try{if(path==='/__bluepanel/service/queue'&&processorInternal(request)&&request.method==='POST')return processorQueue(request,env);if(path==='/__bluepanel/service/process'&&processorInternal(request)&&request.method==='POST'){const runtime=bluePanelRuntimeEnv(env,'bluepanel-processor');const skipUsage=String(request.headers.get('x-bluepanel-live-usage-active')||'')==='true';const phaseHeader=request.headers.get('x-bluepanel-business-phase');const phase=phaseHeader===null?processorBusinessPhase(4):Number(phaseHeader);let queue=await processorRunBackupQueue(env);if(!queue.heavy)queue=await processorRunQueue(env,12);const business=queue.heavy?{skipped:true,reason:'heavy_backup_queue_job'}:await runProcessorBusinessJobs(runtime,{skipUsage,phase});return processorJson({success:true,queue,business})}if((path==='/__bluepanel/service/processor-local-health'||path==='/__bluepanel/service/processor-health')&&processorInternal(request)){const h=await processorLocalHealth(env);return processorJson(h,h.ok?200:503,{'x-bluepanel-role':'bluepanel-processor','x-bluepanel-version':APP_VERSION})}if(path==='/health'){const h=await processorHealth(env);return processorJson(h,h.ok?200:503)}if(path==='/'&&request.method==='GET'){const h=await processorHealth(env);return new Response('<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{background:#07111f;color:#fff;font-family:Tahoma;padding:30px}.c{max-width:680px;margin:auto;background:#112944;padding:24px;border-radius:24px}.ok{color:#35d59a}.bad{color:#ff667b}</style><div class="c"><h1>BluePanel Processor</h1><p class="'+(h.ok?'ok':'bad')+'">'+(h.ok?'اتصال کامل برقرار است':'اتصال کامل نیست')+'</p><pre>'+JSON.stringify(h,null,2)+'</pre></div></html>',{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}})}return processorJson({success:false,error:'Not found'},404)}catch(error){console.error('processor fetch error',error);return processorJson({success:false,ok:false,role:'bluepanel-processor',version:APP_VERSION,error:String(error?.message||error),code:'PROCESSOR_RUNTIME_ERROR'},500)}},
- async scheduled(controller,env,ctx){ctx.waitUntil((async()=>{try{const runtime=bluePanelRuntimeEnv(env,'bluepanel-processor'),phase=processorBusinessPhase(4);let queue=await processorRunBackupQueue(env);if(!queue.heavy){const autoBackup=await processResellerAutoBackups(runtime,1);if(Number(autoBackup?.checked||0)===0){queue=await processorRunQueue(env,12);await runProcessorBusinessJobs(runtime,{phase});}}await env.PROCESSOR_DB.prepare("DELETE FROM processor_jobs WHERE status='delivered' AND updated_at<?").bind(new Date(Date.now()-86400000).toISOString()).run()}catch(error){console.error('processor scheduled error',error)}})())}
+ async fetch(request,env,ctx){const path=new URL(request.url).pathname.replace(/\/+$/,'')||'/';try{if(path==='/__bluepanel/service/queue'&&processorInternal(request)&&request.method==='POST')return processorQueue(request,env);if(path==='/__bluepanel/service/process'&&processorInternal(request)&&request.method==='POST'){const runtime=bluePanelRuntimeEnv(env,'bluepanel-processor');const skipUsage=String(request.headers.get('x-bluepanel-live-usage-active')||'')==='true';const phaseHeader=request.headers.get('x-bluepanel-business-phase');const phase=phaseHeader===null?processorBusinessPhase(4):Number(phaseHeader);let queue=await processorRunBackupQueue(env);if(!queue.heavy)queue=await processorRunQueue(env,12);const business=queue.heavy?{skipped:true,reason:'heavy_backup_queue_job'}:await runProcessorBusinessJobs(runtime,{skipUsage,phase});return processorJson({success:true,queue,business})}if((path==='/__bluepanel/service/processor-local-health'||path==='/__bluepanel/service/processor-health')&&processorInternal(request)){const h=await processorLocalHealth(env);return processorJson(h,h.ok?200:503,{'x-bluepanel-role':'bluepanel-processor','x-bluepanel-version':APP_VERSION})}if(path==='/health'){const h=await processorHealth(env);return processorJson(h,h.ok?200:503)}if(path==='/'&&request.method==='GET'){const h=await processorHealth(env);return new Response('<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{background:#07111f;color:#fff;font-family:Tahoma;padding:30px}.c{max-width:680px;margin:auto;background:#112944;padding:24px;border-radius:24px}.ok{color:#35d59a}.bad{color:#ff667b}</style><div class="c"><h1>BluePanel Processor</h1><p class="'+(h.ok?'ok':'bad')+'">'+(h.ok?'اتصال کامل برقرار است':'اتصال کامل نیست')+'</p><pre>'+JSON.stringify(h,null,2)+'</pre></div></html>',{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}})}return processorJson({success:false,error:'Not found'},404)}catch(error){console.error('processor fetch error',error);try{await reportProcessorRuntimeError(bluePanelRuntimeEnv(env,'bluepanel-processor'),'processor_fetch','FETCH_'+processorErrorSlug(path,'RUNTIME_ERROR'),error,{path,method:request.method})}catch(_){}return processorJson({success:false,ok:false,role:'bluepanel-processor',version:APP_VERSION,error:String(error?.message||error),code:'PROCESSOR_RUNTIME_ERROR'},500)}},
+ async scheduled(controller,env,ctx){ctx.waitUntil((async()=>{try{const runtime=bluePanelRuntimeEnv(env,'bluepanel-processor'),phase=processorBusinessPhase(4);let queue=await processorRunBackupQueue(env);if(!queue.heavy){const autoBackup=await processResellerAutoBackups(runtime,1);if(Number(autoBackup?.checked||0)===0){queue=await processorRunQueue(env,12);await runProcessorBusinessJobs(runtime,{phase});}}await env.PROCESSOR_DB.prepare("DELETE FROM processor_jobs WHERE status='delivered' AND updated_at<?").bind(new Date(Date.now()-86400000).toISOString()).run()}catch(error){console.error('processor scheduled error',error);try{await reportProcessorRuntimeError(bluePanelRuntimeEnv(env,'bluepanel-processor'),'processor_cron','SCHEDULED_RUNTIME_ERROR',error,{cron:controller?.cron||''})}catch(_){}}})())}
 };

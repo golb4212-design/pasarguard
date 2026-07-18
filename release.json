@@ -1,9 +1,9 @@
 {
-  "version": "3.3.56",
-  "release_id": "3.3.56-error-center-orphan-service-and-staged-rollout-fix",
+  "version": "3.3.57",
+  "release_id": "3.3.57-universal-central-error-alerting",
   "architecture": "fully-split-three-worker-content-only-sideworker-rollout",
-  "title": "رفع خطاهای تکراری User not found و انتشار مرحله‌ای نادرست",
-  "summary": "سرویس حذف‌شده از پنل به‌جای تولید بی‌نهایت خطای User not found به remote_missing تبدیل می‌شود و پایش آن متوقف می‌گردد؛ انتشار Edge و Processor نیز با API محتوای Cloudflare و بدون تغییر Bindingها انجام می‌شود و Core تا تأیید Workerهای جانبی completed نمی‌شود.",
+  "title": "گزارش فوری تمام خطاهای قابل‌تشخیص در تاپیک مرکزی",
+  "summary": "اولین رخداد هر خطای متمایز در Core، Edge، Processor، Cron، API، Webhook و رابط‌های وب فوراً به تاپیک مرکزی گزارش خطاها ارسال می‌شود؛ در شکست ارسال تاپیک، هشدار اضطراری مستقیم برای مدیران مرکزی فرستاده می‌شود و تکرارها بدون ایجاد سیل پیام در نقاط مهم شمارش اطلاع داده می‌شوند.",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -11,60 +11,59 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "classifies HTTP 404 and User not found as a removed remote service instead of an infrastructure failure",
-    "marks the delivered order as remote_missing and disables repeated health monitoring for the missing username",
-    "resolves recovered service-health and notification errors per bot only when no real failure remains in that batch",
-    "excludes remote_missing services from recurring notification sync",
-    "uploads Edge and Processor through Cloudflare script content endpoint so existing configuration and bindings are untouched",
-    "fails staged rollout immediately when a required side Worker is not verified",
-    "records Edge and Processor as verified before a rollout can become completed",
-    "repairs historical completed rows that incorrectly retained pending side-worker states",
-    "limits failed-rollout headline count to the most recent 24 hours"
+    "reports the first occurrence of every distinct captured runtime error immediately to the central errors topic",
+    "covers Core, Edge and Processor request handlers, scheduled jobs, API forwarding, Telegram webhooks and known background tasks",
+    "captures browser JavaScript errors, unhandled promise rejections, rejected fetch calls and HTTP 5xx responses from central, reseller and customer miniapps",
+    "adds a cluster-health watchdog for Edge, Processor and the live-usage Durable Object binding",
+    "falls back to an emergency direct Telegram message to central admins when topic delivery is unavailable",
+    "redacts authorization headers, Telegram bot tokens, passwords, API keys and secrets before storage or notification",
+    "deduplicates recurring errors and sends milestone summaries at occurrences 1, 2, 3, 5, 10, 25, 50, 100, 250, 500, 1000 and each additional 1000",
+    "flushes Processor error reports with priority instead of waiting for the normal report queue cycle"
   ],
   "changes": [
-    "خطاهای User not found مربوط به سرویس حذف‌شده دیگر در مرکز خطا تکرار نمی‌شوند.",
-    "سرویس حذف‌شده با وضعیت remote_missing ثبت و پایش سلامت آن غیرفعال می‌شود.",
-    "خطای سلامت یا اعلان فقط وقتی بسته می‌شود که برای همان ربات در چرخه جاری خطای واقعی دیگری وجود نداشته باشد.",
-    "بروزرسانی Edge و Processor فقط محتوای worker.js را تغییر می‌دهد و Bindingها، D1، مسیرها و تنظیمات Worker را بازنویسی نمی‌کند.",
-    "در صورت شکست Edge یا Processor، انتشار Core ادامه پیدا نمی‌کند و وضعیت completed کاذب ثبت نمی‌شود.",
-    "ردیف‌های قدیمی completed با Edge/Processor pending در اجرای بعدی اصلاح یا superseded می‌شوند.",
-    "عدد انتشار ناموفق در مرکز خطا فقط تلاش‌های ۲۴ ساعت اخیر را نشان می‌دهد."
+    "مرکز خطا از حالت ثبت چند خطای ازپیش‌تعریف‌شده به سامانه گزارش سراسری خطاهای قابل‌تشخیص تبدیل شد.",
+    "خطاهای Runtime، API، Webhook، Cron و وظایف پس‌زمینه هر سه Worker به تاپیک مرکزی گزارش خطاها متصل شدند.",
+    "خطاهای جاوااسکریپت و پاسخ‌های 5xx مینی‌اپ مرکزی، کنترل نماینده و مینی‌اپ فروش مشتری به هسته ارسال می‌شوند.",
+    "اولین رخداد هر خطای جدید فوری است و تکرارها با شمارنده مرحله‌ای اطلاع داده می‌شوند تا گروه مرکزی اسپم نشود.",
+    "در شکست ارسال به تاپیک، هشدار اضطراری مستقیم برای شناسه‌های مدیر مرکزی ارسال می‌شود.",
+    "سلامت Edge، Processor و Binding محاسبه Live در هر چرخه زمان‌بندی پایش می‌شود.",
+    "اطلاعات حساس قبل از ثبت در دیتابیس و ارسال تلگرام ماسک می‌شوند."
   ],
   "deployment": {
     "automatic_provisioning": "upload ZIP through the central bot",
-    "db_schema_revision": "unchanged-from-3.3.55",
-    "automatic_migration": "no new table or manual SQL; stale error rows resolve automatically after Processor runs",
+    "db_schema_revision": "unchanged-from-3.3.56",
+    "automatic_migration": "no new table, migration or manual SQL is required",
     "required_bindings": [
       "Core: PASARGUARD_DB, EDGE_WORKER, PROCESSOR_WORKER and LIVE_USAGE_COORDINATOR",
       "Processor: EDGE_WORKER and CORE_WORKER",
       "Edge: CORE_WORKER and PROCESSOR_WORKER"
     ],
-    "durable_object": "LiveUsageCoordinator with existing migration tag v3.1.9-live-usage"
+    "durable_object": "LiveUsageCoordinator with existing migration tag v3.1.9-live-usage",
+    "central_topic": "report key errors / title ❌ گزارش خطاها"
   },
   "validation": {
     "worker_syntax": "passed: node --check for core, edge and processor",
-    "remote_user_not_found_classifier": "passed: HTTP 404, English User not found and Persian not-found cases",
-    "orphan_service_flow": "passed: static contract verifies remote_missing, monitor disable and notification exclusion",
-    "side_worker_upload": "passed: Edge and Processor use /content and do not use bindings_inherit=strict in their deploy functions",
-    "staged_rollout": "passed: required side-worker failure throws before Core and completed writes verified side statuses",
-    "version_markers": "passed: 3.3.56 markers in all three Workers and Service Worker assets",
+    "static_contracts": "passed: immediate central alerting, client telemetry, cluster watchdog, redaction and repeat cadence",
+    "browser_reporter": "passed: generated injected client reporter JavaScript parses successfully",
+    "topic_pipeline": "passed by static contract: first occurrence queues the central errors report and Processor prioritizes its exact outbox row",
     "zip_integrity": "passed: clean nine-entry archive structure and CRC validation",
-    "live_api": "not run; requires production PasarGuard, Marzban and Cloudflare credentials"
+    "live_api": "not run; requires production Telegram, Cloudflare, PasarGuard and Marzban credentials"
   },
   "limitations": [
-    "Existing open User not found errors close after the new Processor executes its next service-health or notification cycle.",
-    "Production Cloudflare upload and Service Binding verification must be confirmed after deployment."
+    "A silent logical bug that returns a plausible but wrong result without throwing, returning 5xx or violating a monitored health condition cannot be discovered automatically until a dedicated invariant check exists.",
+    "An outage that simultaneously prevents Worker execution, D1 access and Telegram delivery cannot be reported by the same affected runtime; Cloudflare external alerts are still recommended for total-platform outages.",
+    "Production delivery to the configured Telegram topic and emergency admin fallback must be confirmed after deployment."
   ],
   "sha256": {
-    "core/worker.js": "6d8686081c34099b3617799b7ab340291e43ba4096db18ff84f4efcff57b6bb8",
-    "edge/worker.js": "5f43fd346d074c002b7098600ce4aa2a694ec7b67eec88886b0b1d19da2cdb7d",
-    "processor/worker.js": "5aff959e1b3e94430251d1b60ba3e4107ff22af71bfc60cdc453c385a13e99bd",
+    "core/worker.js": "5e1b765e0ae0a6c0795270046315fa93c047b1442ce9da451c53fd2e22df0dcb",
+    "edge/worker.js": "184d047a7bc1040181556adafcc3e68063b9fb1c4a59cf82f0f99e3ea79c8a09",
+    "processor/worker.js": "8ef65cd20a57e5f93cb4f6eb20fd1e3482098d4a9e8a7dc02bf7ee5074611204",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "6d8686081c34099b3617799b7ab340291e43ba4096db18ff84f4efcff57b6bb8",
-    "edge/worker.js": "5f43fd346d074c002b7098600ce4aa2a694ec7b67eec88886b0b1d19da2cdb7d",
-    "processor/worker.js": "5aff959e1b3e94430251d1b60ba3e4107ff22af71bfc60cdc453c385a13e99bd",
+    "core/worker.js": "5e1b765e0ae0a6c0795270046315fa93c047b1442ce9da451c53fd2e22df0dcb",
+    "edge/worker.js": "184d047a7bc1040181556adafcc3e68063b9fb1c4a59cf82f0f99e3ea79c8a09",
+    "processor/worker.js": "8ef65cd20a57e5f93cb4f6eb20fd1e3482098d4a9e8a7dc02bf7ee5074611204",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }

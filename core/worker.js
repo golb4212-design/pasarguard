@@ -1,15 +1,26 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.56
+ * Version: 3.3.57
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.56';
+const APP_VERSION = '3.3.57';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.57": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🚨", text: "ارسال فوری اولین رخداد هر خطای واقعی به Topic مرکزی گزارش خطاها" },
+      { emoji: "🧭", text: "پوشش خطاهای Core، Edge، Processor، Cron، API، Webhook و خطاهای JavaScript مینی‌اپ‌ها" },
+      { emoji: "🛟", text: "ارسال اضطراری مستقیم به مدیران وقتی Topic مرکزی یا صف گزارش در دسترس نباشد" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "⚡", text: "گزارش فوری خطاهای ربات فروش، پنل نماینده و مینی‌اپ مشتری با شناسه همان ربات" },
+      { emoji: "🔁", text: "خلاصه تکرار خطا بدون اسپم؛ رخداد اول فوری و شمارش‌های مهم دوباره اعلام می‌شوند" }
+    ])
+  }),
   "3.3.56": Object.freeze({
     central: Object.freeze([
       { emoji: "🧯", text: "تبدیل User not found سرویس حذف‌شده به وضعیت remote_missing و توقف خطای تکراری" },
@@ -5778,6 +5789,7 @@ async function syncUsage(env, limit = 50) {
     } catch (error) {
       errors.push({ agencyId: agency.id, agencyTitle: cleanText(agency.title || agency.panel_username || agency.id, 100), error: cleanText(error?.message || error, 500), code: cleanText(error?.code || "USAGE_SYNC_FAILED", 80), status: Number(error?.status || 0), retryable: error?.retryable === true });
       await audit(env, null, "usage_sync_failed", { agencyId: agency.id, agencyTitle: agency.title || agency.panel_username || "", code: error?.code || "", status: Number(error?.status || 0), message: cleanText(error?.message || error, 500) });
+      await incrementSystemErrorCenter(env,"usage_sync",agency.id,cleanText(error?.code||"USAGE_SYNC_FAILED",120),cleanText(error?.message||error,1200),{agencyId:agency.id,agencyTitle:agency.title||agency.panel_username||"",status:Number(error?.status||0),retryable:error?.retryable===true});
     }
   }
   return { processed, charged, collected, errors };
@@ -5819,6 +5831,7 @@ async function syncUsageForUser(env, userId, limit = 30, minIntervalSeconds = LI
     } catch (error) {
       errors.push({ agencyId: agency.id, agencyTitle: cleanText(agency.title || agency.panel_username || agency.id, 100), error: cleanText(error?.message || error, 500), code: cleanText(error?.code || "USAGE_SYNC_FAILED", 80), status: Number(error?.status || 0), retryable: error?.retryable === true });
       await audit(env, userId, "user_usage_sync_failed", { agencyId: agency.id, agencyTitle: agency.title || agency.panel_username || "", code: error?.code || "", status: Number(error?.status || 0), message: cleanText(error?.message || error, 500) });
+      await incrementSystemErrorCenter(env,"user_usage_sync",agency.id,cleanText(error?.code||"USER_USAGE_SYNC_FAILED",120),cleanText(error?.message||error,1200),{userId,agencyId:agency.id,agencyTitle:agency.title||agency.panel_username||"",status:Number(error?.status||0),retryable:error?.retryable===true});
     }
   }
 
@@ -5878,6 +5891,7 @@ async function liveUsageSnapshot(request, env) {
           status: Number(error?.status || 0),
           message
         });
+        await incrementSystemErrorCenter(env,"live_usage",agency.id,cleanText(error?.code||"LIVE_USAGE_SYNC_FAILED",120),message,{userId:auth.user.id,agencyId:agency.id,agencyTitle:agency.title||agency.panel_username||"",status:Number(error?.status||0),retryable:error?.retryable===true});
       }
     }
   }
@@ -9703,6 +9717,119 @@ async function safePrepareDeploymentTracking(env) {
   }
 }
 
+
+function systemErrorRedactText(value) {
+  return String(value || "")
+    .replace(/\bBearer\s+[^\s,;]+/gi, "Bearer [REDACTED]")
+    .replace(/\b\d{6,12}:[A-Za-z0-9_-]{24,}\b/g, "[TELEGRAM_BOT_TOKEN]")
+    .replace(/((?:api[_-]?key|token|password|passwd|secret|authorization)[\s"']*[:=][\s"']*)[^,;\s"']+/gi, "$1[REDACTED]");
+}
+
+function systemErrorSafeJson(value) {
+  try { return systemErrorRedactText(JSON.stringify(value || {})); }
+  catch (_) { return JSON.stringify({ serialization_error: true }); }
+}
+
+function systemErrorSlug(value, fallback = "ERROR") {
+  const slug = String(value || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 72);
+  return slug || fallback;
+}
+
+function systemErrorTinyHash(value) {
+  let hash = 2166136261;
+  const text = String(value || "");
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36).toUpperCase();
+}
+
+function systemErrorShouldNotify(count) {
+  const n = Math.max(1, Number(count || 1));
+  if (n <= 3) return true;
+  if ([5, 10, 25, 50, 100, 250, 500, 1000].includes(n)) return true;
+  return n > 1000 && n % 1000 === 0;
+}
+
+function systemErrorStack(error) {
+  return cleanText(systemErrorRedactText(error?.stack || ""), 1800);
+}
+
+async function emergencyAdminErrorAlert(env, text) {
+  try {
+    const settings = await getSettings(env);
+    const ids = String(settings.admin_ids || "").split(",").map(x => x.trim()).filter(Boolean);
+    if (!ids.length) return { sent: 0, skipped: true };
+    let sent = 0;
+    for (const adminId of ids.slice(0, 20)) {
+      try {
+        await telegramApi(env, "sendMessage", {
+          chat_id: adminId,
+          parse_mode: "HTML",
+          disable_web_page_preview: true,
+          text: cleanText(text, 3900)
+        });
+        sent++;
+      } catch (_) {}
+    }
+    return { sent };
+  } catch (_) {
+    return { sent: 0, failed: true };
+  }
+}
+
+async function publishSystemErrorAlert(env, row, context = {}) {
+  const count = Math.max(1, Number(row?.occurrence_count || 1));
+  if (!systemErrorShouldNotify(count)) return { skipped: true, reason: "repeat_throttled" };
+  const first = count === 1;
+  const botId = cleanText(row?.bot_id || "", 120);
+  const contextPreview = cleanText(systemErrorSafeJson(context || {}), 1200);
+  const title = first ? "🚨 خطای جدید فوری" : "🔁 تکرار خطای فعال";
+  const html =
+    "کد: <code>" + botEscape(row?.error_code || "UNKNOWN_ERROR") + "</code>\n" +
+    "بخش: <b>" + botEscape(row?.scope || "system") + "</b>\n" +
+    (botId ? "ربات: <code>" + botEscape(botId) + "</code>\n" : "") +
+    "پیام: <code>" + botEscape(cleanText(row?.message || "خطای نامشخص", 1200)) + "</code>\n" +
+    "تکرار: <b>" + botMoney(count) + "</b>\n" +
+    "زمان: <code>" + botEscape(row?.last_seen_at || nowIso()) + "</code>" +
+    (contextPreview && contextPreview !== "{}" ? "\nجزئیات: <code>" + botEscape(contextPreview) + "</code>" : "");
+  let queued = null;
+  try {
+    queued = await queueReportEvent(
+      env,
+      botId || null,
+      "errors",
+      title,
+      html,
+      "system-error:" + cleanText(row?.scope || "system", 60) + ":" + botId + ":" + cleanText(row?.error_code || "UNKNOWN_ERROR", 90) + ":" + count
+    );
+  } catch (_) {}
+  const delivered = queued?.delivery?.centralStatus === "delivered";
+  if (!delivered) {
+    await emergencyAdminErrorAlert(env,
+      "🚨 <b>هشدار اضطراری BluePanel</b>\n" +
+      "ارسال به Topic مرکزی انجام نشد؛ هشدار مستقیم ارسال شد.\n\n" + html
+    );
+  }
+  return { queued: Boolean(queued?.queued), delivered, fallback: !delivered };
+}
+
+async function reportCoreRuntimeError(env, scope, label, error, context = {}) {
+  const message = cleanText(error?.message || error || "خطای نامشخص", 1500);
+  const code = "CORE_" + systemErrorSlug(label || error?.code || "RUNTIME_ERROR");
+  return incrementSystemErrorCenter(env, scope || "core_runtime", context?.botId || "", code, message, {
+    ...context,
+    role: "bluepanel-core",
+    version: APP_VERSION,
+    stack: systemErrorStack(error)
+  });
+}
+
 async function incrementSystemErrorCenter(env, scope, botId, errorCode, message, context = {}) {
   if (!env?.PASARGUARD_DB) return { ok: false, skipped: true };
   const ts = nowIso();
@@ -9710,8 +9837,8 @@ async function incrementSystemErrorCenter(env, scope, botId, errorCode, message,
   const normalizedScope = cleanText(scope || "system", 80);
   const normalizedBot = cleanText(botId || "", 120);
   const normalizedCode = cleanText(errorCode || "UNKNOWN_ERROR", 120);
-  const normalizedMessage = cleanText(message || "خطای نامشخص", 1500);
-  const contextJson = JSON.stringify(context || {});
+  const normalizedMessage = cleanText(systemErrorRedactText(message || "خطای نامشخص"), 1500);
+  const contextJson = systemErrorSafeJson(context || {});
   try {
     await migrateSystemErrorCenterSchema(env);
     const result = await env.PASARGUARD_DB.prepare(`INSERT INTO system_error_center(
@@ -9724,7 +9851,14 @@ async function incrementSystemErrorCenter(env, scope, botId, errorCode, message,
       last_seen_at=excluded.last_seen_at`).bind(
       rowId,normalizedScope,normalizedBot,normalizedCode,normalizedMessage,contextJson,ts,ts
     ).run();
-    return { ok: true, result };
+    const row = await env.PASARGUARD_DB.prepare(`SELECT id,scope,bot_id,error_code,message,context_json,occurrence_count,first_seen_at,last_seen_at
+      FROM system_error_center WHERE scope=? AND bot_id=? AND error_code=? AND status='open' ORDER BY last_seen_at DESC LIMIT 1`)
+      .bind(normalizedScope,normalizedBot,normalizedCode).first();
+    if (row) {
+      try { await publishSystemErrorAlert(env, row, context); }
+      catch (notifyError) { console.error("system error alert delivery skipped", notifyError); }
+    }
+    return { ok: true, result, occurrence_count: Number(row?.occurrence_count || 1), row_id: row?.id || rowId };
   } catch (error) {
     console.error("error center increment skipped", error);
     return { ok: false, error: cleanText(error?.message || error, 800) };
@@ -9930,6 +10064,7 @@ async function automaticUpdateTick(env, options = {}) {
       auto_update_last_source: source
     });
     try { await audit(env, null, "automatic_update_failed", { source, code: error?.code || "", message: error?.message || String(error) }); } catch (_) {}
+    await reportCoreRuntimeError(env,"auto_update",error?.code||"AUTOMATIC_UPDATE_FAILED",error,{source});
     // Fail open: update errors are reported but never escape into webhook/Cron.
     return { checked: true, deployed: false, failed: true, source, code: error?.code || "AUTO_UPDATE_FAILED", error: cleanText(error?.message || error, 1000) };
   }
@@ -15977,7 +16112,7 @@ async function botHandleSessionMessage(env, account, message, session, origin, c
         );
       }
       if (ctx && typeof ctx.waitUntil === "function") {
-        ctx.waitUntil(deployUploadedGithubVersion(env, chatId, project.version).catch(error => console.error("zip deployment failed", error)));
+        ctx.waitUntil(deployUploadedGithubVersion(env, chatId, project.version).catch(async error => { console.error("zip deployment failed", error); await reportCoreRuntimeError(env,"release_rollout","ZIP_DEPLOYMENT_FAILED",error,{version:project.version,chatId}); }));
       }
       return true;
     } catch (error) {
@@ -16830,7 +16965,7 @@ async function telegramWebhook(request, env, ctx = null) {
     else if (/^\/help(?:@\w+)?$/i.test(text)) view = "help";
     if (isStartOrMenu) {
       const cleanupTask = botClearSession(env, account.user.telegram_id)
-        .catch(error => console.error("central start session cleanup failed", error));
+        .catch(async error => { console.error("central start session cleanup failed", error); await reportCoreRuntimeError(env,"central_bot_update","SESSION_CLEANUP_FAILED",error,{chatId:message.chat.id,userId:account.user.telegram_id}); });
       if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(cleanupTask);
       else await cleanupTask;
       await botSendWelcome(env, account, message.chat.id, origin);
@@ -16838,6 +16973,7 @@ async function telegramWebhook(request, env, ctx = null) {
     }
     await botSendOrEdit(env, { account, chatId: message.chat.id }, view);
   } catch (error) {
+    await reportCoreRuntimeError(env, "central_bot_update", "CENTRAL_BOT_UPDATE_ERROR", error, { chatId: message?.chat?.id || "", userId: message?.from?.id || "" });
     await telegramApi(env, "sendMessage", { chat_id: message.chat.id, text: "⚠️ " + botEscape(error.message || "خطا در بارگذاری ربات"), parse_mode: "HTML" });
   }
   return json({ ok: true });
@@ -16860,6 +16996,11 @@ async function safeTelegramWebhook(request, env, ctx = null) {
     let update = {};
     try { update = await backup.json(); } catch (_) {}
     const chatId = update?.callback_query?.message?.chat?.id || update?.message?.chat?.id;
+    await reportCoreRuntimeError(env, "central_webhook", "TELEGRAM_WEBHOOK_FATAL", error, {
+      chatId: chatId || "",
+      updateId: update?.update_id || "",
+      updateType: update?.callback_query ? "callback_query" : update?.message ? "message" : "unknown"
+    });
     if (chatId) {
       try {
         const token = await emergencyTelegramToken(env);
@@ -17474,11 +17615,42 @@ async function centralAdminAction(request, env) {
   }
 }
 
+
+async function clientErrorTelemetry(request, env) {
+  const publicOrigin = String(request.headers.get("x-bluepanel-public-origin") || "").replace(/\/+$/, "");
+  const origin = String(request.headers.get("origin") || "").replace(/\/+$/, "");
+  if (origin && publicOrigin && origin !== publicOrigin) return fail("مبدأ گزارش خطا معتبر نیست", 403, "CLIENT_ERROR_ORIGIN_INVALID");
+  const body = await parseBody(request);
+  const app = cleanText(body?.app || "unknown", 50).toLowerCase().replace(/[^a-z0-9_-]+/g, "_") || "unknown";
+  const kind = cleanText(body?.kind || "runtime", 50).toLowerCase().replace(/[^a-z0-9_-]+/g, "_") || "runtime";
+  const botId = cleanText(body?.bot_id || "", 120);
+  const message = cleanText(systemErrorRedactText(body?.message || "خطای JavaScript بدون پیام"), 1200);
+  const source = cleanText(body?.source || body?.url || "", 500);
+  const fingerprint = systemErrorTinyHash(app + "|" + kind + "|" + message + "|" + source);
+  const errorCode = "CLIENT_" + systemErrorSlug(app, "APP") + "_" + systemErrorSlug(kind, "ERROR") + "_" + fingerprint;
+  const context = {
+    app,
+    kind,
+    bot_id: botId || null,
+    source,
+    line: Number(body?.line || 0),
+    column: Number(body?.column || 0),
+    stack: cleanText(systemErrorRedactText(body?.stack || ""), 1800),
+    page_url: cleanText(body?.url || "", 700),
+    user_agent: cleanText(body?.user_agent || request.headers.get("user-agent") || "", 500),
+    client_version: cleanText(body?.version || "", 40),
+    ip_country: cleanText(request.cf?.country || "", 8)
+  };
+  await incrementSystemErrorCenter(env, "client_" + app, botId, errorCode, message, context);
+  return json({ success: true, accepted: true }, 202);
+}
+
 async function routeApi(request, env, path, ctx = null) {
   try {
     return await routeApiUnsafe(request, env, path, ctx);
   } catch (error) {
     console.error("routeApi error", path, error);
+    await reportCoreRuntimeError(env, "core_api", "API_" + systemErrorSlug(path, "INTERNAL_ERROR"), error, { path, method: request.method });
     const status = Number(error?.status || 0);
     const code = cleanText(error?.code || "API_INTERNAL_ERROR", 80) || "API_INTERNAL_ERROR";
     const httpStatus = status >= 400 && status <= 599 ? status : (code === "INVALID_CREDENTIALS" ? 401 : 500);
@@ -17487,6 +17659,7 @@ async function routeApi(request, env, path, ctx = null) {
 }
 
 async function routeApiUnsafe(request, env, path, ctx = null) {
+  if (path === "/api/telemetry/client-error" && request.method === "POST") return clientErrorTelemetry(request, env);
   if (path === "/api/auth/control/status" && request.method === "GET") return centralControlAuthStatus(env);
   if (path === "/api/auth/web/login" && request.method === "POST") return centralWebLogin(request, env, false);
   if (path === "/api/auth/control/login" && request.method === "POST") return centralWebLogin(request, env, true);
@@ -17705,18 +17878,18 @@ function scheduleLiveUsageBootstrap(env, ctx, force = false) {
   if (!force && now < liveUsageBootstrapNextAt) return;
   liveUsageBootstrapNextAt = now + cooldown;
   if (bindingReady) {
-    ctx.waitUntil(callLiveUsageCoordinator(env, "start").catch(error => console.error("live usage bootstrap error", error)));
+    ctx.waitUntil(callLiveUsageCoordinator(env, "start").catch(async error => { console.error("live usage bootstrap error", error); await reportCoreRuntimeError(env,'live_usage','LIVE_USAGE_BOOTSTRAP_ERROR',error); }));
     return;
   }
   // Fail open: billing must continue even when a deployment temporarily loses
   // the Durable Object binding. The D1 lease prevents duplicate fallback cycles.
   ctx.waitUntil((async () => {
     const fallback = await runLiveUsageFallbackCycle(env, "missing_binding").catch(error => ({ success:false,error:String(error?.message || error) }));
-    if (fallback?.success === false) console.error("live usage fallback error", fallback.error || fallback);
+    if (fallback?.success === false) { console.error("live usage fallback error", fallback.error || fallback); await reportCoreRuntimeError(env,'live_usage','LIVE_USAGE_FALLBACK_ERROR',new Error(String(fallback.error||'Live usage fallback failed'))); }
     try {
       await provisionLiveUsageDurableObject(env);
     } catch (error) {
-      console.error("live usage auto-provision error", error);
+      console.error("live usage auto-provision error", error); await reportCoreRuntimeError(env,'live_usage','LIVE_USAGE_PROVISION_ERROR',error);
       try { await audit(env, null, "live_usage_auto_provision_failed", { message:String(error?.message || error), fallback_success:fallback?.success !== false }); } catch (_) {}
     }
   })());
@@ -17879,7 +18052,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.3.56';
+const BLUEPANEL_CORE_VERSION = '3.3.57';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
@@ -17910,11 +18083,16 @@ function bluePanelEdgePath(path, method) {
   return path.startsWith('/assets/') || path.startsWith('/sales-manifest/') || path.startsWith('/sales-bot/') || path.startsWith('/sales-payments/') || path.startsWith('/reseller-control') || path.startsWith('/sales-auth/') || path.startsWith('/sales-app/') || path.startsWith('/sales-api/');
 }
 async function bluePanelForwardToEdge(request, env) {
-  if (!env?.EDGE_WORKER || typeof env.EDGE_WORKER.fetch !== 'function') return bluePanelCoreJson({success:false,error:'Binding با نام EDGE_WORKER متصل نیست',code:'EDGE_BINDING_MISSING'},503);
-  const source=new URL(request.url); const target='https://bluepanel-edge.internal'+source.pathname+source.search;
+  const source=new URL(request.url);
+  if (!env?.EDGE_WORKER || typeof env.EDGE_WORKER.fetch !== 'function') {
+    await incrementSystemErrorCenter(env,'cluster_route','', 'EDGE_BINDING_MISSING','Binding با نام EDGE_WORKER متصل نیست',{path:source.pathname,method:request.method});
+    return bluePanelCoreJson({success:false,error:'Binding با نام EDGE_WORKER متصل نیست',code:'EDGE_BINDING_MISSING'},503);
+  }
+  const target='https://bluepanel-edge.internal'+source.pathname+source.search;
   const base=new Request(target,request); const headers=new Headers(base.headers);
   headers.set('x-bluepanel-service-hop','core-to-edge'); headers.set('x-bluepanel-public-origin',source.origin); headers.set('x-bluepanel-original-host',source.host);
   const response=await env.EDGE_WORKER.fetch(new Request(base,{headers,redirect:'manual'}));
+  if(response.status>=500){await incrementSystemErrorCenter(env,'cluster_route','', 'EDGE_UPSTREAM_'+response.status,'Edge Worker پاسخ HTTP '+response.status+' داد',{path:source.pathname,method:request.method,http_status:response.status});}
   const out=new Headers(response.headers); out.set('x-bluepanel-route','core-to-edge');
   return new Response(response.body,{status:response.status,statusText:response.statusText,headers:out});
 }
@@ -17956,6 +18134,40 @@ async function bluePanelCoreHealth(env) {
     installed
   };
 }
+
+async function monitorClusterHealthAndReport(env) {
+  try {
+    const health = await bluePanelCoreHealth(env);
+    const edgeOk = health?.edge_worker?.connected === true;
+    const processorOk = health?.processor_worker?.connected === true;
+    if (!edgeOk) {
+      await incrementSystemErrorCenter(env, "cluster_health", "", "EDGE_HEALTH_DEGRADED",
+        cleanText(health?.edge_worker?.error || "Edge Worker پاسخ سالم نداد", 1200),
+        { role: "edge", health: health?.edge_worker || null, checked_at: nowIso() });
+    } else {
+      await resolveSystemErrorCenter(env, { scope: "cluster_health", botId: "", errorCode: "EDGE_HEALTH_DEGRADED" });
+    }
+    if (!processorOk) {
+      await incrementSystemErrorCenter(env, "cluster_health", "", "PROCESSOR_HEALTH_DEGRADED",
+        cleanText(health?.processor_worker?.error || "Processor Worker پاسخ سالم نداد", 1200),
+        { role: "processor", health: health?.processor_worker || null, checked_at: nowIso() });
+    } else {
+      await resolveSystemErrorCenter(env, { scope: "cluster_health", botId: "", errorCode: "PROCESSOR_HEALTH_DEGRADED" });
+    }
+    if (!health?.live_usage_binding_detected) {
+      await incrementSystemErrorCenter(env, "cluster_health", "", "LIVE_USAGE_BINDING_MISSING",
+        "Binding مربوط به LIVE_USAGE_COORDINATOR در Runtime شناسایی نشد",
+        { binding: "LIVE_USAGE_COORDINATOR", checked_at: nowIso() });
+    } else {
+      await resolveSystemErrorCenter(env, { scope: "cluster_health", botId: "", errorCode: "LIVE_USAGE_BINDING_MISSING" });
+    }
+    return { edge_ok: edgeOk, processor_ok: processorOk, live_usage_ok: Boolean(health?.live_usage_binding_detected) };
+  } catch (error) {
+    await reportCoreRuntimeError(env, "cluster_health", "HEALTH_WATCHDOG_ERROR", error);
+    return { edge_ok: false, processor_ok: false, error: cleanText(error?.message || error, 800) };
+  }
+}
+
 let bluePanelNextRequestUpdateCheckAt = 0;
 const BLUEPANEL_REQUEST_UPDATE_INTERVAL_MS = 30000;
 
@@ -17967,7 +18179,7 @@ function scheduleRequestTriggeredUpdate(env, ctx, path) {
   const now = Date.now();
   if (now < bluePanelNextRequestUpdateCheckAt) return;
   bluePanelNextRequestUpdateCheckAt = now + BLUEPANEL_REQUEST_UPDATE_INTERVAL_MS;
-  ctx.waitUntil(automaticUpdateTick(env,{source:"panel_request",intervalSeconds:30}).catch(error=>console.error("request auto update error",error)));
+  ctx.waitUntil(automaticUpdateTick(env,{source:"panel_request",intervalSeconds:30}).catch(async error=>{console.error("request auto update error",error);await reportCoreRuntimeError(env,'auto_update','REQUEST_AUTO_UPDATE_ERROR',error,{path});}));
 }
 
 function bluePanelMaintenancePhase(total = 4) {
@@ -17980,18 +18192,19 @@ async function runBluePanelCoreScheduledJobs(env) {
   await ensureDb(env);
   const ts = nowIso();
   const phase = bluePanelMaintenancePhase(4);
+  await monitorClusterHealthAndReport(env);
   await env.PASARGUARD_DB.batch([
     env.PASARGUARD_DB.prepare('DELETE FROM web_sessions WHERE expires_at<=?').bind(ts),
     env.PASARGUARD_DB.prepare('DELETE FROM web_login_codes WHERE expires_at<=? OR (consumed_at IS NOT NULL AND consumed_at<=?)').bind(ts,new Date(Date.now()-3600000).toISOString())
   ]);
   await notifyVersionActivation(env);
-  try { await automaticUpdateTick(env,{source:'cron',intervalSeconds:30}); } catch (error) { console.error('isolated auto update error',error); }
+  try { await automaticUpdateTick(env,{source:'cron',intervalSeconds:30}); } catch (error) { console.error('isolated auto update error',error); await reportCoreRuntimeError(env,'core_cron','AUTO_UPDATE_ERROR',error,{phase}); }
   // Routine reseller rollout is lightweight (no legacy command purge) and runs on every cron.
   // Four bots stay safely below the external subrequest budget while guaranteeing progress.
-  try { await syncAllResellerBotMenus(env,false,4); } catch (error) { console.error('reseller menu sync error',error); }
+  try { await syncAllResellerBotMenus(env,false,4); } catch (error) { console.error('reseller menu sync error',error); await reportCoreRuntimeError(env,'core_cron','RESELLER_MENU_SYNC_ERROR',error,{phase}); }
 
   if (phase === 0) {
-    try { await syncPasarguardManagersForAllUsers(env,3); } catch (error) { console.error('manager sync phase error',error); }
+    try { await syncPasarguardManagersForAllUsers(env,3); } catch (error) { console.error('manager sync phase error',error); await reportCoreRuntimeError(env,'core_cron','MANAGER_SYNC_ERROR',error,{phase}); }
   } else if (phase === 1) {
     if (!liveUsageNamespaceAvailable(env)) await syncUsage(env,10);
     await reconcileAllAgencyBalanceStates(env,8);
@@ -17999,20 +18212,20 @@ async function runBluePanelCoreScheduledJobs(env) {
     await processCentralTrialExpirations(env,8);
     const settings = await getSettings(env);
     if (plisioRateMode(settings)==='auto' && String(settings.plisio_fx_api_key||'').trim()) {
-      try { await refreshCentralPlisioFxRate(env); } catch (error) { console.error('fx refresh error',error); }
+      try { await refreshCentralPlisioFxRate(env); } catch (error) { console.error('fx refresh error',error); await reportCoreRuntimeError(env,'core_cron','FX_REFRESH_ERROR',error,{phase}); }
     }
     if (settings.payment_poll_enabled==='true' && settings.blupal_api_key) await pollPendingPayments(env,5);
     if (settings.auto_delete_pending_invoices==='true') await cleanupStalePendingInvoices(env,{settings,limit:10});
   } else {
-    try { await ensureClusterSubrequestLimits(env); } catch (error) { console.error('subrequest limit configuration error',error); }
+    try { await ensureClusterSubrequestLimits(env); } catch (error) { console.error('subrequest limit configuration error',error); await reportCoreRuntimeError(env,'core_cron','SUBREQUEST_LIMIT_CONFIG_ERROR',error,{phase}); }
     await automaticPythonHelperTick(env,{source:'cron'});
     const processorResult = await triggerProcessorBusinessJobs(env,'core_cron_phase_'+phase);
-    if (processorResult?.success===false) console.error('processor fallback error',processorResult.error);
+    if (processorResult?.success===false) { console.error('processor fallback error',processorResult.error); await reportCoreRuntimeError(env,'core_cron','PROCESSOR_TRIGGER_ERROR',new Error(String(processorResult.error||'Processor trigger failed')),{phase}); }
   }
 
   // Small flush on every phase keeps reports timely without allowing one Cron
   // invocation to consume the complete Worker subrequest budget.
-  try { await processReportOutboxOnCore(env,4); } catch (error) { console.error('core report flush error',error); }
+  try { await processReportOutboxOnCore(env,4); } catch (error) { console.error('core report flush error',error); await reportCoreRuntimeError(env,'core_cron','REPORT_FLUSH_ERROR',error,{phase}); }
   const finished = nowIso();
   await env.PASARGUARD_DB.batch([
     env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_core_cron_at',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(finished,finished),
@@ -18043,7 +18256,7 @@ export default {
       if(path.startsWith('/api/')) return routeApi(request,env,path,ctx);
       if(request.method==='GET') return bluePanelForwardToEdge(request,env);
       return new Response('Not found',{status:404});
-    } catch(error){console.error('core fetch error',error);return bluePanelCoreJson({success:false,ok:false,role:'bluepanel-core',version:APP_VERSION,error:String(error?.message||error),code:'CORE_RUNTIME_ERROR'},500);}
+    } catch(error){console.error('core fetch error',error);await reportCoreRuntimeError(env,'core_fetch','FETCH_'+systemErrorSlug(path,'RUNTIME_ERROR'),error,{path,method:request.method});return bluePanelCoreJson({success:false,ok:false,role:'bluepanel-core',version:APP_VERSION,error:String(error?.message||error),code:'CORE_RUNTIME_ERROR'},500);}
   },
-  async scheduled(controller,env,ctx){scheduleLiveUsageBootstrap(env,ctx,true);ctx.waitUntil(runBluePanelCoreScheduledJobs(env).catch(error=>console.error('core scheduled error',error)));}
+  async scheduled(controller,env,ctx){scheduleLiveUsageBootstrap(env,ctx,true);ctx.waitUntil(runBluePanelCoreScheduledJobs(env).catch(async error=>{console.error('core scheduled error',error);await reportCoreRuntimeError(env,'core_cron','SCHEDULED_RUNTIME_ERROR',error,{cron:controller?.cron||''});}));}
 };
