@@ -1,15 +1,37 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.51
+ * Version: 3.3.53
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.51';
+const APP_VERSION = '3.3.53';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.53": Object.freeze({
+    central: Object.freeze([
+      { emoji: "📡", text: "همگام‌سازی مصرف داشبورد مشتری برای هر دو پنل PasarGuard و مرزبان" },
+      { emoji: "🧭", text: "تشخیص و ترمیم خودکار Provider سرویس‌های قدیمی بر اساس لوکیشن" },
+      { emoji: "🛡", text: "حذف کش از استعلام مصرف و بازخوانی D1 پس از دریافت عدد واقعی پنل" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "📊", text: "نمایش مصرف تازه PasarGuard و مرزبان در کارت سرویس مشتری" },
+      { emoji: "🔄", text: "بروزرسانی دستی و خودکار از همان Provider واقعی سرویس انجام می‌شود" }
+    ])
+  }),
+  "3.3.52": Object.freeze({
+    central: Object.freeze([
+      { emoji: "📡", text: "همگام‌سازی واقعی مصرف سرویس‌های مرزبان پیش از نمایش داشبورد کاربر" },
+      { emoji: "🧭", text: "حذف وابستگی کارت مصرف مرزبان به Snapshot قدیمی D1 هنگام بازشدن مینی‌اپ" },
+      { emoji: "🛡", text: "همگام‌سازی محدود و صف‌بندی‌شده برای جلوگیری از عبور از سقف Subrequest" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "📊", text: "مصرف سرویس‌های مرزبان هنگام ورود به بخش سرویس‌ها مستقیماً از پنل تازه می‌شود" },
+      { emoji: "🔄", text: "کلید بروزرسانی دستی همچنان همان سرویس را فوراً همگام می‌کند" }
+    ])
+  }),
   "3.3.51": Object.freeze({
     central: Object.freeze([
       { emoji: "🧮", text: "نمایش مصرف تجمیعی lifetime_used_traffic پاسارگارد بدون تغییر مبنای صورتحساب دوره جاری" },

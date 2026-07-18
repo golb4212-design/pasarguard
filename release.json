@@ -1,7 +1,7 @@
 {
-  "version": "3.3.51",
-  "release_id": "3.3.51-pasarguard-lifetime-display-current-billing",
-  "architecture": "fully-split-three-worker-dual-usage-counter-sync",
+  "version": "3.3.53",
+  "release_id": "3.3.53-customer-dashboard-all-provider-live-usage",
+  "architecture": "fully-split-three-worker-all-provider-dashboard-live-sync",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -9,13 +9,13 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "displays PasarGuard lifetime_used_traffic, matching the cumulative value on the manager card",
-    "keeps billing on the current used_traffic counter so reset history is not charged twice",
-    "reconstructs cumulative display usage from reseted_usage plus used_traffic on older responses",
-    "uses the official /api/admins ids filter instead of unsupported GET /api/admin/by-id",
-    "uses exact username fallback before bounded page scanning",
-    "keeps live usage, menu layout management and all prior reseller features",
-    "does not change the database schema and excludes README files"
+    "refreshes customer services from both PasarGuard and Marzban before dashboard rendering",
+    "adds cache-busting and no-store headers to live usage GET requests",
+    "repairs legacy service_provider values from the service location backend after a successful sync",
+    "re-queries D1 after sync so the same bootstrap response contains the new traffic counter",
+    "limits automatic dashboard sync to ten services with concurrency two",
+    "keeps per-service manual refresh for both providers and shows the provider on each card",
+    "excludes README files"
   ],
   "deployment": {
     "automatic_provisioning": "upload ZIP through the central bot",
@@ -30,36 +30,36 @@
   },
   "validation": {
     "worker_syntax": "passed: node --check for core, edge and processor",
-    "usage_parser": "passed: lifetime, reset reconstruction, nested response and missing-field cases",
-    "billing_reset_safety": "passed: display-only lifetime change creates no charge; current-counter delta bills once; reset bills zero",
-    "pasarguard_api": "official /api/admins ids filter and AdminDetails response fields reviewed",
+    "dashboard_bootstrap": "passed: both PasarGuard and Marzban are selected by provider, refreshed without cache, written to D1 and re-read into the same bootstrap response",
+    "subrequest_bound": "maximum 10 service GET requests per bootstrap, concurrency 2",
     "database_schema": "unchanged from 3.3.40",
     "zip_integrity": "passed: clean archive structure and unzip CRC validation",
-    "live_api": "not run; requires production PasarGuard, Cloudflare and Telegram credentials"
+    "live_api": "not run; requires production credentials",
+    "provider_resolution": "passed: service provider helper and provider-specific diagnostics are present"
   },
   "limitations": [
-    "Production verification requires deployment because the real PasarGuard counter and Cloudflare bindings are unavailable offline.",
-    "The displayed value can lag until PasarGuard commits its latest node traffic to the admin counter."
+    "Production verification requires deployment because real PasarGuard, Marzban, Cloudflare and Telegram credentials are unavailable offline.",
+    "The displayed number cannot advance before the upstream panel itself updates its used_traffic counter."
   ],
-  "title": "هماهنگ‌سازی دقیق مصرف تجمیعی",
-  "summary": "BluePanel مقدار تجمیعی کارت PasarGuard را نمایش می‌دهد، اما صورتحساب را فقط بر اساس مصرف دوره جاری محاسبه می‌کند تا هزینه دوباره کسر نشود.",
+  "title": "همگام‌سازی مصرف PasarGuard و مرزبان در داشبورد مشتری",
+  "summary": "داشبورد مشتری اکنون مصرف هر سرویس را از Provider واقعی همان سرویس، بدون کش و برای هر دو پنل PasarGuard و مرزبان تازه می‌کند.",
   "changes": [
-    "نمایش lifetime_used_traffic در کارت نماینده.",
-    "حفظ used_traffic به‌عنوان مبنای صورتحساب.",
-    "پشتیبانی از reseted_usage + used_traffic.",
-    "حذف GET نامعتبر by-id و استفاده از فیلتر رسمی ids.",
+    "تبدیل Sync خودکار مرزبان به Sync مشترک هر دو Provider.",
+    "حذف کش از درخواست‌های GET مصرف.",
+    "ترمیم Provider سرویس‌های قدیمی از روی لوکیشن.",
+    "نمایش نام Provider روی کارت سرویس.",
     "بدون Migration دیتابیس."
   ],
   "sha256": {
-    "core/worker.js": "31d3a2befba4fa4a0a9dc184f229d3720ba3de04ef9a7d2dac33d4ece7033b06",
-    "edge/worker.js": "c03605c341f2a09c2a24e38bc7daa0ef0088cd399fab08c7a88adcbd179fcd56",
-    "processor/worker.js": "9673f56597f8ff9f2480116aa13a6d701cf1610aa89aea7b127360651011b07e",
+    "core/worker.js": "f9d40903fc13793b466d5f663b6dc8caaa59c11c2e095a664fd6aa84750ffbfc",
+    "edge/worker.js": "89e1df56cbc8c35caffd623adb89af1fe54e992b08d8265ff5897801163dec0f",
+    "processor/worker.js": "e4c93735d73bab8abefaebcfd739f4be1ac03ae3fa6c901097a8be6b42b5f535",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "31d3a2befba4fa4a0a9dc184f229d3720ba3de04ef9a7d2dac33d4ece7033b06",
-    "edge/worker.js": "c03605c341f2a09c2a24e38bc7daa0ef0088cd399fab08c7a88adcbd179fcd56",
-    "processor/worker.js": "9673f56597f8ff9f2480116aa13a6d701cf1610aa89aea7b127360651011b07e",
+    "core/worker.js": "f9d40903fc13793b466d5f663b6dc8caaa59c11c2e095a664fd6aa84750ffbfc",
+    "edge/worker.js": "89e1df56cbc8c35caffd623adb89af1fe54e992b08d8265ff5897801163dec0f",
+    "processor/worker.js": "e4c93735d73bab8abefaebcfd739f4be1ac03ae3fa6c901097a8be6b42b5f535",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }

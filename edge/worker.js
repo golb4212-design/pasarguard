@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.51
+ * Version: 3.3.53
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = '3.3.51';
+const APP_VERSION = '3.3.53';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -1777,7 +1777,7 @@ function centralBlupalReturnPage(settings, origin, url) {
   const brand = htmlEscape(settings.brand_name || "پنل نمایندگی پاسارگارد");
   const invoiceId = cleanText(url?.searchParams?.get("invoice_id") || url?.searchParams?.get("invoice") || url?.searchParams?.get("id") || "", 100);
   const invoiceLine = invoiceId ? ('<div class="invoice">شماره فاکتور: <b dir="ltr">' + htmlEscape(invoiceId) + '</b></div>') : "";
-  return `<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0"><meta http-equiv="Pragma" content="no-cache"><meta http-equiv="Expires" content="0"><script>window.__BLUEPANEL_BUILD_VERSION__="3.3.43";</script><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#eef4ff"><meta name="robots" content="noindex,nofollow"><title>بازگشت از پرداخت | ${brand}</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:20px;background:radial-gradient(circle at 88% 2%,#536dfe24,transparent 38%),radial-gradient(circle at 8% 95%,#22c9971e,transparent 36%),linear-gradient(180deg,#f9fbff,#edf3ff);color:#18233a;font-family:Tahoma,Arial,sans-serif}.card{width:min(100%,500px);border:1px solid #fff;border-radius:30px;padding:30px;background:#fffffff2;box-shadow:0 24px 80px #40508028;text-align:center}.icon{width:78px;height:78px;display:grid;place-items:center;margin:auto;border-radius:25px;background:#35d39a22;font-size:38px}.muted{color:#69758e;line-height:2;font-size:14px}.notice{margin:18px 0;padding:14px;border-radius:16px;background:#f2f6ff;color:#405070;font-size:13px;line-height:1.9}.invoice{margin:12px 0;padding:11px;border-radius:14px;background:#f7f9ff;color:#53607b;font-size:13px}.btn{display:block;text-decoration:none;margin-top:12px;border-radius:17px;padding:15px;background:linear-gradient(135deg,#4e8cff,#765eff);color:#fff;font-weight:900}.secondary{background:#edf2ff;color:#425073}.tiny{margin-top:18px;color:#8a95aa;font-size:11px;line-height:1.8}</style></head><body><main class="card"><div class="icon">↩️</div><h1>بازگشت از درگاه بلوپال</h1><p class="muted">به صفحه بازگشت منتقل شدید. وضعیت نهایی پرداخت فقط از طریق Webhook و استعلام امن بلوپال بررسی می‌شود.</p>${invoiceLine}<div class="notice">برای مشاهده نتیجه پرداخت و موجودی جدید، به ربات مرکزی یا مینی‌اپ ${brand} برگردید.</div><a class="btn" href="${htmlEscape(botLink)}">بازکردن ربات مرکزی</a><a class="btn secondary" href="${htmlEscape(urls.miniapp_url)}#payments">مشاهده وضعیت در مینی‌اپ</a><div class="tiny">بستن این صفحه باعث لغو پرداخت نمی‌شود.</div></main></body></html>`;
+  return `<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0"><meta http-equiv="Pragma" content="no-cache"><meta http-equiv="Expires" content="0"><script>window.__BLUEPANEL_BUILD_VERSION__="3.3.52";</script><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#eef4ff"><meta name="robots" content="noindex,nofollow"><title>بازگشت از پرداخت | ${brand}</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:20px;background:radial-gradient(circle at 88% 2%,#536dfe24,transparent 38%),radial-gradient(circle at 8% 95%,#22c9971e,transparent 36%),linear-gradient(180deg,#f9fbff,#edf3ff);color:#18233a;font-family:Tahoma,Arial,sans-serif}.card{width:min(100%,500px);border:1px solid #fff;border-radius:30px;padding:30px;background:#fffffff2;box-shadow:0 24px 80px #40508028;text-align:center}.icon{width:78px;height:78px;display:grid;place-items:center;margin:auto;border-radius:25px;background:#35d39a22;font-size:38px}.muted{color:#69758e;line-height:2;font-size:14px}.notice{margin:18px 0;padding:14px;border-radius:16px;background:#f2f6ff;color:#405070;font-size:13px;line-height:1.9}.invoice{margin:12px 0;padding:11px;border-radius:14px;background:#f7f9ff;color:#53607b;font-size:13px}.btn{display:block;text-decoration:none;margin-top:12px;border-radius:17px;padding:15px;background:linear-gradient(135deg,#4e8cff,#765eff);color:#fff;font-weight:900}.secondary{background:#edf2ff;color:#425073}.tiny{margin-top:18px;color:#8a95aa;font-size:11px;line-height:1.8}</style></head><body><main class="card"><div class="icon">↩️</div><h1>بازگشت از درگاه بلوپال</h1><p class="muted">به صفحه بازگشت منتقل شدید. وضعیت نهایی پرداخت فقط از طریق Webhook و استعلام امن بلوپال بررسی می‌شود.</p>${invoiceLine}<div class="notice">برای مشاهده نتیجه پرداخت و موجودی جدید، به ربات مرکزی یا مینی‌اپ ${brand} برگردید.</div><a class="btn" href="${htmlEscape(botLink)}">بازکردن ربات مرکزی</a><a class="btn secondary" href="${htmlEscape(urls.miniapp_url)}#payments">مشاهده وضعیت در مینی‌اپ</a><div class="tiny">بستن این صفحه باعث لغو پرداخت نمی‌شود.</div></main></body></html>`;
 }
 
 function normalizeBlupalBaseUrl(value) {
@@ -3340,10 +3340,17 @@ async function getAgencyPasarguardToken(env, agency, forceRefresh = false) {
 async function agencyPasarguardRequest(env, agency, method, path, body, retry = true) {
   const settings = await getSettings(env);
   const token = await getAgencyPasarguardToken(env, agency, false);
-  const response = await fetch(pasarguardBaseUrl(settings) + path, {
-    method,
+  const requestMethod = String(method || "GET").toUpperCase();
+  const target = new URL(pasarguardBaseUrl(settings) + path);
+  if (requestMethod === "GET") target.searchParams.set("_bp_live", String(Date.now()));
+  const response = await fetch(target.toString(), {
+    method: requestMethod,
+    cache: "no-store",
     headers: {
       authorization: "Bearer " + token,
+      accept: "application/json",
+      "cache-control": "no-cache, no-store, max-age=0",
+      pragma: "no-cache",
       ...(body === undefined ? {} : { "content-type": "application/json" })
     },
     body: body === undefined ? undefined : JSON.stringify(body)
@@ -3514,12 +3521,18 @@ async function sharedMarzbanRequest(env, method, path, body, retry = true) {
   const settings = await getSettings(env);
   const cfg = sharedMarzbanConfig(settings, env);
   const token = await getSharedMarzbanToken(env, settings, false);
-  const payload = normalizeSharedMarzbanPayload(method, path, body, cfg);
-  const response = await fetch(cfg.panelUrl + path, {
-    method,
+  const requestMethod = String(method || "GET").toUpperCase();
+  const payload = normalizeSharedMarzbanPayload(requestMethod, path, body, cfg);
+  const target = new URL(cfg.panelUrl + path);
+  if (requestMethod === "GET") target.searchParams.set("_bp_live", String(Date.now()));
+  const response = await fetch(target.toString(), {
+    method: requestMethod,
+    cache: "no-store",
     headers: {
       authorization: "Bearer " + token,
       accept: "application/json",
+      "cache-control": "no-cache, no-store, max-age=0",
+      pragma: "no-cache",
       ...(payload === undefined ? {} : { "content-type": "application/json" })
     },
     body: payload === undefined ? undefined : JSON.stringify(payload)
@@ -3944,12 +3957,20 @@ async function importSalesServiceBySubscriptionLink(env, bot, customer, rawLink)
   };
 }
 
+function resolvedSalesServiceProvider(row = {}) {
+  const stored = String(row.service_provider || "").trim().toLowerCase();
+  const location = String(row.location_backend_provider || row.backend_provider || "").trim().toLowerCase();
+  if (["marzban", "marzban_shared"].includes(stored)) return "marzban";
+  if (["marzban", "marzban_shared"].includes(location) && (!stored || stored === "pasarguard")) return "marzban";
+  return "pasarguard";
+}
+
 function buildSalesServices(orderRows = []) {
   const groups = new Map();
   for (const row of orderRows || []) {
     if (String(row.status || "") !== "delivered" || !row.remote_username) continue;
     if (["deleted", "removed", "remote_missing"].includes(String(row.remote_status || "").toLowerCase())) continue;
-    const key = normalizeServiceProvider(row.service_provider)+":"+String(row.remote_username).toLowerCase();
+    const key = resolvedSalesServiceProvider(row)+":"+String(row.remote_username).toLowerCase();
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(row);
   }
@@ -3965,8 +3986,8 @@ function buildSalesServices(orderRows = []) {
       latest_order_id: latest.id,
       plan_title: root.plan_title || latest.plan_title || "سرویس",
       remote_username: latest.remote_username || root.remote_username,
-      service_provider: normalizeServiceProvider(latest.service_provider || root.service_provider),
-      service_provider_label: serviceProviderLabel(latest.service_provider || root.service_provider),
+      service_provider: resolvedSalesServiceProvider(latest),
+      service_provider_label: serviceProviderLabel(resolvedSalesServiceProvider(latest)),
       subscription_url: latest.subscription_url || root.subscription_url || "",
       remote_status: snap.remote_status || "active",
       remote_data_limit: Math.max(0, Number(snap.remote_data_limit || 0)),
@@ -3990,11 +4011,55 @@ function buildSalesServices(orderRows = []) {
   return services.sort((a, b) => Date.parse(b.updated_at || 0) - Date.parse(a.updated_at || 0));
 }
 
+const SALES_DASHBOARD_USAGE_SYNC_MAX = 10;
+const SALES_DASHBOARD_USAGE_SYNC_CONCURRENCY = 2;
+const SALES_DASHBOARD_USAGE_FRESH_MS = 8000;
+
+function salesDashboardServiceSyncDue(service, now = Date.now()) {
+  if (!service?.id || !service?.remote_username) return false;
+  const provider = resolvedSalesServiceProvider(service);
+  if (!["pasarguard", "marzban"].includes(provider)) return false;
+  const syncedAt = Date.parse(String(service.remote_last_synced_at || ""));
+  return !Number.isFinite(syncedAt) || (now - syncedAt) >= SALES_DASHBOARD_USAGE_FRESH_MS;
+}
+
+async function syncSalesDashboardServices(env, bot, customer, services = []) {
+  const now = Date.now();
+  const candidates = (services || [])
+    .filter(service => salesDashboardServiceSyncDue(service, now))
+    .sort((a, b) => Date.parse(a.remote_last_synced_at || 0) - Date.parse(b.remote_last_synced_at || 0))
+    .slice(0, SALES_DASHBOARD_USAGE_SYNC_MAX);
+  const result = { attempted: candidates.length, synced: 0, failed: 0, providers: { pasarguard: { attempted: 0, synced: 0, failed: 0 }, marzban: { attempted: 0, synced: 0, failed: 0 } }, errors: [] };
+  for (const service of candidates) result.providers[resolvedSalesServiceProvider(service)].attempted++;
+  for (let offset = 0; offset < candidates.length; offset += SALES_DASHBOARD_USAGE_SYNC_CONCURRENCY) {
+    const chunk = candidates.slice(offset, offset + SALES_DASHBOARD_USAGE_SYNC_CONCURRENCY);
+    const settled = await Promise.allSettled(chunk.map(service => syncSalesService(env, bot, customer, service.id)));
+    settled.forEach((entry, index) => {
+      const service = chunk[index] || {};
+      const provider = resolvedSalesServiceProvider(service);
+      if (entry.status === "fulfilled") {
+        result.synced++;
+        result.providers[provider].synced++;
+      } else {
+        result.failed++;
+        result.providers[provider].failed++;
+        result.errors.push({
+          service_id: service.id || "",
+          provider,
+          username: service.remote_username || "",
+          message: cleanText(entry.reason?.message || entry.reason || "همگام‌سازی ناموفق بود", 240)
+        });
+      }
+    });
+  }
+  return result;
+}
+
 async function getSalesServiceOrder(env, bot, customer, serviceId) {
   const row = await env.PASARGUARD_DB.prepare(`
     SELECT o.*,p.title AS plan_title,p.category_id,p.location_id,
            c.title AS category_title,c.emoji AS category_emoji,
-           l.title AS location_title,l.emoji AS location_emoji
+           l.title AS location_title,l.emoji AS location_emoji,l.backend_provider AS location_backend_provider
     FROM sales_orders o
     JOIN sales_plans p ON p.id=o.plan_id
     LEFT JOIN sales_categories c ON c.id=p.category_id
@@ -4008,7 +4073,7 @@ async function getSalesServiceOrder(env, bot, customer, serviceId) {
 
 async function syncSalesService(env, bot, customer, serviceId) {
   const target = await getSalesServiceOrder(env, bot, customer, serviceId);
-  const provider=normalizeServiceProvider(target.service_provider);
+  const provider=resolvedSalesServiceProvider(target);
   if(provider==="pasarguard"&&bot.agency_status!=="active") throw new Error("پنل PasarGuard متصل نماینده فعال نیست");
   if(provider==="marzban"&&!sharedMarzbanEnabled(await getSettings(env),env)) throw new Error("مرزبان مشترک مرکزی فعال نیست");
   const agency = { id: bot.agency_id, panel_username: bot.panel_username, panel_password_enc: bot.panel_password_enc };
@@ -4021,10 +4086,10 @@ async function syncSalesService(env, bot, customer, serviceId) {
   }
   await env.PASARGUARD_DB.prepare(`
     UPDATE sales_orders SET subscription_url=CASE WHEN ?<>'' THEN ? ELSE subscription_url END,
-      remote_status=?,remote_data_limit=?,remote_used_traffic=?,remote_expire=?,remote_online_at=?,remote_last_synced_at=?,updated_at=updated_at
-    WHERE bot_id=? AND customer_id=? AND remote_username=? AND service_provider=? AND status='delivered'
-  `).bind(subscriptionUrl, subscriptionUrl, snapshot.status, snapshot.dataLimit, snapshot.usedTraffic,
-    snapshot.expire, snapshot.onlineAt, snapshot.syncedAt, bot.id, customer.id, target.remote_username, provider).run();
+      service_provider=?,remote_status=?,remote_data_limit=?,remote_used_traffic=?,remote_expire=?,remote_online_at=?,remote_last_synced_at=?,updated_at=updated_at
+    WHERE bot_id=? AND customer_id=? AND remote_username=? AND status='delivered'
+  `).bind(subscriptionUrl, subscriptionUrl, provider, snapshot.status, snapshot.dataLimit, snapshot.usedTraffic,
+    snapshot.expire, snapshot.onlineAt, snapshot.syncedAt, bot.id, customer.id, target.remote_username).run();
   await salesEvent(env, bot.id, customer.id, "service_synced", { serviceId: target.id, username: target.remote_username });
   return {
     id: target.id,
@@ -4041,7 +4106,7 @@ async function syncSalesService(env, bot, customer, serviceId) {
 
 async function revokeSalesServiceSubscription(env, bot, customer, serviceId) {
   const target = await getSalesServiceOrder(env, bot, customer, serviceId);
-  const provider=normalizeServiceProvider(target.service_provider);
+  const provider=resolvedSalesServiceProvider(target);
   if(provider==="pasarguard"&&bot.agency_status!=="active") throw new Error("پنل PasarGuard متصل نماینده فعال نیست");
   if(provider==="marzban"&&!sharedMarzbanEnabled(await getSettings(env),env)) throw new Error("مرزبان مشترک مرکزی فعال نیست");
   const agency = { id: bot.agency_id, panel_username: bot.panel_username, panel_password_enc: bot.panel_password_enc };
@@ -4057,11 +4122,11 @@ async function revokeSalesServiceSubscription(env, bot, customer, serviceId) {
     subscriptionUrl = serviceBaseUrlForProvider(settings, env, provider) + subscriptionUrl;
   }
   await env.PASARGUARD_DB.prepare(`
-    UPDATE sales_orders SET subscription_url=?,remote_status=?,remote_data_limit=?,remote_used_traffic=?,
+    UPDATE sales_orders SET subscription_url=?,service_provider=?,remote_status=?,remote_data_limit=?,remote_used_traffic=?,
       remote_expire=?,remote_online_at=?,remote_last_synced_at=?
-    WHERE bot_id=? AND customer_id=? AND remote_username=? AND service_provider=? AND status='delivered'
-  `).bind(subscriptionUrl, snapshot.status, snapshot.dataLimit, snapshot.usedTraffic, snapshot.expire,
-    snapshot.onlineAt, snapshot.syncedAt, bot.id, customer.id, target.remote_username, provider).run();
+    WHERE bot_id=? AND customer_id=? AND remote_username=? AND status='delivered'
+  `).bind(subscriptionUrl, provider, snapshot.status, snapshot.dataLimit, snapshot.usedTraffic, snapshot.expire,
+    snapshot.onlineAt, snapshot.syncedAt, bot.id, customer.id, target.remote_username).run();
   await salesEvent(env, bot.id, customer.id, "service_subscription_revoked", { serviceId: target.id, username: target.remote_username });
   return { ...snapshot, id: target.id, remote_username: target.remote_username, subscription_url: subscriptionUrl,
     remote_status: snapshot.status, remote_data_limit: snapshot.dataLimit, remote_used_traffic: snapshot.usedTraffic,
@@ -11642,7 +11707,7 @@ async function salesMiniAppBootstrap(request, env, botId, ctx = null) {
       env.PASARGUARD_DB.prepare("SELECT id,title,emoji,location_id,sort_order FROM sales_categories WHERE bot_id=? AND status='active' ORDER BY sort_order,created_at").bind(bot.id),
       env.PASARGUARD_DB.prepare("SELECT id,title,emoji,description,sort_order FROM sales_locations WHERE bot_id=? AND status='active' ORDER BY sort_order,created_at").bind(bot.id),
       env.PASARGUARD_DB.prepare(`SELECT p.id,p.title,p.data_limit_bytes,p.duration_days,p.price_toman,p.category_id,p.location_id,p.plan_type,c.title AS category_title,c.emoji AS category_emoji,l.title AS location_title,l.emoji AS location_emoji FROM sales_plans p LEFT JOIN sales_categories c ON c.id=p.category_id LEFT JOIN sales_locations l ON l.id=p.location_id WHERE p.bot_id=? AND p.status='active' ORDER BY p.sort_order,p.price_toman,p.created_at`).bind(bot.id),
-      env.PASARGUARD_DB.prepare(`SELECT o.id,o.service_provider,o.amount_toman,o.original_amount_toman,o.discount_toman,o.promo_code,o.cashback_toman,o.status,o.order_type,o.target_order_id,o.payment_method,o.origin,o.remote_username,o.subscription_url,o.remote_status,o.remote_data_limit,o.remote_used_traffic,o.remote_expire,o.remote_online_at,o.remote_last_synced_at,o.error_message,o.created_at,o.updated_at,p.title AS plan_title,p.data_limit_bytes,p.duration_days,p.category_id,p.location_id,c.title AS category_title,c.emoji AS category_emoji,l.title AS location_title,l.emoji AS location_emoji FROM sales_orders o JOIN sales_plans p ON p.id=o.plan_id LEFT JOIN sales_categories c ON c.id=p.category_id LEFT JOIN sales_locations l ON l.id=p.location_id WHERE o.bot_id=? AND o.customer_id=? ORDER BY o.created_at DESC LIMIT 80`).bind(bot.id,customer.id),
+      env.PASARGUARD_DB.prepare(`SELECT o.id,o.service_provider,o.amount_toman,o.original_amount_toman,o.discount_toman,o.promo_code,o.cashback_toman,o.status,o.order_type,o.target_order_id,o.payment_method,o.origin,o.remote_username,o.subscription_url,o.remote_status,o.remote_data_limit,o.remote_used_traffic,o.remote_expire,o.remote_online_at,o.remote_last_synced_at,o.error_message,o.created_at,o.updated_at,p.title AS plan_title,p.data_limit_bytes,p.duration_days,p.category_id,p.location_id,c.title AS category_title,c.emoji AS category_emoji,l.title AS location_title,l.emoji AS location_emoji,l.backend_provider AS location_backend_provider FROM sales_orders o JOIN sales_plans p ON p.id=o.plan_id LEFT JOIN sales_categories c ON c.id=p.category_id LEFT JOIN sales_locations l ON l.id=p.location_id WHERE o.bot_id=? AND o.customer_id=? ORDER BY o.created_at DESC LIMIT 80`).bind(bot.id,customer.id),
       env.PASARGUARD_DB.prepare("SELECT type,amount,balance_after,description,created_at FROM sales_customer_ledger WHERE customer_id=? ORDER BY created_at DESC LIMIT 30").bind(customer.id),
       env.PASARGUARD_DB.prepare("SELECT id,amount_toman,status,bonus_toman,origin,created_at,updated_at FROM sales_wallet_requests WHERE bot_id=? AND customer_id=? ORDER BY created_at DESC LIMIT 20").bind(bot.id,customer.id),
       env.PASARGUARD_DB.prepare("SELECT COUNT(*) AS c FROM sales_customers WHERE referrer_customer_id=?").bind(customer.id),
@@ -11665,8 +11730,17 @@ async function salesMiniAppBootstrap(request, env, botId, ctx = null) {
     const notifications = batchRows(9);
     const tickets = batchRows(10);
     const paymentInvoices = batchRows(11);
-    const orderRows = orders.results || [];
-    const services = buildSalesServices(orderRows);
+    let orderRows = orders.results || [];
+    let services = buildSalesServices(orderRows);
+    let serviceUsageSync = { attempted: 0, synced: 0, failed: 0, providers: { pasarguard: { attempted: 0, synced: 0, failed: 0 }, marzban: { attempted: 0, synced: 0, failed: 0 } }, errors: [] };
+    if (services.length) {
+      serviceUsageSync = await syncSalesDashboardServices(env, bot, customer, services);
+      if (serviceUsageSync.synced > 0) {
+        const refreshedOrders = await env.PASARGUARD_DB.prepare(`SELECT o.id,o.service_provider,o.amount_toman,o.original_amount_toman,o.discount_toman,o.promo_code,o.cashback_toman,o.status,o.order_type,o.target_order_id,o.payment_method,o.origin,o.remote_username,o.subscription_url,o.remote_status,o.remote_data_limit,o.remote_used_traffic,o.remote_expire,o.remote_online_at,o.remote_last_synced_at,o.error_message,o.created_at,o.updated_at,p.title AS plan_title,p.data_limit_bytes,p.duration_days,p.category_id,p.location_id,c.title AS category_title,c.emoji AS category_emoji,l.title AS location_title,l.emoji AS location_emoji,l.backend_provider AS location_backend_provider FROM sales_orders o JOIN sales_plans p ON p.id=o.plan_id LEFT JOIN sales_categories c ON c.id=p.category_id LEFT JOIN sales_locations l ON l.id=p.location_id WHERE o.bot_id=? AND o.customer_id=? ORDER BY o.created_at DESC LIMIT 80`).bind(bot.id,customer.id).all();
+        orderRows = refreshedOrders.results || orderRows;
+        services = buildSalesServices(orderRows);
+      }
+    }
     const activePromo = await salesActivePromoForCustomer(env, bot.id, customer);
     const texts = { ...SALES_TEXT_DEFAULTS };
     for (const row of textRows.results || []) if (SALES_TEXT_LABELS[row.text_key]) texts[row.text_key] = cleanText(row.text_value, 3500) || texts[row.text_key];
@@ -11728,7 +11802,7 @@ async function salesMiniAppBootstrap(request, env, botId, ctx = null) {
       },
       texts,
       categories: categories.results || [], locations: locations.results || [], plans: plans.results || [],
-      orders: orderRows, services, ledger: ledger.results || [], wallet_requests: walletRequests.results || [], trial: trial || null,
+      orders: orderRows, services, service_usage_sync: serviceUsageSync, ledger: ledger.results || [], wallet_requests: walletRequests.results || [], trial: trial || null,
       notifications: notifications.results || [],
       unread_notifications: (notifications.results || []).filter(row => row.status === "unread").length,
       tickets: tickets.results || [],
@@ -11907,7 +11981,7 @@ const SALES_MINI_APP_HTML = String.raw`
 <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<script>window.__BLUEPANEL_BUILD_VERSION__="3.3.43";</script>
+<script>window.__BLUEPANEL_BUILD_VERSION__="3.3.52";</script>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="theme-color" content="#07111f">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -12055,7 +12129,7 @@ window.buy=buy;
 function paymentForTarget(type,targetId){return(state.payment_invoices||[]).find(function(p){return p.target_type===type&&String(p.target_id)===String(targetId)&&!p.processed_at})}
 function orderCard(x){var h='<article class="card"><div class="row"><h3>'+(x.order_type==="renewal"?"♻️":x.order_type==="volume"?"➕":"📦")+" "+esc(x.plan_title)+'</h3><span class="status '+esc(x.status)+'">'+esc(statusLabel(x.status))+'</span></div>';if(Number(x.discount_toman||0)>0)h+='<div class="muted"><span class="priceOld">'+money(x.original_amount_toman||x.amount_toman)+'</span> · 🎟 '+esc(x.promo_code||"کد تخفیف")+'</div><div><b>'+money(x.amount_toman)+'</b> <span class="priceSave">صرفه‌جویی '+money(x.discount_toman)+'</span></div>';else h+='<div class="muted">'+money(x.amount_toman)+" · "+(x.origin==="miniapp"?"مینی‌اپ":"ربات")+'</div>';if(x.error_message)h+='<div class="muted" style="color:var(--danger);margin-top:7px">'+esc(x.error_message)+'</div>';if(x.remote_username)h+='<div style="margin-top:8px"><code>'+esc(x.remote_username)+'</code></div>';if(x.subscription_url)h+='<div class="serviceLink">'+esc(x.subscription_url)+'</div><div class="row"><button class="btn secondary" onclick="copyValue(\''+encodeURIComponent(x.subscription_url)+'\')">📋 کپی لینک</button><button class="btn secondary" onclick="showQr(\''+encodeURIComponent(x.subscription_url)+'\')">▦ QR</button></div>';if(x.origin==="miniapp"&&x.status==="awaiting_receipt")h+='<button class="btn full resumeOrderBtn" style="margin-top:9px" data-id="'+esc(x.id)+'">💳 ادامه پرداخت و ثبت رسید</button>';var pay=paymentForTarget("order",x.id);if(pay&&x.status==="payment_pending")h+='<button class="btn online full resumeOnlineBtn" style="margin-top:9px" data-id="'+esc(pay.id)+'">💠 ادامه پرداخت آنلاین</button>';return h+"</article>"}
 function orderCards(list){return list.length?list.map(orderCard).join(""):'<div class="empty"><div class="emptyIcon">📦</div>هنوز سفارشی ثبت نشده است.</div>'}
-function renderServices(){var services=state.services||[];el("serviceList").innerHTML=services.length?services.map(function(x){var limit=Number(x.remote_data_limit||0),used=Number(x.remote_used_traffic||0),remaining=limit>0?Math.max(0,limit-used):0,pct=limit>0?Math.max(0,Math.min(100,Math.round(used*100/limit))):0,status=String(x.remote_status||"active").toLowerCase(),link=x.subscription_url||"",loc=(x.location_emoji||"🌍")+" "+(x.location_title||"عمومی");return'<article class="card serviceCard"><div class="serviceHead"><div><h3>'+esc(x.plan_title||"سرویس")+'</h3><div class="muted">'+esc(loc)+' · <code>'+esc(x.remote_username)+'</code></div></div><span class="status serviceStatus '+esc(status)+'">'+esc(serviceStatusLabel(status))+'</span></div><div class="serviceMeta"><div><span>حجم کل</span><b>'+(limit>0?gb(limit):"نامحدود")+'</b></div><div><span>مصرف‌شده</span><b>'+gb(used)+'</b></div><div><span>باقی‌مانده</span><b>'+(limit>0?gb(remaining):"نامحدود")+'</b></div><div><span>تاریخ انقضا</span><b>'+esc(faDate(x.remote_expire))+'</b></div></div>'+(limit>0?'<div class="usageTrack"><div class="usageFill" style="width:'+pct+'%"></div></div><div class="muted">'+num(pct)+'٪ مصرف شده</div>':'<div class="muted">حجم این سرویس نامحدود است.</div>')+'<div class="syncLine">آخرین همگام‌سازی: '+esc(timeAgo(x.remote_last_synced_at))+'</div>'+(link?'<div class="serviceLink">'+esc(link)+'</div>':'')+'<div class="serviceActions">'+(link?'<button class="btn secondary" onclick="showQr(\''+encodeURIComponent(link)+'\')">🔗 لینک و QR</button>':'<button class="btn secondary" disabled>لینک موجود نیست</button>')+'<button class="btn secondary" onclick="refreshService(\''+x.id+'\')">🔄 بروزرسانی</button><button class="btn" onclick="selectRenew(\''+x.id+'\')">♻️ تمدید</button><button class="btn" onclick="selectVolume(\''+x.id+'\')">➕ افزایش حجم</button><button class="btn danger wide" onclick="confirmRevokeService(\''+x.id+'\')">🔐 تعویض لینک اشتراک</button></div></article>'}).join(""):'<div class="empty"><div class="emptyIcon">🧭</div>هنوز سرویس تحویل‌شده‌ای ندارید.</div>'}
+function renderServices(){var services=state.services||[];el("serviceList").innerHTML=services.length?services.map(function(x){var limit=Number(x.remote_data_limit||0),used=Number(x.remote_used_traffic||0),remaining=limit>0?Math.max(0,limit-used):0,pct=limit>0?Math.max(0,Math.min(100,Math.round(used*100/limit))):0,status=String(x.remote_status||"active").toLowerCase(),link=x.subscription_url||"",loc=(x.location_emoji||"🌍")+" "+(x.location_title||"عمومی"),provider=x.service_provider_label||((x.service_provider||"")==="marzban"?"مرزبان":"PasarGuard");return'<article class="card serviceCard"><div class="serviceHead"><div><h3>'+esc(x.plan_title||"سرویس")+'</h3><div class="muted">'+esc(loc)+' · '+esc(provider)+' · <code>'+esc(x.remote_username)+'</code></div></div><span class="status serviceStatus '+esc(status)+'">'+esc(serviceStatusLabel(status))+'</span></div><div class="serviceMeta"><div><span>حجم کل</span><b>'+(limit>0?gb(limit):"نامحدود")+'</b></div><div><span>مصرف‌شده</span><b>'+gb(used)+'</b></div><div><span>باقی‌مانده</span><b>'+(limit>0?gb(remaining):"نامحدود")+'</b></div><div><span>تاریخ انقضا</span><b>'+esc(faDate(x.remote_expire))+'</b></div></div>'+(limit>0?'<div class="usageTrack"><div class="usageFill" style="width:'+pct+'%"></div></div><div class="muted">'+num(pct)+'٪ مصرف شده</div>':'<div class="muted">حجم این سرویس نامحدود است.</div>')+'<div class="syncLine">آخرین همگام‌سازی: '+esc(timeAgo(x.remote_last_synced_at))+'</div>'+(link?'<div class="serviceLink">'+esc(link)+'</div>':'')+'<div class="serviceActions">'+(link?'<button class="btn secondary" onclick="showQr(\''+encodeURIComponent(link)+'\')">🔗 لینک و QR</button>':'<button class="btn secondary" disabled>لینک موجود نیست</button>')+'<button class="btn secondary" onclick="refreshService(\''+x.id+'\')">🔄 بروزرسانی</button><button class="btn" onclick="selectRenew(\''+x.id+'\')">♻️ تمدید</button><button class="btn" onclick="selectVolume(\''+x.id+'\')">➕ افزایش حجم</button><button class="btn danger wide" onclick="confirmRevokeService(\''+x.id+'\')">🔐 تعویض لینک اشتراک</button></div></article>'}).join(""):'<div class="empty"><div class="emptyIcon">🧭</div>هنوز سرویس تحویل‌شده‌ای ندارید.</div>'}
 function renderWalletRequests(){var list=state.wallet_requests||[];el("walletRequests").innerHTML=list.length?list.map(function(x){var pay=paymentForTarget("wallet",x.id);return'<div class="card"><div class="row"><b>'+money(x.amount_toman)+'</b><span class="status '+esc(x.status)+'">'+esc(statusLabel(x.status))+'</span></div>'+(Number(x.bonus_toman)>0?'<div class="muted">بونس: '+money(x.bonus_toman)+'</div>':"")+(x.origin==="miniapp"&&x.status==="awaiting_receipt"?'<button class="btn full resumeWalletBtn" style="margin-top:9px" data-id="'+esc(x.id)+'">💳 ادامه پرداخت و ثبت رسید</button>':"")+(pay&&x.status==="payment_pending"?'<button class="btn online full resumeOnlineBtn" style="margin-top:9px" data-id="'+esc(pay.id)+'">💠 ادامه پرداخت آنلاین</button>':"")+'</div>'}).join(""):'<div class="empty">درخواست شارژی ثبت نشده است.</div>'}
 function renderOnlinePayments(){var list=(state.payment_invoices||[]).filter(function(p){return !p.processed_at||String(p.status).toUpperCase()==="PAID"}).slice(0,8);el("onlinePayments").innerHTML=list.length?list.map(function(p){var done=!!p.processed_at,status=String(p.status||"PENDING").toUpperCase();var providerKey=String(p.provider||"").toLowerCase(),icon=providerKey==="cubepay"?"💳":providerKey==="plisio"?"🪙":"💠";return'<article class="card onlinePaymentCard"><div class="row"><div><b>'+icon+' '+(p.target_type==="wallet"?"شارژ کیف پول":"پرداخت سفارش")+'</b><div class="muted"><code>'+esc(p.provider_invoice_id||p.id)+'</code></div></div><span class="status '+(done?"approved":"payment_pending")+'">'+esc(done?"پردازش شد":paymentStatusLabel(status))+'</span></div><div class="muted">مبلغ: '+money(p.amount_toman)+' · '+esc(timeAgo(p.updated_at))+'</div>'+(!done&&["PENDING","PAID"].includes(status)?'<div class="paymentProgress"></div><button class="btn online full resumeOnlineBtn" data-id="'+esc(p.id)+'">ادامه پرداخت / استعلام</button>':"")+(p.error_message?'<div class="muted" style="color:var(--danger);margin-top:8px">'+esc(p.error_message)+'</div>':"")+'</article>'}).join(""):'<div class="empty"><div class="emptyIcon">💠</div>پرداخت آنلاین فعالی ندارید.</div>'}
 function bindResumeButtons(){document.querySelectorAll(".resumeOrderBtn").forEach(function(btn){btn.onclick=function(){resumeOrderPayment(btn.dataset.id)}});document.querySelectorAll(".resumeWalletBtn").forEach(function(btn){btn.onclick=function(){resumeWalletPayment(btn.dataset.id)}});document.querySelectorAll(".resumeOnlineBtn").forEach(function(btn){btn.onclick=function(){openOnlinePayment(btn.dataset.id)}})}
@@ -13190,7 +13264,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
   <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <script>window.__BLUEPANEL_BUILD_VERSION__="3.3.43";</script>
+  <script>window.__BLUEPANEL_BUILD_VERSION__="3.3.52";</script>
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
   <meta name="theme-color" content="#07111f">
   <meta name="apple-mobile-web-app-capable" content="yes">
