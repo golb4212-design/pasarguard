@@ -1,11 +1,11 @@
 /* BLUEPANEL_PROCESSOR_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.53
+ * Version: 3.3.54
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = '3.3.53';
+const APP_VERSION = '3.3.54';
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
@@ -1397,9 +1397,49 @@ async function syncDownlineRemoteServices(env, childBot, limit = 120) {
   return { synced, failed };
 }
 
+
+async function sharedMarzbanStoredUsageAggregate(env, botId) {
+  const row = await env.PASARGUARD_DB.prepare(`
+    SELECT COUNT(*) AS service_count,COALESCE(SUM(used),0) AS total_usage
+    FROM (
+      SELECT remote_key,MAX(used) AS used
+      FROM (
+        SELECT LOWER(remote_username) AS remote_key,COALESCE(remote_used_traffic,0) AS used
+        FROM sales_orders
+        WHERE bot_id=? AND status='delivered' AND remote_username IS NOT NULL
+          AND COALESCE(service_provider,'pasarguard')='marzban'
+        UNION ALL
+        SELECT LOWER(remote_username) AS remote_key,COALESCE(remote_used_traffic,0) AS used
+        FROM sales_trials
+        WHERE bot_id=? AND status='delivered' AND remote_username IS NOT NULL
+          AND COALESCE(service_provider,'pasarguard')='marzban'
+      ) provider_rows
+      GROUP BY remote_key
+    ) distinct_services
+  `).bind(botId,botId).first();
+  return { bytes:Math.max(0,Number(row?.total_usage||0)), serviceCount:Math.max(0,Number(row?.service_count||0)) };
+}
+
+function sharedMarzbanAggregateWithSnapshots(base = {}, snapshots = []) {
+  const unique = new Map();
+  for (const item of snapshots || []) {
+    const key=String(item?.username||'').trim().toLowerCase();
+    if(!key) continue;
+    const current=Math.max(0,Number(item?.current||0));
+    const previous=Math.max(0,Number(item?.previous||0));
+    const found=unique.get(key);
+    if(!found) unique.set(key,{current,previous});
+    else unique.set(key,{current:Math.max(found.current,current),previous:Math.max(found.previous,previous)});
+  }
+  let bytes=Math.max(0,Number(base?.bytes||0));
+  for (const value of unique.values()) bytes=Math.max(0,bytes-value.previous+value.current);
+  return { bytes, serviceCount:Math.max(Number(base?.serviceCount||0),unique.size) };
+}
+
 async function sharedMarzbanUsageSnapshots(env, bot, limit = 10) {
   const settings = await getSettings(env);
   const cfg = sharedMarzbanConfig(settings, env);
+  const aggregateBefore = await sharedMarzbanStoredUsageAggregate(env, bot.id);
   const rows = await env.PASARGUARD_DB.prepare(`
     SELECT source_type,record_id,customer_id,remote_username,previous_usage,oldest_sync,last_update
     FROM (
@@ -1439,7 +1479,8 @@ async function sharedMarzbanUsageSnapshots(env, bot, limit = 10) {
       try { await audit(env,null,"shared_marzban_service_sync_failed",{botId:bot.id,source:row.source_type,username:row.remote_username,message:String(error?.message||error)}); } catch (_) {}
     }
   }
-  return { snapshots, failed, checked:(rows.results || []).length };
+  const aggregate = sharedMarzbanAggregateWithSnapshots(aggregateBefore,snapshots);
+  return { snapshots, failed, checked:(rows.results || []).length, totalUsage:aggregate.bytes, serviceCount:aggregate.serviceCount };
 }
 
 function sharedMarzbanSnapshotUpdate(env, bot, item, eventKey = "", token = "") {
@@ -1477,11 +1518,11 @@ async function billSharedMarzbanBot(env, bot, options = {}) {
   // Existing services become the baseline once. Future deltas are billed exactly once.
   if (!Number(account?.initialized || 0)) {
     const statements = [
-      env.PASARGUARD_DB.prepare("UPDATE shared_backend_accounts SET initialized=1,revision=revision+1,last_delta_bytes=0,last_synced_at=?,last_error=NULL,updated_at=? WHERE bot_id=?").bind(ts,ts,bot.id)
+      env.PASARGUARD_DB.prepare("UPDATE shared_backend_accounts SET initialized=1,revision=revision+1,last_delta_bytes=0,last_usage_bytes=?,service_count=?,last_synced_at=?,last_error=NULL,updated_at=? WHERE bot_id=?").bind(usage.totalUsage,usage.serviceCount,ts,ts,bot.id)
     ];
     for (const item of usage.snapshots) statements.push(sharedMarzbanSnapshotUpdate(env,bot,item));
     await env.PASARGUARD_DB.batch(statements);
-    return { processed:true, initialized:true, checked:usage.checked, failed:usage.failed, charged:0, collected:0,
+    return { processed:true, initialized:true, checked:usage.checked, failed:usage.failed, usage:usage.totalUsage, service_count:usage.serviceCount, charged:0, collected:0,
       unpaid:Number(account?.unpaid_toman||0), upstream_charged:0, upstream_collected:0,
       upstream_unpaid:Number(account?.upstream_unpaid_toman||0) };
   }
@@ -1510,10 +1551,10 @@ async function billSharedMarzbanBot(env, bot, options = {}) {
       : (bot.status==="suspended_balance" && unpaid===0 && Number(bot.upstream_unpaid_toman||0)>0 ? "active" : bot.status);
     const changed = deltaBytes>0 || collected>0 || unpaid!==previousUnpaid || nextStatus!==bot.status;
     if (!changed) {
-      const statements=[env.PASARGUARD_DB.prepare("UPDATE shared_backend_accounts SET last_synced_at=?,last_error=NULL,updated_at=? WHERE bot_id=?").bind(ts,ts,bot.id)];
+      const statements=[env.PASARGUARD_DB.prepare("UPDATE shared_backend_accounts SET last_usage_bytes=?,service_count=?,last_synced_at=?,last_error=NULL,updated_at=? WHERE bot_id=?").bind(usage.totalUsage,usage.serviceCount,ts,ts,bot.id)];
       for (const item of usage.snapshots) statements.push(sharedMarzbanSnapshotUpdate(env,bot,item));
       await env.PASARGUARD_DB.batch(statements);
-      return { processed:true,checked:usage.checked,failed:usage.failed,delta:0,charged:0,collected:0,unpaid,
+      return { processed:true,checked:usage.checked,failed:usage.failed,usage:usage.totalUsage,service_count:usage.serviceCount,delta:0,charged:0,collected:0,unpaid,
         upstream_charged:0,upstream_collected:0,upstream_unpaid:unpaid,status:nextStatus };
     }
     const revision=Math.max(0,Number(account.revision||0));
@@ -1536,10 +1577,10 @@ async function billSharedMarzbanBot(env, bot, options = {}) {
         base_billing_remainder=?,margin_billing_remainder=0,unpaid_toman=?,unpaid_base_toman=?,unpaid_margin_toman=0,
         upstream_unpaid_toman=?,total_charged=total_charged+?,total_collected=total_collected+?,
         upstream_total_charged=upstream_total_charged+?,upstream_total_collected=upstream_total_collected+?,
-        last_delta_bytes=?,last_synced_at=?,last_error=NULL,updated_at=?
+        last_delta_bytes=?,last_usage_bytes=?,service_count=?,last_synced_at=?,last_error=NULL,updated_at=?
         WHERE bot_id=? AND revision=? AND ${stageOne}`)
         .bind(upstreamCalc.remainder,upstreamCalc.remainder,unpaid,unpaid,unpaid,upstreamCalc.amount,collected,
-          upstreamCalc.amount,collected,deltaBytes,ts,ts,bot.id,revision,eventKey,token),
+          upstreamCalc.amount,collected,deltaBytes,usage.totalUsage,usage.serviceCount,ts,ts,bot.id,revision,eventKey,token),
       env.PASARGUARD_DB.prepare("UPDATE shared_backend_usage_events SET applied=2 WHERE event_key=? AND processing_token=? AND applied=1 AND changes()=1").bind(eventKey,token),
       env.PASARGUARD_DB.prepare(`UPDATE reseller_bots SET status=?,upstream_unpaid_toman=?,
         upstream_total_charged=upstream_total_charged+?,updated_at=? WHERE id=? AND ${own}`)
@@ -1557,7 +1598,7 @@ async function billSharedMarzbanBot(env, bot, options = {}) {
     for (const item of usage.snapshots) statements.push(sharedMarzbanSnapshotUpdate(env,bot,item,eventKey,token));
     const results=await env.PASARGUARD_DB.batch(statements);
     const applied=Number(results?.[3]?.meta?.changes||0)>0;
-    return { processed:true,checked:usage.checked,failed:usage.failed,delta:applied?deltaBytes:0,
+    return { processed:true,checked:usage.checked,failed:usage.failed,usage:usage.totalUsage,service_count:usage.serviceCount,delta:applied?deltaBytes:0,
       charged:applied?upstreamCalc.amount:0,collected:applied?collected:0,unpaid:applied?unpaid:previousUnpaid,
       upstream_charged:applied?upstreamCalc.amount:0,upstream_collected:applied?collected:0,
       upstream_unpaid:applied?unpaid:Number(account.upstream_unpaid_toman||0),parent_income:0,parent_profit:0,
@@ -1597,10 +1638,10 @@ async function billSharedMarzbanBot(env, bot, options = {}) {
   const changed=deltaBytes>0 || childCollected>0 || upstreamCollected>0 || childUnpaid!==previousChildUnpaid ||
     upstreamUnpaid!==previousUpstreamUnpaid || childStatus!==bot.status || parentStatus!==parent.status;
   if (!changed) {
-    const statements=[env.PASARGUARD_DB.prepare("UPDATE shared_backend_accounts SET last_synced_at=?,last_error=NULL,updated_at=? WHERE bot_id=?").bind(ts,ts,bot.id)];
+    const statements=[env.PASARGUARD_DB.prepare("UPDATE shared_backend_accounts SET last_usage_bytes=?,service_count=?,last_synced_at=?,last_error=NULL,updated_at=? WHERE bot_id=?").bind(usage.totalUsage,usage.serviceCount,ts,ts,bot.id)];
     for (const item of usage.snapshots) statements.push(sharedMarzbanSnapshotUpdate(env,bot,item));
     await env.PASARGUARD_DB.batch(statements);
-    return { processed:true,checked:usage.checked,failed:usage.failed,delta:0,charged:0,collected:0,unpaid:childUnpaid,
+    return { processed:true,checked:usage.checked,failed:usage.failed,usage:usage.totalUsage,service_count:usage.serviceCount,delta:0,charged:0,collected:0,unpaid:childUnpaid,
       upstream_charged:0,upstream_collected:0,upstream_unpaid:upstreamUnpaid,parent_income:0,parent_profit:0,
       status:childStatus,parent_status:parentStatus };
   }
@@ -1628,11 +1669,11 @@ async function billSharedMarzbanBot(env, bot, options = {}) {
       total_parent_profit=total_parent_profit+?,upstream_total_charged=upstream_total_charged+?,
       upstream_total_collected=upstream_total_collected+?,parent_income_total=parent_income_total+?,
       parent_income_collected=parent_income_collected+?,parent_net_profit_total=parent_net_profit_total+?,
-      last_delta_bytes=?,last_synced_at=?,last_error=NULL,updated_at=?
+      last_delta_bytes=?,last_usage_bytes=?,service_count=?,last_synced_at=?,last_error=NULL,updated_at=?
       WHERE bot_id=? AND revision=? AND ${stageOne}`)
       .bind(childCalc.remainder,upstreamCalc.remainder,profitCalc.remainder,childUnpaid,upstreamUnpaid,upstreamUnpaid,
         childCalc.amount,childCollected,accruedProfit,upstreamCalc.amount,upstreamCollected,childCalc.amount,
-        childCollected,accruedProfit,deltaBytes,ts,ts,bot.id,revision,eventKey,token),
+        childCollected,accruedProfit,deltaBytes,usage.totalUsage,usage.serviceCount,ts,ts,bot.id,revision,eventKey,token),
     env.PASARGUARD_DB.prepare("UPDATE shared_backend_usage_events SET applied=2 WHERE event_key=? AND processing_token=? AND applied=1 AND changes()=1").bind(eventKey,token),
     env.PASARGUARD_DB.prepare(`UPDATE reseller_bots SET status=?,upstream_price_per_gb=?,upstream_unpaid_toman=?,
       upstream_total_charged=upstream_total_charged+?,updated_at=? WHERE id=? AND ${own}`)
@@ -1666,7 +1707,7 @@ async function billSharedMarzbanBot(env, bot, options = {}) {
   for (const item of usage.snapshots) statements.push(sharedMarzbanSnapshotUpdate(env,bot,item,eventKey,token));
   const results=await env.PASARGUARD_DB.batch(statements);
   const applied=Number(results?.[3]?.meta?.changes||0)>0;
-  return { processed:true,checked:usage.checked,failed:usage.failed,delta:applied?deltaBytes:0,
+  return { processed:true,checked:usage.checked,failed:usage.failed,usage:usage.totalUsage,service_count:usage.serviceCount,delta:applied?deltaBytes:0,
     charged:applied?childCalc.amount:0,collected:applied?childCollected:0,unpaid:applied?childUnpaid:previousChildUnpaid,
     upstream_charged:applied?upstreamCalc.amount:0,upstream_collected:applied?upstreamCollected:0,
     upstream_unpaid:applied?upstreamUnpaid:previousUpstreamUnpaid,parent_income:applied?childCollected:0,
@@ -2096,7 +2137,7 @@ async function ensureSharedMarzbanTables(env) {
       upstream_unpaid_toman INTEGER NOT NULL DEFAULT 0, upstream_total_charged INTEGER NOT NULL DEFAULT 0,
       upstream_total_collected INTEGER NOT NULL DEFAULT 0, parent_income_total INTEGER NOT NULL DEFAULT 0,
       parent_income_collected INTEGER NOT NULL DEFAULT 0, parent_net_profit_total INTEGER NOT NULL DEFAULT 0,
-      last_delta_bytes INTEGER NOT NULL DEFAULT 0, last_synced_at TEXT, last_error TEXT,
+      last_delta_bytes INTEGER NOT NULL DEFAULT 0, last_usage_bytes INTEGER NOT NULL DEFAULT 0, service_count INTEGER NOT NULL DEFAULT 0, last_synced_at TEXT, last_error TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`),
     env.PASARGUARD_DB.prepare(`CREATE TABLE IF NOT EXISTS shared_backend_usage_events (
       event_key TEXT PRIMARY KEY, processing_token TEXT NOT NULL, applied INTEGER NOT NULL DEFAULT 0,
@@ -2125,7 +2166,9 @@ async function ensureSharedMarzbanTables(env) {
     ["upstream_total_collected", "INTEGER NOT NULL DEFAULT 0"],
     ["parent_income_total", "INTEGER NOT NULL DEFAULT 0"],
     ["parent_income_collected", "INTEGER NOT NULL DEFAULT 0"],
-    ["parent_net_profit_total", "INTEGER NOT NULL DEFAULT 0"]
+    ["parent_net_profit_total", "INTEGER NOT NULL DEFAULT 0"],
+      ["last_usage_bytes", "INTEGER NOT NULL DEFAULT 0"],
+      ["service_count", "INTEGER NOT NULL DEFAULT 0"]
   ];
   const cascadeEventColumns = [
     ["parent_income_amount", "INTEGER NOT NULL DEFAULT 0"],
@@ -3475,7 +3518,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_PROCESSOR_VERSION='3.3.50';
+const BLUEPANEL_PROCESSOR_VERSION='3.3.54';
 let processorSchemaPromise=null;
 function processorJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 

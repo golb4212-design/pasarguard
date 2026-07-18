@@ -1,7 +1,9 @@
 {
-  "version": "3.3.53",
-  "release_id": "3.3.53-customer-dashboard-all-provider-live-usage",
-  "architecture": "fully-split-three-worker-all-provider-dashboard-live-sync",
+  "version": "3.3.54",
+  "release_id": "3.3.54-provider-split-admin-and-subscription-usage",
+  "architecture": "fully-split-three-worker-simultaneous-provider-accounting",
+  "title": "تفکیک صحیح مصرف PasarGuard و مرزبان",
+  "summary": "مصرف PasarGuard از شمارنده جاری ادمین متصل و مصرف مرزبان از مجموع اشتراک‌های مرزبانی ساخته‌شده توسط همان ربات محاسبه می‌شود؛ هر دو Provider هم‌زمان فعال و جداگانه نمایش داده می‌شوند.",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -9,57 +11,59 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "refreshes customer services from both PasarGuard and Marzban before dashboard rendering",
-    "adds cache-busting and no-store headers to live usage GET requests",
-    "repairs legacy service_provider values from the service location backend after a successful sync",
-    "re-queries D1 after sync so the same bootstrap response contains the new traffic counter",
-    "limits automatic dashboard sync to ten services with concurrency two",
-    "keeps per-service manual refresh for both providers and shows the provider on each card",
+    "keeps PasarGuard and Marzban accounting active simultaneously instead of selecting one exclusive provider",
+    "reads PasarGuard current usage from the connected reseller admin account used_traffic counter",
+    "uses lifetime_used_traffic only as diagnostic metadata or compatibility fallback when the current counter is absent",
+    "calculates Marzban usage as the deduplicated sum of current used_traffic for subscriptions created by the same reseller bot",
+    "includes both delivered normal orders and delivered trial subscriptions in the Marzban aggregate",
+    "stores Marzban aggregate bytes and service count for central and reseller dashboards",
+    "shows total combined usage plus separate PasarGuard and Marzban cards",
+    "keeps provider billing ledgers separate and delta-based to prevent duplicate charging",
     "excludes README files"
+  ],
+  "changes": [
+    "PasarGuard: مصرف جاری ادمین متصل مستقیماً از used_traffic خوانده می‌شود.",
+    "مرزبان: مصرف اشتراک‌های ساخته‌شده توسط همان ربات، شامل سفارش‌ها و تست‌های تحویل‌شده، جمع زده می‌شود.",
+    "نام کاربری‌های تکراری مرزبان یک‌بار محاسبه می‌شوند.",
+    "مصرف کل برابر مجموع دو بخش است، اما صورتحساب هر Provider جداگانه باقی می‌ماند.",
+    "داشبورد نماینده و داشبورد مرکزی تفکیک مصرف و تعداد اشتراک مرزبان را نشان می‌دهند.",
+    "ستون‌های تجمیع مرزبان به‌صورت خودکار به D1 اضافه می‌شوند و SQL دستی لازم نیست."
   ],
   "deployment": {
     "automatic_provisioning": "upload ZIP through the central bot",
-    "db_schema_revision": "3.3.40-reseller-webhook-ui-fail-open",
-    "automatic_migration": "no database schema change",
+    "db_schema_revision": "3.3.54-shared-marzban-aggregate-columns",
+    "automatic_migration": "adds shared_backend_accounts.last_usage_bytes and shared_backend_accounts.service_count with default zero; no manual SQL required",
     "required_bindings": [
       "Core: PASARGUARD_DB, EDGE_WORKER, PROCESSOR_WORKER and LIVE_USAGE_COORDINATOR",
       "Processor: EDGE_WORKER and CORE_WORKER",
       "Edge: CORE_WORKER and PROCESSOR_WORKER"
     ],
-    "durable_object": "LiveUsageCoordinator with migration tag v3.1.9-live-usage"
+    "durable_object": "LiveUsageCoordinator with existing migration tag v3.1.9-live-usage"
   },
   "validation": {
     "worker_syntax": "passed: node --check for core, edge and processor",
-    "dashboard_bootstrap": "passed: both PasarGuard and Marzban are selected by provider, refreshed without cache, written to D1 and re-read into the same bootstrap response",
-    "subrequest_bound": "maximum 10 service GET requests per bootstrap, concurrency 2",
-    "database_schema": "unchanged from 3.3.40",
-    "zip_integrity": "passed: clean archive structure and unzip CRC validation",
-    "live_api": "not run; requires production credentials",
-    "provider_resolution": "passed: service provider helper and provider-specific diagnostics are present"
+    "embedded_dashboard_scripts": "passed: extracted browser scripts parse successfully",
+    "pasarguard_counter_selection": "passed: current used_traffic is preferred and reset history does not inflate current usage",
+    "marzban_aggregate": "passed: orders plus trials, bot/provider/status scoping, case-insensitive username deduplication and counter reset behavior",
+    "billing_safety": "passed: separate delta ledgers and no duplicate charge from lifetime traffic",
+    "sql_bindings": "passed: changed shared_backend_accounts update statements have matching placeholders and bindings",
+    "zip_integrity": "passed: clean six-entry archive structure and unzip CRC validation",
+    "live_api": "not run; requires production PasarGuard, Marzban and Cloudflare credentials"
   },
   "limitations": [
     "Production verification requires deployment because real PasarGuard, Marzban, Cloudflare and Telegram credentials are unavailable offline.",
-    "The displayed number cannot advance before the upstream panel itself updates its used_traffic counter."
-  ],
-  "title": "همگام‌سازی مصرف PasarGuard و مرزبان در داشبورد مشتری",
-  "summary": "داشبورد مشتری اکنون مصرف هر سرویس را از Provider واقعی همان سرویس، بدون کش و برای هر دو پنل PasarGuard و مرزبان تازه می‌کند.",
-  "changes": [
-    "تبدیل Sync خودکار مرزبان به Sync مشترک هر دو Provider.",
-    "حذف کش از درخواست‌های GET مصرف.",
-    "ترمیم Provider سرویس‌های قدیمی از روی لوکیشن.",
-    "نمایش نام Provider روی کارت سرویس.",
-    "بدون Migration دیتابیس."
+    "The displayed value can advance only after the upstream panel updates its used_traffic counter."
   ],
   "sha256": {
-    "core/worker.js": "f9d40903fc13793b466d5f663b6dc8caaa59c11c2e095a664fd6aa84750ffbfc",
-    "edge/worker.js": "89e1df56cbc8c35caffd623adb89af1fe54e992b08d8265ff5897801163dec0f",
-    "processor/worker.js": "e4c93735d73bab8abefaebcfd739f4be1ac03ae3fa6c901097a8be6b42b5f535",
+    "core/worker.js": "0e1c3480ca2f251a6d111d09dc07eb1801cfdde1621b3ac6af39f9f6ebcd48f9",
+    "edge/worker.js": "edeed597155b26bd233a102facabbe795c38a2f6de1d9b8d5839fc62da4d3819",
+    "processor/worker.js": "4fd621801ee8eb366425859d402c843a7d7645805cd7d3d99f6e50f1389cbfd3",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "f9d40903fc13793b466d5f663b6dc8caaa59c11c2e095a664fd6aa84750ffbfc",
-    "edge/worker.js": "89e1df56cbc8c35caffd623adb89af1fe54e992b08d8265ff5897801163dec0f",
-    "processor/worker.js": "e4c93735d73bab8abefaebcfd739f4be1ac03ae3fa6c901097a8be6b42b5f535",
+    "core/worker.js": "0e1c3480ca2f251a6d111d09dc07eb1801cfdde1621b3ac6af39f9f6ebcd48f9",
+    "edge/worker.js": "edeed597155b26bd233a102facabbe795c38a2f6de1d9b8d5839fc62da4d3819",
+    "processor/worker.js": "4fd621801ee8eb366425859d402c843a7d7645805cd7d3d99f6e50f1389cbfd3",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }
