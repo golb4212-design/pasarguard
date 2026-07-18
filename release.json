@@ -1,9 +1,9 @@
 {
-  "version": "3.3.57",
-  "release_id": "3.3.57-universal-central-error-alerting",
-  "architecture": "fully-split-three-worker-content-only-sideworker-rollout",
-  "title": "گزارش فوری تمام خطاهای قابل‌تشخیص در تاپیک مرکزی",
-  "summary": "اولین رخداد هر خطای متمایز در Core، Edge، Processor، Cron، API، Webhook و رابط‌های وب فوراً به تاپیک مرکزی گزارش خطاها ارسال می‌شود؛ در شکست ارسال تاپیک، هشدار اضطراری مستقیم برای مدیران مرکزی فرستاده می‌شود و تکرارها بدون ایجاد سیل پیام در نقاط مهم شمارش اطلاع داده می‌شوند.",
+  "version": "3.3.58",
+  "release_id": "3.3.58-subrequest-budget-isolation-and-telegram-relay",
+  "architecture": "fully-split-three-worker-isolated-cron-telegram-relay",
+  "title": "رفع قطعی Too many subrequests در Cron و ربات مرکزی",
+  "summary": "وظایف سنگین Core در هشت چرخه مستقل تقسیم شدند و در صورت اتمام بودجه درخواست Core، پیام تلگرام و هشدار فوری از Invocation مستقل Processor ارسال می‌شود؛ بنابراین بروزرسانی، Processor و پاسخ ربات دیگر بودجه یکدیگر را مصرف نمی‌کنند.",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -11,59 +11,55 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "reports the first occurrence of every distinct captured runtime error immediately to the central errors topic",
-    "covers Core, Edge and Processor request handlers, scheduled jobs, API forwarding, Telegram webhooks and known background tasks",
-    "captures browser JavaScript errors, unhandled promise rejections, rejected fetch calls and HTTP 5xx responses from central, reseller and customer miniapps",
-    "adds a cluster-health watchdog for Edge, Processor and the live-usage Durable Object binding",
-    "falls back to an emergency direct Telegram message to central admins when topic delivery is unavailable",
-    "redacts authorization headers, Telegram bot tokens, passwords, API keys and secrets before storage or notification",
-    "deduplicates recurring errors and sends milestone summaries at occurrences 1, 2, 3, 5, 10, 25, 50, 100, 250, 500, 1000 and each additional 1000",
-    "flushes Processor error reports with priority instead of waiting for the normal report queue cycle"
+    "splits Core scheduled maintenance into eight isolated phases",
+    "runs automatic update before any other external network task in its own phase",
+    "moves Telegram delivery to a fresh Processor invocation when Core hits the subrequest limit",
+    "keeps immediate central error alerts deliverable even when the failing Core invocation has no external-request budget left",
+    "reduces routine menu, manager, payment and report flush batch sizes",
+    "automatically resolves the open automatic-update and Processor-trigger limit errors after successful cycles"
   ],
   "changes": [
-    "مرکز خطا از حالت ثبت چند خطای ازپیش‌تعریف‌شده به سامانه گزارش سراسری خطاهای قابل‌تشخیص تبدیل شد.",
-    "خطاهای Runtime، API، Webhook، Cron و وظایف پس‌زمینه هر سه Worker به تاپیک مرکزی گزارش خطاها متصل شدند.",
-    "خطاهای جاوااسکریپت و پاسخ‌های 5xx مینی‌اپ مرکزی، کنترل نماینده و مینی‌اپ فروش مشتری به هسته ارسال می‌شوند.",
-    "اولین رخداد هر خطای جدید فوری است و تکرارها با شمارنده مرحله‌ای اطلاع داده می‌شوند تا گروه مرکزی اسپم نشود.",
-    "در شکست ارسال به تاپیک، هشدار اضطراری مستقیم برای شناسه‌های مدیر مرکزی ارسال می‌شود.",
-    "سلامت Edge، Processor و Binding محاسبه Live در هر چرخه زمان‌بندی پایش می‌شود.",
-    "اطلاعات حساس قبل از ثبت در دیتابیس و ارسال تلگرام ماسک می‌شوند."
+    "Cron دیگر بروزرسانی، سلامت کلاستر، همگام‌سازی منو، مصرف، پرداخت و Processor را در یک Invocation اجرا نمی‌کند.",
+    "برای تلگرام یک Relay داخلی و امن در Processor اضافه شد که فقط از Service Binding داخلی Core پذیرفته می‌شود.",
+    "telegramUiApi در خطای سقف Subrequest به‌جای تکرار شکست در Core، همان درخواست را از Processor ارسال می‌کند.",
+    "ارسال اضطراری safeTelegramWebhook نیز از مسیر Relay پشتیبانی می‌کند.",
+    "تعداد آیتم‌های پردازش هر فاز کاهش یافت تا روی پلن Free نیز حاشیه امن باقی بماند."
   ],
   "deployment": {
     "automatic_provisioning": "upload ZIP through the central bot",
-    "db_schema_revision": "unchanged-from-3.3.56",
-    "automatic_migration": "no new table, migration or manual SQL is required",
+    "db_schema_revision": "unchanged-from-3.3.57",
+    "automatic_migration": "no new D1 table, column or manual SQL is required",
     "required_bindings": [
       "Core: PASARGUARD_DB, EDGE_WORKER, PROCESSOR_WORKER and LIVE_USAGE_COORDINATOR",
       "Processor: EDGE_WORKER and CORE_WORKER",
       "Edge: CORE_WORKER and PROCESSOR_WORKER"
     ],
-    "durable_object": "LiveUsageCoordinator with existing migration tag v3.1.9-live-usage",
-    "central_topic": "report key errors / title ❌ گزارش خطاها"
+    "processor_internal_endpoint": "/__bluepanel/service/telegram-relay (Service Binding only)"
   },
   "validation": {
     "worker_syntax": "passed: node --check for core, edge and processor",
-    "static_contracts": "passed: immediate central alerting, client telemetry, cluster watchdog, redaction and repeat cadence",
-    "browser_reporter": "passed: generated injected client reporter JavaScript parses successfully",
-    "topic_pipeline": "passed by static contract: first occurrence queues the central errors report and Processor prioritizes its exact outbox row",
+    "cron_isolation": "passed: eight mutually exclusive Core maintenance phases; automatic update, activation, health, provider sync, usage, payments, helper and Processor trigger no longer share one invocation",
+    "telegram_relay": "passed by static contract: Core retries subrequest-limit Telegram calls through the internal Processor service endpoint",
+    "relay_security": "passed by static contract: internal hostname and exact service-hop header required; token and method are validated and not logged",
+    "batch_budget": "passed: reseller menu 2, manager sync 1, report flush 2 and payment/trial batches reduced",
     "zip_integrity": "passed: clean nine-entry archive structure and CRC validation",
-    "live_api": "not run; requires production Telegram, Cloudflare, PasarGuard and Marzban credentials"
+    "live_api": "not run; requires production Cloudflare and Telegram credentials"
   },
   "limitations": [
-    "A silent logical bug that returns a plausible but wrong result without throwing, returning 5xx or violating a monitored health condition cannot be discovered automatically until a dedicated invariant check exists.",
-    "An outage that simultaneously prevents Worker execution, D1 access and Telegram delivery cannot be reported by the same affected runtime; Cloudflare external alerts are still recommended for total-platform outages.",
-    "Production delivery to the configured Telegram topic and emergency admin fallback must be confirmed after deployment."
+    "The Processor relay requires the existing PROCESSOR_WORKER binding on Core.",
+    "If Cloudflare blocks every invocation or the Processor is unavailable at the same time, Telegram delivery cannot be recovered by the affected cluster.",
+    "Production delivery must be confirmed after deployment with real Cloudflare and Telegram credentials."
   ],
   "sha256": {
-    "core/worker.js": "5e1b765e0ae0a6c0795270046315fa93c047b1442ce9da451c53fd2e22df0dcb",
-    "edge/worker.js": "184d047a7bc1040181556adafcc3e68063b9fb1c4a59cf82f0f99e3ea79c8a09",
-    "processor/worker.js": "8ef65cd20a57e5f93cb4f6eb20fd1e3482098d4a9e8a7dc02bf7ee5074611204",
+    "core/worker.js": "11736d75b3ed1074751331e61c4bd46855b0b7c373dbde793c337d6df16f31af",
+    "edge/worker.js": "d56b20883b84d6c16db47a18ad2e688f34a05b409c8e5446b9e7f558262aba5d",
+    "processor/worker.js": "e3cac4a73227d71732b8fae22c375ecec3de9829bca0dba512d467aa7c28dc61",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "5e1b765e0ae0a6c0795270046315fa93c047b1442ce9da451c53fd2e22df0dcb",
-    "edge/worker.js": "184d047a7bc1040181556adafcc3e68063b9fb1c4a59cf82f0f99e3ea79c8a09",
-    "processor/worker.js": "8ef65cd20a57e5f93cb4f6eb20fd1e3482098d4a9e8a7dc02bf7ee5074611204",
+    "core/worker.js": "11736d75b3ed1074751331e61c4bd46855b0b7c373dbde793c337d6df16f31af",
+    "edge/worker.js": "d56b20883b84d6c16db47a18ad2e688f34a05b409c8e5446b9e7f558262aba5d",
+    "processor/worker.js": "e3cac4a73227d71732b8fae22c375ecec3de9829bca0dba512d467aa7c28dc61",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }

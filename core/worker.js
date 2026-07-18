@@ -1,15 +1,26 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.57
+ * Version: 3.3.58
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.57';
+const APP_VERSION = '3.3.58';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.58": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🧯", text: "تقسیم کامل Cron مرکزی به هشت Invocation سبک برای حذف خطای Too many subrequests" },
+      { emoji: "🛟", text: "ارسال پیام تلگرام از مسیر اضطراری Processor وقتی بودجه درخواست Core تمام شده باشد" },
+      { emoji: "🚦", text: "جلوگیری از اجرای هم‌زمان بروزرسانی، پایش سلامت، همگام‌سازی و Processor در یک چرخه" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "⚡", text: "پاسخ‌گویی ربات مرکزی و نمایندگی حتی هنگام پرشدن سقف Subrequest ادامه پیدا می‌کند" },
+      { emoji: "📨", text: "هشدارهای فوری خطا از Invocation مستقل Processor به تاپیک مرکزی تحویل می‌شوند" }
+    ])
+  }),
   "3.3.57": Object.freeze({
     central: Object.freeze([
       { emoji: "🚨", text: "ارسال فوری اولین رخداد هر خطای واقعی به Topic مرکزی گزارش خطاها" },
@@ -4375,6 +4386,40 @@ function telegramUiFallbackMessagePayload(payload, replyMarkup = undefined) {
   return fallback;
 }
 
+function bluePanelSubrequestLimitError(error) {
+  return /too many subrequests|subrequest limit|exceeded.*subrequests/i.test(String(error?.message || error || ""));
+}
+
+async function telegramApiWithProcessorRelay(env, token, method, body) {
+  try {
+    return await telegramApiWithToken(token, method, body);
+  } catch (error) {
+    if (!bluePanelSubrequestLimitError(error) || !env?.PROCESSOR_WORKER || typeof env.PROCESSOR_WORKER.fetch !== "function") throw error;
+    try {
+      const response = await env.PROCESSOR_WORKER.fetch(new Request("https://bluepanel-processor.internal/__bluepanel/service/telegram-relay", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "x-bluepanel-service-hop": "core-to-processor-telegram-relay"
+        },
+        body: JSON.stringify({ token, method, body: body || {} })
+      }));
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data?.success === false || !data?.telegram) {
+        const relayError = new Error(data?.error || ("Processor Telegram relay HTTP " + response.status));
+        relayError.code = data?.code || "PROCESSOR_TELEGRAM_RELAY_FAILED";
+        relayError.cause = error;
+        throw relayError;
+      }
+      return data.telegram;
+    } catch (relayError) {
+      relayError.original_subrequest_error = cleanText(error?.message || error, 500);
+      throw relayError;
+    }
+  }
+}
+
 async function telegramUiApi(env, botScope, token, method, body, uiSource = {}) {
   const uiConfig = normalizeTelegramUiConfig(uiSource);
   let payload = { ...(body || {}) };
@@ -4388,10 +4433,10 @@ async function telegramUiApi(env, botScope, token, method, body, uiSource = {}) 
   if (!Array.isArray(inlineKeyboard)) {
     let result;
     try {
-      result = await telegramApiWithToken(token, method, payload);
+      result = await telegramApiWithProcessorRelay(env, token, method, payload);
     } catch (error) {
       if ((method === "editMessageText" || method === "editMessageCaption") && chatId != null && telegramUiEditUnavailable(error)) {
-        result = await telegramApiWithToken(token, "sendMessage", telegramUiFallbackMessagePayload(payload));
+        result = await telegramApiWithProcessorRelay(env, token, "sendMessage", telegramUiFallbackMessagePayload(payload));
       } else if (method === "editMessageReplyMarkup" && telegramUiEditUnavailable(error)) {
         return { ok: true, result: true };
       } else {
@@ -4408,7 +4453,7 @@ async function telegramUiApi(env, botScope, token, method, body, uiSource = {}) 
   if (!inlineKeyboard.length || !inlineKeyboard.some(row => Array.isArray(row) && row.length)) {
     if (chatId != null) await telegramReplaceReplyRoutes(env, botScope, chatId, [], null);
     if (method === "editMessageReplyMarkup") return { ok: true, result: true };
-    return telegramApiWithToken(token, method, payload);
+    return telegramApiWithProcessorRelay(env, token, method, payload);
   }
 
   const plan = telegramReplyKeyboardPlan(inlineKeyboard, uiConfig);
@@ -4416,7 +4461,7 @@ async function telegramUiApi(env, botScope, token, method, body, uiSource = {}) 
     if (chatId != null) await telegramReplaceReplyRoutes(env, botScope, chatId, [], null);
     const without = { ...payload };
     delete without.reply_markup;
-    return telegramApiWithToken(token, method, without);
+    return telegramApiWithProcessorRelay(env, token, method, without);
   }
 
   if (method === "editMessageText" || method === "editMessageCaption") {
@@ -4424,7 +4469,7 @@ async function telegramUiApi(env, botScope, token, method, body, uiSource = {}) 
     delete editPayload.reply_markup;
     let edited = null;
     let editUnavailable = false;
-    try { edited = await telegramApiWithToken(token, method, editPayload); }
+    try { edited = await telegramApiWithProcessorRelay(env, token, method, editPayload); }
     catch (error) {
       const message = String(error?.message || error || "");
       if (/message is not modified/i.test(message)) {
@@ -4436,11 +4481,11 @@ async function telegramUiApi(env, botScope, token, method, body, uiSource = {}) 
       }
     }
     if (editUnavailable) {
-      const fallback = await telegramApiWithToken(token, "sendMessage", telegramUiFallbackMessagePayload(payload, plan.markup));
+      const fallback = await telegramApiWithProcessorRelay(env, token, "sendMessage", telegramUiFallbackMessagePayload(payload, plan.markup));
       await telegramReplaceReplyRoutes(env, botScope, chatId, plan.routes, fallback?.result?.message_id || null);
       return fallback;
     }
-    const prompt = await telegramApiWithToken(token, "sendMessage", {
+    const prompt = await telegramApiWithProcessorRelay(env, token, "sendMessage", {
       chat_id: chatId,
       text: "⌨️ گزینه موردنظر را از منوی پایین انتخاب کنید.",
       reply_markup: plan.markup
@@ -4451,7 +4496,7 @@ async function telegramUiApi(env, botScope, token, method, body, uiSource = {}) 
 
   if (method === "editMessageReplyMarkup") {
     await telegramReplaceReplyRoutes(env, botScope, chatId, plan.routes, payload.message_id || null);
-    const prompt = await telegramApiWithToken(token, "sendMessage", {
+    const prompt = await telegramApiWithProcessorRelay(env, token, "sendMessage", {
       chat_id: chatId,
       text: "⌨️ گزینه موردنظر را از منوی پایین انتخاب کنید.",
       reply_markup: plan.markup
@@ -4461,7 +4506,7 @@ async function telegramUiApi(env, botScope, token, method, body, uiSource = {}) 
   }
 
   payload.reply_markup = plan.markup;
-  const result = await telegramApiWithToken(token, method, payload);
+  const result = await telegramApiWithProcessorRelay(env, token, method, payload);
   await telegramReplaceReplyRoutes(env, botScope, chatId, plan.routes, result?.result?.message_id || null);
   return result;
 }
@@ -4655,18 +4700,24 @@ async function notifyVersionActivation(env) {
         WHERE dedupe_key LIKE 'live_usage:%' AND (central_status='pending' OR reseller_status='pending')
       `).bind(APP_VERSION, ts).run();
     } catch (_) {}
-    try { agencySync = await applyCurrentReleaseToAllAgencies(env); } catch (error) { agencySync = { migrated: 0, error: cleanText(error.message, 500) }; }
+    try {
+      const migrated = await env.PASARGUARD_DB.prepare(`
+        UPDATE agencies SET runtime_version=?,update_applied_at=?
+        WHERE COALESCE(runtime_version,'')<>?
+      `).bind(APP_VERSION, ts, APP_VERSION).run();
+      agencySync = { migrated: Number(migrated?.meta?.changes || 0), manualSync: { deferred: true, reason: "isolated_cron_phase" } };
+    } catch (error) { agencySync = { migrated: 0, error: cleanText(error.message, 500) }; }
     const pythonState = settings.python_helper_last_status || "never";
     await notifyAdmins(env,
       "🚀 <b>نسخه جدید سامانه فعال شد</b>\n" +
       "نسخه: <code>" + botEscape(APP_VERSION) + "</code>\n" +
       "✅ دیتابیس مشترک: <code>PASARGUARD_DB</code>\n" +
-      "✅ نسخه ربات مرکزی و نماینده‌ها همگام شد\n" +
+      "✅ هسته مرکزی فعال شد و صف همگام‌سازی تدریجی نماینده‌ها آغاز شد\n" +
       "✅ پنل‌های دستی پاسارگارد نیز به نسخه جدید متصل شدند\n" +
       "📣 ارسال خودکار اطلاعیه کانال: <code>" + (settings.release_channel_enabled === "true" ? "فعال" : "غیرفعال") + "</code>\n" +
       "🐍 وضعیت Python: <code>" + botEscape(pythonState) + "</code>"
     );
-    try { resellerSync = await syncAllResellerBotMenus(env, false, 4); } catch (_) {}
+    resellerSync = { deferred: true, reason: "isolated_cron_phase", batch_size: 2 };
     try { await audit(env, null, "runtime_version_activated", { version: APP_VERSION, independentBot: true, resellerSalesBots: true, resellerSync, agencySync }); } catch (_) {}
   }
 
@@ -16990,7 +17041,13 @@ async function emergencyTelegramToken(env) {
 async function safeTelegramWebhook(request, env, ctx = null) {
   const backup = request.clone();
   try {
-    return await telegramWebhook(request, env, ctx);
+    const response = await telegramWebhook(request, env, ctx);
+    const resolveRecovered = Promise.all([
+      resolveSystemErrorCenter(env,{scope:"central_bot_update",botId:"",errorCode:"CORE_CENTRAL_BOT_UPDATE_ERROR"}),
+      resolveSystemErrorCenter(env,{scope:"central_webhook",botId:"",errorCode:"CORE_TELEGRAM_WEBHOOK_FATAL"})
+    ]).catch(()=>{});
+    if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(resolveRecovered); else await resolveRecovered;
+    return response;
   } catch (error) {
     console.error("telegram webhook recovered from fatal error", error);
     let update = {};
@@ -17004,7 +17061,7 @@ async function safeTelegramWebhook(request, env, ctx = null) {
     if (chatId) {
       try {
         const token = await emergencyTelegramToken(env);
-        if (token) await telegramApiWithToken(token,"sendMessage",{
+        if (token) await telegramApiWithProcessorRelay(env, token,"sendMessage",{
           chat_id:chatId,
           text:"⚠️ خطای موقت داخلی مهار شد. ربات از دسترس خارج نشده؛ چند لحظه دیگر دوباره تلاش کنید.\nکد: CORE_RECOVERY_MODE"
         });
@@ -18052,7 +18109,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.3.57';
+const BLUEPANEL_CORE_VERSION = '3.3.58';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
@@ -18169,12 +18226,12 @@ async function monitorClusterHealthAndReport(env) {
 }
 
 let bluePanelNextRequestUpdateCheckAt = 0;
-const BLUEPANEL_REQUEST_UPDATE_INTERVAL_MS = 30000;
+const BLUEPANEL_REQUEST_UPDATE_INTERVAL_MS = 120000;
 
 function scheduleRequestTriggeredUpdate(env, ctx, path) {
   if (!ctx || typeof ctx.waitUntil !== "function") return;
   if (/^\/(?:__bluepanel|health|telegram\/webhook|payments\/)/.test(String(path||""))) return;
-  const eligible = path === "/" || ["/app","/miniapp","/control","/admin","/panel","/dashboard","/control-advanced"].includes(path) || String(path||"").startsWith("/api/admin/");
+  const eligible = path === "/" || ["/app","/miniapp","/control","/admin","/panel","/dashboard","/control-advanced"].includes(path);
   if (!eligible) return;
   const now = Date.now();
   if (now < bluePanelNextRequestUpdateCheckAt) return;
@@ -18182,56 +18239,73 @@ function scheduleRequestTriggeredUpdate(env, ctx, path) {
   ctx.waitUntil(automaticUpdateTick(env,{source:"panel_request",intervalSeconds:30}).catch(async error=>{console.error("request auto update error",error);await reportCoreRuntimeError(env,'auto_update','REQUEST_AUTO_UPDATE_ERROR',error,{path});}));
 }
 
-function bluePanelMaintenancePhase(total = 4) {
+function bluePanelMaintenancePhase(total = 8) {
   const date = new Date();
-  const seed = Math.floor(Date.now() / 86400000) + date.getUTCHours() + date.getUTCMinutes();
+  const seed = Math.floor(Date.now() / 86400000) + date.getUTCHours() * 60 + date.getUTCMinutes();
   return ((seed % total) + total) % total;
 }
 
 async function runBluePanelCoreScheduledJobs(env) {
   await ensureDb(env);
   const ts = nowIso();
-  const phase = bluePanelMaintenancePhase(4);
-  await monitorClusterHealthAndReport(env);
+  const phase = bluePanelMaintenancePhase(8);
+  const work = { phase };
+
+  // Only cheap local cleanup is shared. Every network-heavy responsibility gets
+  // its own fresh scheduled invocation, so no phase can spend the request budget
+  // needed by another phase.
   await env.PASARGUARD_DB.batch([
     env.PASARGUARD_DB.prepare('DELETE FROM web_sessions WHERE expires_at<=?').bind(ts),
     env.PASARGUARD_DB.prepare('DELETE FROM web_login_codes WHERE expires_at<=? OR (consumed_at IS NOT NULL AND consumed_at<=?)').bind(ts,new Date(Date.now()-3600000).toISOString())
   ]);
-  await notifyVersionActivation(env);
-  try { await automaticUpdateTick(env,{source:'cron',intervalSeconds:30}); } catch (error) { console.error('isolated auto update error',error); await reportCoreRuntimeError(env,'core_cron','AUTO_UPDATE_ERROR',error,{phase}); }
-  // Routine reseller rollout is lightweight (no legacy command purge) and runs on every cron.
-  // Four bots stay safely below the external subrequest budget while guaranteeing progress.
-  try { await syncAllResellerBotMenus(env,false,4); } catch (error) { console.error('reseller menu sync error',error); await reportCoreRuntimeError(env,'core_cron','RESELLER_MENU_SYNC_ERROR',error,{phase}); }
 
   if (phase === 0) {
-    try { await syncPasarguardManagersForAllUsers(env,3); } catch (error) { console.error('manager sync phase error',error); await reportCoreRuntimeError(env,'core_cron','MANAGER_SYNC_ERROR',error,{phase}); }
+    const update = await automaticUpdateTick(env,{source:'cron',intervalSeconds:30});
+    work.automatic_update = update;
+    if (!update?.failed) await resolveSystemErrorCenter(env,{scope:'auto_update',botId:'',errorCode:'CORE_AUTOMATIC_UPDATE_FAILED'});
   } else if (phase === 1) {
-    if (!liveUsageNamespaceAvailable(env)) await syncUsage(env,10);
-    await reconcileAllAgencyBalanceStates(env,8);
+    work.version_activation = await notifyVersionActivation(env);
   } else if (phase === 2) {
-    await processCentralTrialExpirations(env,8);
+    work.cluster_health = await monitorClusterHealthAndReport(env);
+  } else if (phase === 3) {
+    work.reseller_menus = await syncAllResellerBotMenus(env,false,2);
+    work.manager_sync = await syncPasarguardManagersForAllUsers(env,1);
+  } else if (phase === 4) {
+    if (!liveUsageNamespaceAvailable(env)) work.usage = await syncUsage(env,6);
+    work.balance_reconcile = await reconcileAllAgencyBalanceStates(env,4);
+  } else if (phase === 5) {
+    work.trials = await processCentralTrialExpirations(env,4);
     const settings = await getSettings(env);
     if (plisioRateMode(settings)==='auto' && String(settings.plisio_fx_api_key||'').trim()) {
-      try { await refreshCentralPlisioFxRate(env); } catch (error) { console.error('fx refresh error',error); await reportCoreRuntimeError(env,'core_cron','FX_REFRESH_ERROR',error,{phase}); }
+      try { work.fx = await refreshCentralPlisioFxRate(env); }
+      catch (error) { await reportCoreRuntimeError(env,'core_cron','FX_REFRESH_ERROR',error,{phase}); }
     }
-    if (settings.payment_poll_enabled==='true' && settings.blupal_api_key) await pollPendingPayments(env,5);
-    if (settings.auto_delete_pending_invoices==='true') await cleanupStalePendingInvoices(env,{settings,limit:10});
+    if (settings.payment_poll_enabled==='true' && settings.blupal_api_key) work.payments = await pollPendingPayments(env,3);
+    if (settings.auto_delete_pending_invoices==='true') work.invoice_cleanup = await cleanupStalePendingInvoices(env,{settings,limit:5});
+  } else if (phase === 6) {
+    work.subrequest_limits = await ensureClusterSubrequestLimits(env);
+    work.python_helper = await automaticPythonHelperTick(env,{source:'cron'});
   } else {
-    try { await ensureClusterSubrequestLimits(env); } catch (error) { console.error('subrequest limit configuration error',error); await reportCoreRuntimeError(env,'core_cron','SUBREQUEST_LIMIT_CONFIG_ERROR',error,{phase}); }
-    await automaticPythonHelperTick(env,{source:'cron'});
     const processorResult = await triggerProcessorBusinessJobs(env,'core_cron_phase_'+phase);
-    if (processorResult?.success===false) { console.error('processor fallback error',processorResult.error); await reportCoreRuntimeError(env,'core_cron','PROCESSOR_TRIGGER_ERROR',new Error(String(processorResult.error||'Processor trigger failed')),{phase}); }
+    work.processor = processorResult;
+    if (processorResult?.success===false) {
+      await reportCoreRuntimeError(env,'core_cron','PROCESSOR_TRIGGER_ERROR',new Error(String(processorResult.error||'Processor trigger failed')),{phase});
+    } else {
+      await resolveSystemErrorCenter(env,{scope:'core_cron',botId:'',errorCode:'CORE_PROCESSOR_TRIGGER_ERROR'});
+    }
   }
 
-  // Small flush on every phase keeps reports timely without allowing one Cron
-  // invocation to consume the complete Worker subrequest budget.
-  try { await processReportOutboxOnCore(env,4); } catch (error) { console.error('core report flush error',error); await reportCoreRuntimeError(env,'core_cron','REPORT_FLUSH_ERROR',error,{phase}); }
+  // Two rows are enough for fast delivery while retaining a reserve for telemetry.
+  try { work.report_flush = await processReportOutboxOnCore(env,2); }
+  catch (error) { await reportCoreRuntimeError(env,'core_cron','REPORT_FLUSH_ERROR',error,{phase}); }
+
   const finished = nowIso();
   await env.PASARGUARD_DB.batch([
     env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_core_cron_at',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(finished,finished),
-    env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_core_cron_phase',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(String(phase),finished)
+    env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_core_cron_phase',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(String(phase),finished),
+    env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_core_cron_result',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(JSON.stringify(work),finished)
   ]);
-  return { phase, finished_at: finished };
+  return { phase, finished_at: finished, work };
 }
 
 export default {

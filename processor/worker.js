@@ -1,11 +1,11 @@
 /* BLUEPANEL_PROCESSOR_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.57
+ * Version: 3.3.58
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = '3.3.57';
+const APP_VERSION = '3.3.58';
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
@@ -3535,7 +3535,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_PROCESSOR_VERSION='3.3.57';
+const BLUEPANEL_PROCESSOR_VERSION='3.3.58';
 let processorSchemaPromise=null;
 function processorJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 
@@ -3838,6 +3838,17 @@ async function processServiceHealthAndFailover(env, limit = 40) {
 }
 
 function processorInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
+async function processorTelegramRelay(request){
+  let payload={};
+  try{payload=await request.json()}catch(_){return processorJson({success:false,error:'JSON نامعتبر است',code:'BAD_JSON'},400)}
+  const token=String(payload?.token||'').trim(),method=String(payload?.method||'').trim(),body=payload?.body&&typeof payload.body==='object'?payload.body:{};
+  if(!/^\d{5,20}:[A-Za-z0-9_-]{24,}$/.test(token))return processorJson({success:false,error:'توکن تلگرام معتبر نیست',code:'INVALID_TELEGRAM_TOKEN'},400);
+  if(!/^[A-Za-z][A-Za-z0-9]{1,63}$/.test(method))return processorJson({success:false,error:'متد تلگرام معتبر نیست',code:'INVALID_TELEGRAM_METHOD'},400);
+  const response=await fetch('https://api.telegram.org/bot'+token+'/'+method,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body||{})});
+  const telegram=await response.json().catch(()=>({ok:false,description:'Telegram response was not JSON'}));
+  if(!response.ok||telegram?.ok===false)return processorJson({success:false,error:telegram?.description||('Telegram HTTP '+response.status),code:'TELEGRAM_RELAY_HTTP_'+response.status,telegram_error_code:telegram?.error_code||response.status},response.status>=400&&response.status<600?response.status:502);
+  return processorJson({success:true,telegram});
+}
 async function ensureProcessorDb(env){if(!env.PROCESSOR_DB)throw new Error('PROCESSOR_DB متصل نیست');if(!processorSchemaPromise)processorSchemaPromise=(async()=>{for(const sql of [
  `CREATE TABLE IF NOT EXISTS processor_jobs (id TEXT PRIMARY KEY,method TEXT NOT NULL,path_query TEXT NOT NULL,headers_json TEXT NOT NULL DEFAULT '{}',body_text TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at TEXT NOT NULL,last_error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)`,
  'CREATE INDEX IF NOT EXISTS idx_processor_jobs_pending ON processor_jobs(status,next_attempt_at,created_at)',
@@ -3944,6 +3955,6 @@ async function runProcessorBusinessJobs(runtime, options = {}){
 }
 
 export default {
- async fetch(request,env,ctx){const path=new URL(request.url).pathname.replace(/\/+$/,'')||'/';try{if(path==='/__bluepanel/service/queue'&&processorInternal(request)&&request.method==='POST')return processorQueue(request,env);if(path==='/__bluepanel/service/process'&&processorInternal(request)&&request.method==='POST'){const runtime=bluePanelRuntimeEnv(env,'bluepanel-processor');const skipUsage=String(request.headers.get('x-bluepanel-live-usage-active')||'')==='true';const phaseHeader=request.headers.get('x-bluepanel-business-phase');const phase=phaseHeader===null?processorBusinessPhase(4):Number(phaseHeader);let queue=await processorRunBackupQueue(env);if(!queue.heavy)queue=await processorRunQueue(env,12);const business=queue.heavy?{skipped:true,reason:'heavy_backup_queue_job'}:await runProcessorBusinessJobs(runtime,{skipUsage,phase});return processorJson({success:true,queue,business})}if((path==='/__bluepanel/service/processor-local-health'||path==='/__bluepanel/service/processor-health')&&processorInternal(request)){const h=await processorLocalHealth(env);return processorJson(h,h.ok?200:503,{'x-bluepanel-role':'bluepanel-processor','x-bluepanel-version':APP_VERSION})}if(path==='/health'){const h=await processorHealth(env);return processorJson(h,h.ok?200:503)}if(path==='/'&&request.method==='GET'){const h=await processorHealth(env);return new Response('<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{background:#07111f;color:#fff;font-family:Tahoma;padding:30px}.c{max-width:680px;margin:auto;background:#112944;padding:24px;border-radius:24px}.ok{color:#35d59a}.bad{color:#ff667b}</style><div class="c"><h1>BluePanel Processor</h1><p class="'+(h.ok?'ok':'bad')+'">'+(h.ok?'اتصال کامل برقرار است':'اتصال کامل نیست')+'</p><pre>'+JSON.stringify(h,null,2)+'</pre></div></html>',{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}})}return processorJson({success:false,error:'Not found'},404)}catch(error){console.error('processor fetch error',error);try{await reportProcessorRuntimeError(bluePanelRuntimeEnv(env,'bluepanel-processor'),'processor_fetch','FETCH_'+processorErrorSlug(path,'RUNTIME_ERROR'),error,{path,method:request.method})}catch(_){}return processorJson({success:false,ok:false,role:'bluepanel-processor',version:APP_VERSION,error:String(error?.message||error),code:'PROCESSOR_RUNTIME_ERROR'},500)}},
+ async fetch(request,env,ctx){const path=new URL(request.url).pathname.replace(/\/+$/,'')||'/';try{if(path==='/__bluepanel/service/telegram-relay'&&processorInternal(request)&&request.method==='POST'&&String(request.headers.get('x-bluepanel-service-hop')||'')==='core-to-processor-telegram-relay')return processorTelegramRelay(request);if(path==='/__bluepanel/service/queue'&&processorInternal(request)&&request.method==='POST')return processorQueue(request,env);if(path==='/__bluepanel/service/process'&&processorInternal(request)&&request.method==='POST'){const runtime=bluePanelRuntimeEnv(env,'bluepanel-processor');const skipUsage=String(request.headers.get('x-bluepanel-live-usage-active')||'')==='true';const phaseHeader=request.headers.get('x-bluepanel-business-phase');const phase=phaseHeader===null?processorBusinessPhase(4):Number(phaseHeader);let queue=await processorRunBackupQueue(env);if(!queue.heavy)queue=await processorRunQueue(env,12);const business=queue.heavy?{skipped:true,reason:'heavy_backup_queue_job'}:await runProcessorBusinessJobs(runtime,{skipUsage,phase});return processorJson({success:true,queue,business})}if((path==='/__bluepanel/service/processor-local-health'||path==='/__bluepanel/service/processor-health')&&processorInternal(request)){const h=await processorLocalHealth(env);return processorJson(h,h.ok?200:503,{'x-bluepanel-role':'bluepanel-processor','x-bluepanel-version':APP_VERSION})}if(path==='/health'){const h=await processorHealth(env);return processorJson(h,h.ok?200:503)}if(path==='/'&&request.method==='GET'){const h=await processorHealth(env);return new Response('<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{background:#07111f;color:#fff;font-family:Tahoma;padding:30px}.c{max-width:680px;margin:auto;background:#112944;padding:24px;border-radius:24px}.ok{color:#35d59a}.bad{color:#ff667b}</style><div class="c"><h1>BluePanel Processor</h1><p class="'+(h.ok?'ok':'bad')+'">'+(h.ok?'اتصال کامل برقرار است':'اتصال کامل نیست')+'</p><pre>'+JSON.stringify(h,null,2)+'</pre></div></html>',{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}})}return processorJson({success:false,error:'Not found'},404)}catch(error){console.error('processor fetch error',error);try{await reportProcessorRuntimeError(bluePanelRuntimeEnv(env,'bluepanel-processor'),'processor_fetch','FETCH_'+processorErrorSlug(path,'RUNTIME_ERROR'),error,{path,method:request.method})}catch(_){}return processorJson({success:false,ok:false,role:'bluepanel-processor',version:APP_VERSION,error:String(error?.message||error),code:'PROCESSOR_RUNTIME_ERROR'},500)}},
  async scheduled(controller,env,ctx){ctx.waitUntil((async()=>{try{const runtime=bluePanelRuntimeEnv(env,'bluepanel-processor'),phase=processorBusinessPhase(4);let queue=await processorRunBackupQueue(env);if(!queue.heavy){const autoBackup=await processResellerAutoBackups(runtime,1);if(Number(autoBackup?.checked||0)===0){queue=await processorRunQueue(env,12);await runProcessorBusinessJobs(runtime,{phase});}}await env.PROCESSOR_DB.prepare("DELETE FROM processor_jobs WHERE status='delivered' AND updated_at<?").bind(new Date(Date.now()-86400000).toISOString()).run()}catch(error){console.error('processor scheduled error',error);try{await reportProcessorRuntimeError(bluePanelRuntimeEnv(env,'bluepanel-processor'),'processor_cron','SCHEDULED_RUNTIME_ERROR',error,{cron:controller?.cron||''})}catch(_){}}})())}
 };
