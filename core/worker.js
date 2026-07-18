@@ -1,15 +1,25 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.50
+ * Version: 3.3.51
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.50';
+const APP_VERSION = '3.3.51';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.51": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🧮", text: "نمایش مصرف تجمیعی lifetime_used_traffic پاسارگارد بدون تغییر مبنای صورتحساب دوره جاری" },
+      { emoji: "🎯", text: "استفاده از مسیر رسمی /api/admins?ids= و حذف GET نامعتبر by-id" },
+      { emoji: "🛡", text: "جلوگیری از محاسبه دوباره هزینه هنگام ریست‌شدن شمارنده مصرف PasarGuard" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "📊", text: "عدد مصرف کارت نماینده با کارت PasarGuard هماهنگ می‌شود و هزینه تکراری ایجاد نمی‌کند" }
+    ])
+  }),
   "3.3.50": Object.freeze({
     central: Object.freeze([
       { emoji: "🎯", text: "هماهنگ‌سازی اجباری مصرف مینی‌اپ با عدد لحظه‌ای PasarGuard در هر بروزرسانی Live" },
@@ -4991,62 +5001,89 @@ async function pasargadDeleteManager(env, remoteId) {
   try { await pasarguardRequest(env, "DELETE", "/api/admin/by-id/" + encodeURIComponent(remoteId)); } catch (_) {}
 }
 
-function extractUsageBytes(data) {
-  const source = data?.admin || data;
-  const nested = source?.data && !Array.isArray(source.data) ? source.data : null;
-  const direct = source?.used_traffic ?? source?.usage_bytes ?? source?.used_bytes ??
-    source?.total_used_traffic ?? source?.traffic_used ?? source?.data_usage ??
-    nested?.used_traffic ?? nested?.usage_bytes ?? nested?.used_bytes ??
-    nested?.total_used_traffic ?? nested?.traffic_used ?? nested?.data_usage;
-  if (direct !== undefined && direct !== null) return Math.max(0, Number(direct) || 0);
-  throw new Error("فیلد مصرف در پاسخ PasarGuard پیدا نشد");
+function finiteUsageNumber(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, number) : null;
 }
 
-async function pasargadGetManager(env, remoteId) {
+function extractUsageSnapshot(data) {
+  const source = data?.admin || data;
+  const nested = source?.data && !Array.isArray(source.data) ? source.data : null;
+  const currentCandidates = [
+    ["used_traffic", source?.used_traffic], ["usage_bytes", source?.usage_bytes],
+    ["used_bytes", source?.used_bytes], ["total_used_traffic", source?.total_used_traffic],
+    ["traffic_used", source?.traffic_used], ["data_usage", source?.data_usage],
+    ["data.used_traffic", nested?.used_traffic], ["data.usage_bytes", nested?.usage_bytes],
+    ["data.used_bytes", nested?.used_bytes], ["data.total_used_traffic", nested?.total_used_traffic],
+    ["data.traffic_used", nested?.traffic_used], ["data.data_usage", nested?.data_usage]
+  ];
+  const lifetimeCandidates = [
+    ["lifetime_used_traffic", source?.lifetime_used_traffic],
+    ["lifetime_usage_bytes", source?.lifetime_usage_bytes],
+    ["lifetime_traffic", source?.lifetime_traffic],
+    ["total_lifetime_traffic", source?.total_lifetime_traffic],
+    ["data.lifetime_used_traffic", nested?.lifetime_used_traffic],
+    ["data.lifetime_usage_bytes", nested?.lifetime_usage_bytes],
+    ["data.lifetime_traffic", nested?.lifetime_traffic],
+    ["data.total_lifetime_traffic", nested?.total_lifetime_traffic]
+  ];
+  let current = null, currentSource = "";
+  for (const [name, value] of currentCandidates) {
+    const parsed = finiteUsageNumber(value);
+    if (parsed !== null) { current = parsed; currentSource = name; break; }
+  }
+  let lifetime = null, lifetimeSource = "";
+  for (const [name, value] of lifetimeCandidates) {
+    const parsed = finiteUsageNumber(value);
+    if (parsed !== null) { lifetime = parsed; lifetimeSource = name; break; }
+  }
+  const reset = finiteUsageNumber(source?.reseted_usage ?? source?.reset_usage ?? nested?.reseted_usage ?? nested?.reset_usage);
+  if (lifetime === null && current !== null && reset !== null) {
+    lifetime = current + reset;
+    lifetimeSource = "reseted_usage+" + currentSource;
+  }
+  if (current === null && lifetime === null) {
+    const error = new Error("فیلد مصرف در پاسخ PasarGuard پیدا نشد");
+    error.code = "PASARGUARD_USAGE_FIELD_MISSING";
+    throw error;
+  }
+  const billingBytes = current !== null ? current : lifetime;
+  const displayBytes = Math.max(billingBytes || 0, lifetime || 0);
+  return { bytes: displayBytes, billing_bytes: billingBytes, current_bytes: current, lifetime_bytes: lifetime,
+    display_source: lifetime !== null && lifetime >= (current || 0) ? lifetimeSource : currentSource,
+    billing_source: current !== null ? currentSource : lifetimeSource };
+}
+
+function extractUsageBytes(data) { return extractUsageSnapshot(data).bytes; }
+
+async function pasarguardGetManager(env, remoteId, panelUsername = "") {
   const remoteKey = String(remoteId || "").trim();
   if (!remoteKey) {
     const error = new Error("شناسه مدیر PasarGuard برای این نمایندگی ثبت نشده است");
     error.code = "PASARGUARD_MANAGER_ID_MISSING";
     throw error;
   }
-
   let lastError = null;
-
-  // Prefer the single-manager endpoint. It is the same resource used for status
-  // updates and is less likely than the paginated list to contain a cached usage
-  // counter. Older PasarGuard builds may not support GET on this route, so the
-  // list endpoints remain safe fallbacks.
-  try {
-    const direct = await pasarguardRequest(env, "GET", "/api/admin/by-id/" + encodeURIComponent(remoteKey));
-    const candidate = direct?.admin || (direct?.data && !Array.isArray(direct.data) ? direct.data : direct);
-    if (candidate && String(candidate.id || "") === remoteKey) return candidate;
-  } catch (error) {
-    lastError = error;
-    if ([401, 403].includes(Number(error?.status || 0))) throw error;
-  }
-
-  const attempts = [
-    new URLSearchParams({ ids: remoteKey, limit: "1" }),
-    new URLSearchParams({ offset: "0", limit: "100" })
-  ];
-  for (let index = 0; index < attempts.length; index++) {
+  const attempts = [new URLSearchParams({ ids: remoteKey, offset: "0", limit: "1" })];
+  const normalizedUsername = String(panelUsername || "").trim();
+  if (normalizedUsername) attempts.push(new URLSearchParams({ usernames: normalizedUsername, offset: "0", limit: "1" }));
+  attempts.push(new URLSearchParams({ offset: "0", limit: "100" }));
+  for (const query of attempts) {
     try {
-      const data = await pasarguardRequest(env, "GET", "/api/admins?" + attempts[index].toString());
+      const data = await pasarguardRequest(env, "GET", "/api/admins?" + query.toString());
       const admins = Array.isArray(data) ? data : (data.admins || data.data || []);
-      const admin = admins.find(item => String(item.id) === remoteKey) || (index === 0 ? admins[0] : null);
+      const admin = admins.find(item => String(item.id) === remoteKey) ||
+        (normalizedUsername ? admins.find(item => String(item.username || "").toLowerCase() === normalizedUsername.toLowerCase()) : null);
       if (admin) return admin;
     } catch (error) {
       lastError = error;
-      // Permission/authentication failures will not improve by scanning the first page.
       if ([401, 403].includes(Number(error?.status || 0))) break;
     }
   }
-
   if (lastError) throw lastError;
   const error = new Error("مدیر نمایندگی با شناسه " + remoteKey + " در PasarGuard پیدا نشد");
-  error.code = "PASARGUARD_MANAGER_NOT_FOUND";
-  error.status = 404;
-  throw error;
+  error.code = "PASARGUARD_MANAGER_NOT_FOUND"; error.status = 404; throw error;
 }
 
 function pasarguardAdminList(data) {
@@ -5126,8 +5163,8 @@ async function syncPasarguardManagersForUser(env, user) {
     const username = cleanText(admin.username, 64) || ("admin_" + remoteKey);
     const title = cleanText(admin.profile_title, 80) || ("پنل " + username);
     const status = normalizePasarguardAdminStatus(admin.status);
-    let usage = 0;
-    try { usage = extractUsageBytes(admin); } catch (_) {}
+    let usage = 0, billingUsage = 0;
+    try { const snap = extractUsageSnapshot(admin); usage = snap.bytes; billingUsage = snap.billing_bytes; } catch (_) {}
 
     const existing = await env.PASARGUARD_DB.prepare(
       "SELECT * FROM agencies WHERE remote_manager_id=? LIMIT 1"
@@ -5152,7 +5189,7 @@ async function syncPasarguardManagersForUser(env, user) {
       // تست مرکزی یک رکورد سیستمی است و نباید در همگام‌سازی مدیران دستی
       // به پنل pasarguard_manual تبدیل یا وضعیت پایان تست آن دوباره active شود.
       if (Number(existing.is_trial || 0) === 1) {
-        const trialExpired = existing.status === "trial_expired" || centralTrialExpired(existing, usage);
+        const trialExpired = existing.status === "trial_expired" || centralTrialExpired(existing, billingUsage);
         if (trialExpired && status !== "disabled") {
           try { await pasargadSetManagerStatus(env, existing.remote_manager_id, false); }
           catch (error) {
@@ -5177,7 +5214,7 @@ async function syncPasarguardManagersForUser(env, user) {
       const preserveBalanceSuspension = isImported && existing.status === "suspended_balance" && status === "disabled";
       const localStatus = preserveBalanceSuspension ? "suspended_balance" : status;
       const resetImportedBilling = isImported && ownershipChanged;
-      const nextLastBilled = resetImportedBilling ? usage : Number(existing.last_billed_bytes || 0);
+      const nextLastBilled = resetImportedBilling ? billingUsage : Number(existing.last_billed_bytes || 0);
       const nextRemainder = resetImportedBilling ? 0 : Number(existing.billing_remainder || 0);
       const nextEpoch = resetImportedBilling
         ? Number(existing.usage_epoch || 0) + 1
@@ -5212,7 +5249,7 @@ async function syncPasarguardManagersForUser(env, user) {
       username,
       status,
       usage,
-      usage,
+      billingUsage,
       APP_VERSION,
       ts,
       ts,
@@ -5302,41 +5339,32 @@ async function applyCurrentReleaseToAllAgencies(env) {
 }
 
 async function refreshImportedAgency(env, agency) {
-  const admin = await pasargadGetManager(env, agency.remote_manager_id);
-  const usage = extractUsageBytes(admin);
+  const admin = await pasarguardGetManager(env, agency.remote_manager_id, agency.panel_username);
+  const usageSnapshot = extractUsageSnapshot(admin);
+  const usage = usageSnapshot.bytes;
+  const billingUsage = usageSnapshot.billing_bytes;
   const remoteStatus = normalizePasarguardAdminStatus(admin.status);
   const username = cleanText(admin.username, 64) || agency.panel_username;
   const title = cleanText(admin.profile_title, 80) || agency.title || ("پنل " + username);
-
-  // نسخه‌های قبلی ممکن بود تست مرکزی را اشتباهاً manual علامت بزنند.
-  // این مسیر رکورد را به central برمی‌گرداند و وضعیت پایان تست را حفظ می‌کند.
   if (Number(agency.is_trial || 0) === 1) {
-    const status = agency.status === "trial_expired" || centralTrialExpired(agency, usage)
-      ? "trial_expired"
-      : remoteStatus;
+    const status = agency.status === "trial_expired" || centralTrialExpired(agency, billingUsage) ? "trial_expired" : remoteStatus;
     await env.PASARGUARD_DB.prepare(`
       UPDATE agencies SET title=?, panel_username=?, status=?, last_usage_bytes=?,
-        provisioning_source='central',runtime_version=?,update_applied_at=?,updated_at=?
-      WHERE id=?
+        provisioning_source='central',runtime_version=?,update_applied_at=?,updated_at=? WHERE id=?
     `).bind(title, username, status, usage, APP_VERSION, nowIso(), nowIso(), agency.id).run();
-    return { usage, status };
+    return { usage, billingUsage, status, usageSnapshot };
   }
-
-  // اگر پنل به علت اتمام موجودی توسط سامانه تعلیق شده، پاسخ disabled پاسارگارد
-  // نباید دلیل تعلیق محلی را از بین ببرد؛ تا پس از شارژ دوباره فعال شود.
-  const status = ["suspended_balance", "paused_admin"].includes(agency.status) && remoteStatus === "disabled"
-    ? agency.status
-    : remoteStatus;
+  const status = ["suspended_balance", "paused_admin"].includes(agency.status) && remoteStatus === "disabled" ? agency.status : remoteStatus;
   await env.PASARGUARD_DB.prepare(`
     UPDATE agencies SET title=?, panel_username=?, status=?, last_usage_bytes=?,
       provisioning_source='pasarguard_manual',runtime_version=?,update_applied_at=?,updated_at=?
     WHERE id=? AND (provisioning_source='pasarguard_manual' OR id LIKE 'agn_pg_%')
   `).bind(title, username, status, usage, APP_VERSION, nowIso(), nowIso(), agency.id).run();
-  return { usage, status };
+  return { usage, billingUsage, status, usageSnapshot };
 }
 async function pasargadGetUsage(env, agency) {
-  const admin = await pasargadGetManager(env, agency.remote_manager_id);
-  return extractUsageBytes(admin);
+  const admin = await pasarguardGetManager(env, agency.remote_manager_id, agency.panel_username);
+  return extractUsageSnapshot(admin);
 }
 
 async function pasargadSetManagerStatus(env, remoteId, enabled) {
@@ -5423,15 +5451,16 @@ async function reconcileAllAgencyBalanceStates(env, limit = 200) {
   return { users, changed, errors };
 }
 
-async function enforceCentralTrialAgency(env, agency, currentUsageBytes = null) {
+async function enforceCentralTrialAgency(env, agency, currentUsageBytes = null, displayUsageBytes = null) {
   if (Number(agency?.is_trial || 0) !== 1) return { charged: 0, trial: false };
-  const usage = currentUsageBytes === null ? Number(agency.last_usage_bytes || 0) : Math.max(0, Number(currentUsageBytes || 0));
+  const usage = currentUsageBytes === null ? Number(agency.last_billed_bytes || agency.last_usage_bytes || 0) : Math.max(0, Number(currentUsageBytes || 0));
+  const displayUsage = displayUsageBytes === null ? Math.max(0, Number(agency.last_usage_bytes || usage)) : Math.max(0, Number(displayUsageBytes || 0));
   const expired = centralTrialExpired(agency, usage);
   const ts = nowIso();
   if (!expired) {
     await env.PASARGUARD_DB.prepare(
       "UPDATE agencies SET last_usage_bytes=?,last_billed_bytes=?,billing_remainder=0,total_charged=0,updated_at=? WHERE id=?"
-    ).bind(usage, usage, ts, agency.id).run();
+    ).bind(displayUsage, usage, ts, agency.id).run();
     return { charged: 0, trial: true, expired: false };
   }
 
@@ -5439,7 +5468,7 @@ async function enforceCentralTrialAgency(env, agency, currentUsageBytes = null) 
   // آن را به active/disabled برگرداند. به‌روزرسانی مستقل از اعلان انجام می‌شود.
   const transitioned = await env.PASARGUARD_DB.prepare(
     "UPDATE agencies SET status='trial_expired',provisioning_source='central',last_usage_bytes=?,last_billed_bytes=?,billing_remainder=0,total_charged=0,updated_at=? WHERE id=? AND status<>'trial_expired'"
-  ).bind(usage, usage, ts, agency.id).run();
+  ).bind(displayUsage, usage, ts, agency.id).run();
   if (Number(transitioned?.meta?.changes || 0) > 0) {
     try { await pasargadSetManagerStatus(env, agency.remote_manager_id, false); }
     catch (error) {
@@ -5448,7 +5477,7 @@ async function enforceCentralTrialAgency(env, agency, currentUsageBytes = null) 
   } else {
     await env.PASARGUARD_DB.prepare(
       "UPDATE agencies SET provisioning_source='central',last_usage_bytes=?,last_billed_bytes=?,billing_remainder=0,total_charged=0,updated_at=? WHERE id=?"
-    ).bind(usage, usage, ts, agency.id).run();
+    ).bind(displayUsage, usage, ts, agency.id).run();
   }
 
   // این UPDATE نقش قفل اتمیک را دارد. حتی اگر چند Cron یا درخواست هم‌زمان
@@ -5590,8 +5619,11 @@ async function agencyTierDiscount(env, userId) {
   return value;
 }
 
-async function billAgency(env, agency, currentUsageBytes, pricePerGb) {
-  if (Number(agency.is_trial || 0) === 1) return enforceCentralTrialAgency(env, agency, currentUsageBytes);
+async function billAgency(env, agency, usageInput, pricePerGb) {
+  const usageSnapshot = usageInput && typeof usageInput === "object" ? usageInput : { bytes: Math.max(0, Number(usageInput || 0)), billing_bytes: Math.max(0, Number(usageInput || 0)) };
+  const displayUsageBytes = Math.max(0, Number(usageSnapshot.bytes || 0));
+  const currentUsageBytes = Math.max(0, Number(usageSnapshot.billing_bytes ?? usageSnapshot.current_bytes ?? displayUsageBytes));
+  if (Number(agency.is_trial || 0) === 1) return enforceCentralTrialAgency(env, agency, currentUsageBytes, displayUsageBytes);
   const discount=await agencyTierDiscount(env,agency.user_id);
   pricePerGb = Math.max(0, Math.round(Number(pricePerGb || 0) * (100 - discount) / 100));
   const oldUsage = Number(agency.last_billed_bytes || 0);
@@ -5600,7 +5632,7 @@ async function billAgency(env, agency, currentUsageBytes, pricePerGb) {
     epoch += 1;
     await env.PASARGUARD_DB.prepare(
       "UPDATE agencies SET last_usage_bytes=?, last_billed_bytes=?, usage_epoch=?, billing_remainder=0, updated_at=? WHERE id=?"
-    ).bind(currentUsageBytes, currentUsageBytes, epoch, nowIso(), agency.id).run();
+    ).bind(displayUsageBytes, currentUsageBytes, epoch, nowIso(), agency.id).run();
     await audit(env, null, "usage_counter_reset", { agencyId: agency.id, previous: oldUsage, current: currentUsageBytes });
     return { charged: 0, collected: 0, reset: true };
   }
@@ -5608,7 +5640,7 @@ async function billAgency(env, agency, currentUsageBytes, pricePerGb) {
   const delta = currentUsageBytes - oldUsage;
   if (delta <= 0) {
     await env.PASARGUARD_DB.prepare("UPDATE agencies SET last_usage_bytes=?, updated_at=? WHERE id=?")
-      .bind(currentUsageBytes, nowIso(), agency.id).run();
+      .bind(displayUsageBytes, nowIso(), agency.id).run();
     return { charged: 0, collected: 0 };
   }
 
@@ -5620,7 +5652,7 @@ async function billAgency(env, agency, currentUsageBytes, pricePerGb) {
   if (charge <= 0) {
     await env.PASARGUARD_DB.prepare(
       "UPDATE agencies SET last_usage_bytes=?, last_billed_bytes=?, billing_remainder=?, updated_at=? WHERE id=?"
-    ).bind(currentUsageBytes, currentUsageBytes, remainder, ts, agency.id).run();
+    ).bind(displayUsageBytes, currentUsageBytes, remainder, ts, agency.id).run();
     return { charged: 0, collected: 0 };
   }
 
@@ -5634,7 +5666,7 @@ async function billAgency(env, agency, currentUsageBytes, pricePerGb) {
     env.PASARGUARD_DB.prepare(`
       UPDATE agencies SET last_usage_bytes=?, last_billed_bytes=?, billing_remainder=?, total_charged=total_charged+?, updated_at=?
       WHERE id=? AND changes()=1
-    `).bind(currentUsageBytes, currentUsageBytes, remainder, charge, ts, agency.id),
+    `).bind(displayUsageBytes, currentUsageBytes, remainder, charge, ts, agency.id),
     env.PASARGUARD_DB.prepare("UPDATE users SET wallet_balance=wallet_balance-?, updated_at=? WHERE id=? AND changes()=1")
       .bind(charge, ts, agency.user_id),
     env.PASARGUARD_DB.prepare(`
@@ -5672,14 +5704,14 @@ async function syncUsage(env, limit = 50) {
   const errors = [];
   for (const agency of result.results || []) {
     try {
-      let usage;
+      let usageSnapshot;
       if (isManualAgency(agency)) {
         const refreshed = await refreshImportedAgency(env, agency);
-        usage = refreshed.usage;
+        usageSnapshot = refreshed.usageSnapshot || { bytes: refreshed.usage, billing_bytes: refreshed.billingUsage };
       } else {
-        usage = await pasargadGetUsage(env, agency);
+        usageSnapshot = await pasargadGetUsage(env, agency);
       }
-      const bill = await billAgency(env, agency, usage, pricePerGb);
+      const bill = await billAgency(env, agency, usageSnapshot, pricePerGb);
       processed += 1;
       charged += Number(bill.charged || 0);
       collected += Number(bill.collected || 0);
@@ -5713,14 +5745,14 @@ async function syncUsageForUser(env, userId, limit = 30, minIntervalSeconds = LI
     const updatedAt = Date.parse(agency.updated_at || "") || 0;
     if (minIntervalSeconds > 0 && updatedAt > cutoff) continue;
     try {
-      let usage;
+      let usageSnapshot;
       if (isManualAgency(agency)) {
         const refreshed = await refreshImportedAgency(env, agency);
-        usage = refreshed.usage;
+        usageSnapshot = refreshed.usageSnapshot || { bytes: refreshed.usage, billing_bytes: refreshed.billingUsage };
       } else {
-        usage = await pasargadGetUsage(env, agency);
+        usageSnapshot = await pasargadGetUsage(env, agency);
       }
-      const bill = await billAgency(env, agency, usage, pricePerGb);
+      const bill = await billAgency(env, agency, usageSnapshot, pricePerGb);
       processed += 1;
       charged += Number(bill.charged || 0);
       collected += Number(bill.collected || 0);
@@ -5758,14 +5790,14 @@ async function liveUsageSnapshot(request, env) {
       const updatedAt = Date.parse(agency.updated_at || "") || 0;
       if (!forceFresh && updatedAt > cutoff) continue;
       try {
-        let usage;
+        let usageSnapshot;
         if (isManualAgency(agency)) {
           const refreshed = await refreshImportedAgency(env, agency);
-          usage = refreshed.usage;
+          usageSnapshot = refreshed.usageSnapshot || { bytes: refreshed.usage, billing_bytes: refreshed.billingUsage };
         } else {
-          usage = await pasargadGetUsage(env, agency);
+          usageSnapshot = await pasargadGetUsage(env, agency);
         }
-        const bill = await billAgency(env, agency, usage, pricePerGb);
+        const bill = await billAgency(env, agency, usageSnapshot, pricePerGb);
         processed += 1;
         charged += Number(bill.charged || 0);
         collected += Number(bill.collected || 0);

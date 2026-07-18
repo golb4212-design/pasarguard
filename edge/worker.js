@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.50
+ * Version: 3.3.51
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = '3.3.50';
+const APP_VERSION = '3.3.51';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 

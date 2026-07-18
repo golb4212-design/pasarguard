@@ -1,7 +1,7 @@
 {
-  "version": "3.3.50",
-  "release_id": "3.3.50-live-usage-exact-pasarguard-sync",
-  "architecture": "fully-split-three-worker-live-usage-exact-sync",
+  "version": "3.3.51",
+  "release_id": "3.3.51-pasarguard-lifetime-display-current-billing",
+  "architecture": "fully-split-three-worker-dual-usage-counter-sync",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -9,12 +9,12 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "forces the customer dashboard live endpoint to fetch a new PasarGuard usage counter instead of accepting a recent D1 snapshot",
-    "uses the direct PasarGuard manager endpoint before paginated admin-list fallbacks",
-    "adds cache-busting and no-store headers to every PasarGuard GET request",
-    "supports additional PasarGuard usage field names and nested response shapes",
-    "refreshes usage, billing total and wallet state from the same live cycle",
-    "keeps the menu layout manager and all previous reseller features",
+    "displays PasarGuard lifetime_used_traffic, matching the cumulative value on the manager card",
+    "keeps billing on the current used_traffic counter so reset history is not charged twice",
+    "reconstructs cumulative display usage from reseted_usage plus used_traffic on older responses",
+    "uses the official /api/admins ids filter instead of unsupported GET /api/admin/by-id",
+    "uses exact username fallback before bounded page scanning",
+    "keeps live usage, menu layout management and all prior reseller features",
     "does not change the database schema and excludes README files"
   ],
   "deployment": {
@@ -30,35 +30,36 @@
   },
   "validation": {
     "worker_syntax": "passed: node --check for core, edge and processor",
-    "fresh_live_request": "frontend now calls /api/usage/live?force=1 every 15 seconds",
-    "pasarguard_cache": "GET requests use unique query markers and no-store directives",
+    "usage_parser": "passed: lifetime, reset reconstruction, nested response and missing-field cases",
+    "billing_reset_safety": "passed: display-only lifetime change creates no charge; current-counter delta bills once; reset bills zero",
+    "pasarguard_api": "official /api/admins ids filter and AdminDetails response fields reviewed",
     "database_schema": "unchanged from 3.3.40",
-    "zip_integrity": "pending final package validation",
+    "zip_integrity": "passed: clean archive structure and unzip CRC validation",
     "live_api": "not run; requires production PasarGuard, Cloudflare and Telegram credentials"
   },
   "limitations": [
     "Production verification requires deployment because the real PasarGuard counter and Cloudflare bindings are unavailable offline.",
-    "If an older PasarGuard build does not support GET /api/admin/by-id/:id, the code automatically falls back to /api/admins."
+    "The displayed value can lag until PasarGuard commits its latest node traffic to the admin counter."
   ],
-  "title": "هماهنگ‌سازی دقیق مصرف با PasarGuard",
-  "summary": "عدد مصرف کارت BluePanel در هر چرخه Live مستقیماً و بدون کش از PasarGuard خوانده می‌شود تا همراه هزینه و موجودی با پنل اصلی هماهنگ بماند.",
+  "title": "هماهنگ‌سازی دقیق مصرف تجمیعی",
+  "summary": "BluePanel مقدار تجمیعی کارت PasarGuard را نمایش می‌دهد، اما صورتحساب را فقط بر اساس مصرف دوره جاری محاسبه می‌کند تا هزینه دوباره کسر نشود.",
   "changes": [
-    "اجباری‌شدن دریافت تازه مصرف در /api/usage/live.",
-    "اولویت‌دادن به مسیر مستقیم مدیر PasarGuard و حفظ fallback نسخه‌های قدیمی.",
-    "افزودن no-store و cache-busting به درخواست‌های GET پاسارگارد.",
-    "هماهنگ‌سازی مصرف، هزینه کسرشده و موجودی در یک Snapshot.",
-    "حفظ کامل قابلیت‌های نسخه 3.3.49 و مدیریت چیدمان کلیدها."
+    "نمایش lifetime_used_traffic در کارت نماینده.",
+    "حفظ used_traffic به‌عنوان مبنای صورتحساب.",
+    "پشتیبانی از reseted_usage + used_traffic.",
+    "حذف GET نامعتبر by-id و استفاده از فیلتر رسمی ids.",
+    "بدون Migration دیتابیس."
   ],
   "sha256": {
-    "core/worker.js": "1f27e5969a94c8ed1cb19c2047450cd7c57a7104bf708366933acc2f03115cd2",
-    "edge/worker.js": "07785c02e81d7ec1e86d658e7fd79d808f7ab494cb771171858220bc1461bf6e",
-    "processor/worker.js": "e080cf13ac430a072bfff3e638d6845687fd685eae31e74041d7082f6828bd5e",
+    "core/worker.js": "31d3a2befba4fa4a0a9dc184f229d3720ba3de04ef9a7d2dac33d4ece7033b06",
+    "edge/worker.js": "c03605c341f2a09c2a24e38bc7daa0ef0088cd399fab08c7a88adcbd179fcd56",
+    "processor/worker.js": "9673f56597f8ff9f2480116aa13a6d701cf1610aa89aea7b127360651011b07e",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "1f27e5969a94c8ed1cb19c2047450cd7c57a7104bf708366933acc2f03115cd2",
-    "edge/worker.js": "07785c02e81d7ec1e86d658e7fd79d808f7ab494cb771171858220bc1461bf6e",
-    "processor/worker.js": "e080cf13ac430a072bfff3e638d6845687fd685eae31e74041d7082f6828bd5e",
+    "core/worker.js": "31d3a2befba4fa4a0a9dc184f229d3720ba3de04ef9a7d2dac33d4ece7033b06",
+    "edge/worker.js": "c03605c341f2a09c2a24e38bc7daa0ef0088cd399fab08c7a88adcbd179fcd56",
+    "processor/worker.js": "9673f56597f8ff9f2480116aa13a6d701cf1610aa89aea7b127360651011b07e",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }
