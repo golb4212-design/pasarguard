@@ -1,9 +1,9 @@
 {
-  "version": "3.3.55",
-  "release_id": "3.3.55-central-miniapp-provider-usage-visibility",
-  "architecture": "fully-split-three-worker-central-usage-dashboard",
-  "title": "نمایش واقعی تفکیک مصرف در مینی‌اپ مرکزی",
-  "summary": "داشبورد مدیریت مرکزی اکنون مصرف PasarGuard را بر پایه used_traffic ادمین‌های متصل و مصرف مرزبان را بر پایه مجموع used_traffic اشتراک‌های ساخته‌شده نشان می‌دهد؛ اعداد در نمای کلی و کارت هر ربات به‌صورت جدا و واضح نمایش داده می‌شوند.",
+  "version": "3.3.56",
+  "release_id": "3.3.56-error-center-orphan-service-and-staged-rollout-fix",
+  "architecture": "fully-split-three-worker-content-only-sideworker-rollout",
+  "title": "رفع خطاهای تکراری User not found و انتشار مرحله‌ای نادرست",
+  "summary": "سرویس حذف‌شده از پنل به‌جای تولید بی‌نهایت خطای User not found به remote_missing تبدیل می‌شود و پایش آن متوقف می‌گردد؛ انتشار Edge و Processor نیز با API محتوای Cloudflare و بدون تغییر Bindingها انجام می‌شود و Core تا تأیید Workerهای جانبی completed نمی‌شود.",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -11,28 +11,29 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "adds a dedicated provider usage summary to the central management mini-app",
-    "shows total PasarGuard admin used_traffic across connected agency admins",
-    "shows total Marzban used_traffic across subscriptions created by reseller bots",
-    "shows provider usage and Marzban service count separately on every reseller bot card",
-    "shows the exact calculation basis in the central dashboard",
-    "adds provider sync controls to both overview and reseller-bot pages",
-    "forces central service-worker refresh and disables stale navigation cache",
-    "keeps PasarGuard and Marzban billing ledgers unchanged"
+    "classifies HTTP 404 and User not found as a removed remote service instead of an infrastructure failure",
+    "marks the delivered order as remote_missing and disables repeated health monitoring for the missing username",
+    "resolves recovered service-health and notification errors per bot only when no real failure remains in that batch",
+    "excludes remote_missing services from recurring notification sync",
+    "uploads Edge and Processor through Cloudflare script content endpoint so existing configuration and bindings are untouched",
+    "fails staged rollout immediately when a required side Worker is not verified",
+    "records Edge and Processor as verified before a rollout can become completed",
+    "repairs historical completed rows that incorrectly retained pending side-worker states",
+    "limits failed-rollout headline count to the most recent 24 hours"
   ],
   "changes": [
-    "نمای کلی مدیریت مرکزی سه کارت جدید برای مصرف PasarGuard، مصرف مرزبان و جمع دو Provider دارد.",
-    "مصرف PasarGuard از جمع last_usage_bytes ادمین‌های متصل خوانده می‌شود که از used_traffic پنل به‌روز می‌گردد.",
-    "مصرف مرزبان از shared_backend_accounts و مجموع اشتراک‌های ساخته‌شده هر ربات خوانده می‌شود.",
-    "کارت هر ربات، دو Provider را در باکس‌های جدا با مبنای محاسبه و زمان آخرین همگام‌سازی نشان می‌دهد.",
-    "صفحه پنل‌های نمایندگی صریحاً مصرف ادمین PasarGuard را نمایش می‌دهد.",
-    "دکمه همگام‌سازی مرکزی هر دو مسیر را اجرا و سپس خلاصه جدید را بازخوانی می‌کند.",
-    "نسخه Service Worker به 3.3.55 ارتقا یافته تا رابط قدیمی از کش باقی نماند."
+    "خطاهای User not found مربوط به سرویس حذف‌شده دیگر در مرکز خطا تکرار نمی‌شوند.",
+    "سرویس حذف‌شده با وضعیت remote_missing ثبت و پایش سلامت آن غیرفعال می‌شود.",
+    "خطای سلامت یا اعلان فقط وقتی بسته می‌شود که برای همان ربات در چرخه جاری خطای واقعی دیگری وجود نداشته باشد.",
+    "بروزرسانی Edge و Processor فقط محتوای worker.js را تغییر می‌دهد و Bindingها، D1، مسیرها و تنظیمات Worker را بازنویسی نمی‌کند.",
+    "در صورت شکست Edge یا Processor، انتشار Core ادامه پیدا نمی‌کند و وضعیت completed کاذب ثبت نمی‌شود.",
+    "ردیف‌های قدیمی completed با Edge/Processor pending در اجرای بعدی اصلاح یا superseded می‌شوند.",
+    "عدد انتشار ناموفق در مرکز خطا فقط تلاش‌های ۲۴ ساعت اخیر را نشان می‌دهد."
   ],
   "deployment": {
     "automatic_provisioning": "upload ZIP through the central bot",
-    "db_schema_revision": "unchanged-from-3.3.54",
-    "automatic_migration": "no new schema change and no manual SQL required",
+    "db_schema_revision": "unchanged-from-3.3.55",
+    "automatic_migration": "no new table or manual SQL; stale error rows resolve automatically after Processor runs",
     "required_bindings": [
       "Core: PASARGUARD_DB, EDGE_WORKER, PROCESSOR_WORKER and LIVE_USAGE_COORDINATOR",
       "Processor: EDGE_WORKER and CORE_WORKER",
@@ -42,28 +43,28 @@
   },
   "validation": {
     "worker_syntax": "passed: node --check for core, edge and processor",
-    "embedded_central_dashboard_script": "passed: extracted inline management script parses successfully",
-    "central_dashboard_dom_bindings": "passed: new provider metric IDs and JavaScript bindings are present",
-    "provider_summary_contract": "passed: bootstrap exposes separate PasarGuard admin and Marzban subscription totals",
-    "bot_card_rendering": "passed: sample card renders separate provider values, total and service count",
-    "release_notes": "passed: unique 3.3.55 and preserved 3.3.54 entries",
-    "zip_integrity": "passed: clean six-entry archive structure and CRC validation",
+    "remote_user_not_found_classifier": "passed: HTTP 404, English User not found and Persian not-found cases",
+    "orphan_service_flow": "passed: static contract verifies remote_missing, monitor disable and notification exclusion",
+    "side_worker_upload": "passed: Edge and Processor use /content and do not use bindings_inherit=strict in their deploy functions",
+    "staged_rollout": "passed: required side-worker failure throws before Core and completed writes verified side statuses",
+    "version_markers": "passed: 3.3.56 markers in all three Workers and Service Worker assets",
+    "zip_integrity": "passed: clean nine-entry archive structure and CRC validation",
     "live_api": "not run; requires production PasarGuard, Marzban and Cloudflare credentials"
   },
   "limitations": [
-    "Upstream usage can change only as quickly as PasarGuard or Marzban updates its used_traffic counter.",
-    "Production values must be confirmed after deployment because real panel credentials are unavailable offline."
+    "Existing open User not found errors close after the new Processor executes its next service-health or notification cycle.",
+    "Production Cloudflare upload and Service Binding verification must be confirmed after deployment."
   ],
   "sha256": {
-    "core/worker.js": "851a438b39ad608f66853a240f9aa326ee2f6ad07ef038e9035899fa2b19fa7f",
-    "edge/worker.js": "b8bd97dc0b0753bbb64a6f4cb8ea163a5d7dba3a71fbab28a58ae37efb7c3abc",
-    "processor/worker.js": "68ca1d5453ac5b2f26fe1e14c2b5fae06a5031224bdc1a267e10a839a7b7486c",
+    "core/worker.js": "6d8686081c34099b3617799b7ab340291e43ba4096db18ff84f4efcff57b6bb8",
+    "edge/worker.js": "5f43fd346d074c002b7098600ce4aa2a694ec7b67eec88886b0b1d19da2cdb7d",
+    "processor/worker.js": "5aff959e1b3e94430251d1b60ba3e4107ff22af71bfc60cdc453c385a13e99bd",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "851a438b39ad608f66853a240f9aa326ee2f6ad07ef038e9035899fa2b19fa7f",
-    "edge/worker.js": "b8bd97dc0b0753bbb64a6f4cb8ea163a5d7dba3a71fbab28a58ae37efb7c3abc",
-    "processor/worker.js": "68ca1d5453ac5b2f26fe1e14c2b5fae06a5031224bdc1a267e10a839a7b7486c",
+    "core/worker.js": "6d8686081c34099b3617799b7ab340291e43ba4096db18ff84f4efcff57b6bb8",
+    "edge/worker.js": "5f43fd346d074c002b7098600ce4aa2a694ec7b67eec88886b0b1d19da2cdb7d",
+    "processor/worker.js": "5aff959e1b3e94430251d1b60ba3e4107ff22af71bfc60cdc453c385a13e99bd",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }

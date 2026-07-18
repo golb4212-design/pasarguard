@@ -1,15 +1,25 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.55
+ * Version: 3.3.56
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.55';
+const APP_VERSION = '3.3.56';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.56": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🧯", text: "تبدیل User not found سرویس حذف‌شده به وضعیت remote_missing و توقف خطای تکراری" },
+      { emoji: "🚦", text: "جلوگیری از ثبت completed تا زمانی که Edge و Processor واقعاً تأیید شوند" },
+      { emoji: "☁️", text: "انتشار محتوای Workerهای جانبی بدون دست‌زدن به Bindingها و تنظیمات Cloudflare" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "🩺", text: "سرویس حذف‌شده از پنل دیگر خطای سلامت و اعلان را بی‌نهایت تکرار نمی‌کند" }
+    ])
+  }),
   "3.3.55": Object.freeze({
     central: Object.freeze([
       { emoji: "🖥", text: "نمایش واضح و مستقل مصرف PasarGuard و مرزبان در مینی‌اپ مدیریت مرکزی" },
@@ -9286,18 +9296,14 @@ async function deployEdgeWorkerFromGithub(env, force = false, targetVersion = ""
     return { skipped: true, reason: "up_to_date", sha: codeSha, version: settings.edge_worker_last_version || deployedVersion };
   }
   const apiBase = "https://api.cloudflare.com/client/v4/accounts/" + settings.cf_account_id + "/workers/scripts/" + encodeURIComponent(scriptName);
-  let keepBindings = [];
-  try {
-    const r = await fetch(apiBase + "/settings", { headers: { authorization: "Bearer " + settings.cf_api_token } });
-    const current = await r.json();
-    keepBindings = Array.from(new Set((current?.result?.bindings || []).map(x => x.type).filter(Boolean)));
-  } catch (_) {}
-  const metadata = { main_module: "worker.js", compatibility_date: "2026-06-01", keep_bindings: keepBindings, annotations: { "workers/message": "BluePanel split Edge auto-update " + deployedVersion, "workers/tag": "bluepanel-edge-update" } };
+  // Content-only upload updates executable code without rewriting Worker config,
+  // Service Bindings, D1 bindings, compatibility settings, routes or observability.
+  const metadata = { main_module: "worker.js" };
   const upload = await cloudflareWorkerUploadWithRetry({
-    url: apiBase + "?bindings_inherit=strict",
+    url: apiBase + "/content",
     token: settings.cf_api_token,
-    stage: "deploy_edge_worker",
-    fallbackMessage: "Cloudflare Edge deploy failed",
+    stage: "deploy_edge_worker_content",
+    fallbackMessage: "Cloudflare Edge content deploy failed",
     buildForm: () => {
       const form = new FormData();
       form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
@@ -9341,18 +9347,14 @@ async function deployProcessorWorkerFromGithub(env, force = false, targetVersion
     return { skipped: true, reason: "up_to_date", sha: codeSha, version: settings.processor_worker_last_version || deployedVersion };
   }
   const apiBase = "https://api.cloudflare.com/client/v4/accounts/" + settings.cf_account_id + "/workers/scripts/" + encodeURIComponent(scriptName);
-  let keepBindings = [];
-  try {
-    const r = await fetch(apiBase + "/settings", { headers: { authorization: "Bearer " + settings.cf_api_token } });
-    const current = await r.json();
-    keepBindings = Array.from(new Set((current?.result?.bindings || []).map(x => x.type).filter(Boolean)));
-  } catch (_) {}
-  const metadata = { main_module: "worker.js", compatibility_date: "2026-06-01", keep_bindings: keepBindings, annotations: { "workers/message": "BluePanel split Processor auto-update " + deployedVersion, "workers/tag": "bluepanel-processor-update" } };
+  // Keep the Processor's Service Bindings and PROCESSOR_DB untouched. Only its
+  // module source is replaced through Cloudflare's content endpoint.
+  const metadata = { main_module: "worker.js" };
   const upload = await cloudflareWorkerUploadWithRetry({
-    url: apiBase + "?bindings_inherit=strict",
+    url: apiBase + "/content",
     token: settings.cf_api_token,
-    stage: "deploy_processor_worker",
-    fallbackMessage: "Cloudflare Processor deploy failed",
+    stage: "deploy_processor_worker_content",
+    fallbackMessage: "Cloudflare Processor content deploy failed",
     buildForm: () => {
       const form = new FormData();
       form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
@@ -9631,12 +9633,34 @@ async function ensureDeploymentTrackingTables(env) {
 async function reconcileReleaseRollouts(env) {
   await ensureDeploymentTrackingTables(env);
   const rows = await env.PASARGUARD_DB.prepare("SELECT id,version,status,edge_status,processor_status,core_status,updated_at FROM release_rollouts WHERE status IN ('running','core_deploying') ORDER BY created_at DESC LIMIT 20").all();
+  const inconsistent = await env.PASARGUARD_DB.prepare("SELECT id,version,edge_status,processor_status,core_status FROM release_rollouts WHERE status='completed' AND (COALESCE(edge_status,'pending') NOT IN ('verified','uploaded','runtime_pending','skipped') OR COALESCE(processor_status,'pending') NOT IN ('deployed','verified','skipped')) ORDER BY created_at DESC LIMIT 20").all();
   const now = Date.now();
-  let completed = 0, superseded = 0;
+  let completed = 0, superseded = 0, repaired = 0;
+  const settings = await getSettings(env).catch(()=>({}));
+  for (const row of (inconsistent.results || [])) {
+    const versionCmp = semverCompare(APP_VERSION, row.version || "0.0.0");
+    if (versionCmp > 0) {
+      await env.PASARGUARD_DB.prepare("UPDATE release_rollouts SET status='superseded',edge_status=CASE WHEN edge_status='pending' THEN 'superseded' ELSE edge_status END,processor_status=CASE WHEN processor_status='pending' THEN 'superseded' ELSE processor_status END,updated_at=? WHERE id=?")
+        .bind(nowIso(),row.id).run();
+      superseded++; repaired++;
+      continue;
+    }
+    if (versionCmp === 0) {
+      const edgeMatch = String(settings.edge_worker_last_version || "") === String(row.version || "");
+      const processorMatch = String(settings.processor_worker_last_version || "") === String(row.version || "");
+      if (edgeMatch && processorMatch) {
+        await env.PASARGUARD_DB.prepare("UPDATE release_rollouts SET edge_status='verified',processor_status='verified',updated_at=? WHERE id=?").bind(nowIso(),row.id).run();
+      } else {
+        await env.PASARGUARD_DB.prepare("UPDATE release_rollouts SET status='failed',edge_status=?,processor_status=?,core_status='deployed',updated_at=? WHERE id=?")
+          .bind(edgeMatch?'verified':'failed',processorMatch?'verified':'failed',nowIso(),row.id).run();
+      }
+      repaired++;
+    }
+  }
   for (const row of (rows.results || [])) {
     const ageMs = Math.max(0, now - Date.parse(row.updated_at || 0));
     const versionCmp = semverCompare(APP_VERSION, row.version || "0.0.0");
-    const edgeReady = ["verified","uploaded","runtime_pending"].includes(String(row.edge_status || ""));
+    const edgeReady = ["verified","uploaded","runtime_pending","skipped"].includes(String(row.edge_status || ""));
     const processorReady = ["deployed","verified","skipped"].includes(String(row.processor_status || ""));
     if (versionCmp === 0 && edgeReady && processorReady && ["pending","deploying","deployed"].includes(String(row.core_status || ""))) {
       await env.PASARGUARD_DB.prepare("UPDATE release_rollouts SET status='completed',core_status='deployed',finished_at=?,updated_at=? WHERE id=?")
@@ -9653,7 +9677,7 @@ async function reconcileReleaseRollouts(env) {
       await resolveSystemErrorCenter(env,{scope:"release_rollout",errorCode:"STAGED_DEPLOY_FAILED"});
     } catch (_) {}
   }
-  return { completed, superseded };
+  return { completed, superseded, repaired };
 }
 
 async function safeRolloutStatement(env, sql, params = []) {
@@ -9763,12 +9787,23 @@ async function deployClusterFromGithub(env, force = false, prechecked = null) {
       const ready = edge_update?.verified === true || edge_update?.deployed === true || edge_update?.reason === "up_to_date";
       if (ready) {
         if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET status='running',edge_status='verified',processor_status='pending',core_status='pending',details_json=?,updated_at=? WHERE id=?",[JSON.stringify({edge_update}),nowIso(),rolloutId]);
+        await resolveSystemErrorCenter(env,{scope:"release_rollout",errorCode:"EDGE_DEPLOY_FAILED"});
         return { ...check, deployed:Boolean(edge_update?.deployed), complete:false, partial:true, rollout_id:rolloutId, rollout_stage:"edge", tracking_ready:trackingReady, core_deployed:false, edge_update, processor_update };
       }
+      edge_update={...edge_update,deployed:false,verified:false,error:cleanText(edge_update?.error||edge_update?.reason||"Edge Worker تأیید نشد",1000)};
     } catch (error) {
-      edge_update={deployed:false,verified:false,error:cleanText(error?.message||error,1000)};
-      await incrementSystemErrorCenter(env,"release_rollout","","EDGE_DEPLOY_FAILED",edge_update.error,{rolloutId});
+      edge_update={
+        deployed:false,verified:false,error:cleanText(error?.message||error,1000),
+        http_status:Number(error?.httpStatus||0),cloudflare_code:Number(error?.cloudflareCode||0),
+        cf_ray:cleanText(error?.cloudflareRay||"",120),stage:cleanText(error?.pythonStage||"deploy_edge_worker",120),
+        response_preview:cleanText(error?.cloudflareResponse||"",800)
+      };
     }
+    if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET status='failed',edge_status='failed',processor_status='deferred',core_status='deferred',details_json=?,finished_at=?,updated_at=? WHERE id=?",[JSON.stringify({edge_update}),nowIso(),nowIso(),rolloutId]);
+    await incrementSystemErrorCenter(env,"release_rollout","","EDGE_DEPLOY_FAILED",edge_update.error,{rolloutId,stage:"edge",diagnostics:edge_update});
+    const edgeError=new Error(edge_update.error||"انتشار Worker دوم ناموفق بود");
+    edgeError.code="EDGE_DEPLOY_FAILED";
+    throw edgeError;
   }
 
   if (force || check.processor_sync_required) {
@@ -9779,21 +9814,34 @@ async function deployClusterFromGithub(env, force = false, prechecked = null) {
         if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET status='running',edge_status=?,processor_status='verified',core_status='pending',details_json=?,updated_at=? WHERE id=?",[
           check.edge_sync_required?"deferred":"verified",JSON.stringify({edge_update,processor_update}),nowIso(),rolloutId
         ]);
+        await resolveSystemErrorCenter(env,{scope:"release_rollout",errorCode:"PROCESSOR_DEPLOY_FAILED"});
         return { ...check, deployed:Boolean(processor_update?.deployed), complete:false, partial:true, rollout_id:rolloutId, rollout_stage:"processor", tracking_ready:trackingReady, core_deployed:false, edge_update, processor_update };
       }
+      processor_update={...processor_update,deployed:false,verified:false,error:cleanText(processor_update?.error||processor_update?.reason||"Processor Worker تأیید نشد",1000)};
     } catch (error) {
-      processor_update={deployed:false,verified:false,error:cleanText(error?.message||error,1000)};
-      await incrementSystemErrorCenter(env,"release_rollout","","PROCESSOR_DEPLOY_FAILED",processor_update.error,{rolloutId});
+      processor_update={
+        deployed:false,verified:false,error:cleanText(error?.message||error,1000),
+        http_status:Number(error?.httpStatus||0),cloudflare_code:Number(error?.cloudflareCode||0),
+        cf_ray:cleanText(error?.cloudflareRay||"",120),stage:cleanText(error?.pythonStage||"deploy_processor_worker",120),
+        response_preview:cleanText(error?.cloudflareResponse||"",800)
+      };
     }
+    if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET status='failed',edge_status=?,processor_status='failed',core_status='deferred',details_json=?,finished_at=?,updated_at=? WHERE id=?",[
+      check.edge_sync_required?"deferred":"verified",JSON.stringify({edge_update,processor_update}),nowIso(),nowIso(),rolloutId
+    ]);
+    await incrementSystemErrorCenter(env,"release_rollout","","PROCESSOR_DEPLOY_FAILED",processor_update.error,{rolloutId,stage:"processor",diagnostics:processor_update});
+    const processorError=new Error(processor_update.error||"انتشار Worker سوم ناموفق بود");
+    processorError.code="PROCESSOR_DEPLOY_FAILED";
+    throw processorError;
   }
 
   if (check.available || force) {
     try {
-      if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET status='core_deploying',core_status='deploying',details_json=?,updated_at=? WHERE id=?",[
+      if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET status='core_deploying',edge_status='verified',processor_status='verified',core_status='deploying',details_json=?,updated_at=? WHERE id=?",[
         JSON.stringify({force,edge_update,processor_update}),nowIso(),rolloutId
       ]);
       core = await deploySelfFromGithub(env, force, check);
-      if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET status='completed',core_status='deployed',details_json=?,finished_at=?,updated_at=? WHERE id=?",[
+      if (trackingReady) await safeRolloutStatement(env,"UPDATE release_rollouts SET status='completed',edge_status='verified',processor_status='verified',core_status='deployed',details_json=?,finished_at=?,updated_at=? WHERE id=?",[
         JSON.stringify({edge_update,processor_update,core:{deployed:core.deployed,version:check.latest}}),nowIso(),nowIso(),rolloutId
       ]);
       await resolveSystemErrorCenter(env,{scope:"release_rollout",errorCode:"STAGED_DEPLOY_FAILED"});
@@ -13045,7 +13093,7 @@ async function botAdminErrorCenterView(env, account) {
       (SELECT COUNT(*) FROM system_error_center WHERE status='open') AS open_errors,
       (SELECT COALESCE(SUM(occurrence_count),0) FROM system_error_center WHERE status='open') AS occurrences,
       (SELECT COUNT(*) FROM repair_runs WHERE status='running') AS running_repairs,
-      (SELECT COUNT(*) FROM release_rollouts WHERE status='failed') AS failed_rollouts`).first();
+      (SELECT COUNT(*) FROM release_rollouts WHERE status='failed' AND julianday(created_at)>=julianday('now','-1 day')) AS failed_rollouts`).first();
     errors=await env.PASARGUARD_DB.prepare("SELECT * FROM system_error_center WHERE status='open' ORDER BY last_seen_at DESC LIMIT 8").all();
     rollout=await env.PASARGUARD_DB.prepare("SELECT * FROM release_rollouts ORDER BY created_at DESC LIMIT 1").first();
   } catch (error) {
@@ -13056,7 +13104,7 @@ async function botAdminErrorCenterView(env, account) {
   const rolloutText=rollout?"\n\n<b>آخرین انتشار مرحله‌ای</b>\nنسخه: <code>"+botEscape(rollout.version)+"</code> · وضعیت: <b>"+botEscape(rollout.status)+"</b>\nEdge: "+botEscape(rollout.edge_status||"—")+" · Processor: "+botEscape(rollout.processor_status||"—")+" · Core: "+botEscape(rollout.core_status||"—"):"";
   return {text:"🧯 <b>مرکز خطا و تعمیر خودکار</b>\n━━━━━━━━━━━━━━\n"+
     "خطاهای باز: <b>"+botMoney(stats?.open_errors)+"</b> · مجموع تکرار: <b>"+botMoney(stats?.occurrences)+"</b>\n"+
-    "تعمیر در حال اجرا: <b>"+botMoney(stats?.running_repairs)+"</b> · انتشار ناموفق: <b>"+botMoney(stats?.failed_rollouts)+"</b>\n\n"+lines+rolloutText+degraded,
+    "تعمیر در حال اجرا: <b>"+botMoney(stats?.running_repairs)+"</b> · انتشار ناموفق ۲۴ ساعت: <b>"+botMoney(stats?.failed_rollouts)+"</b>\n\n"+lines+rolloutText+degraded,
     reply_markup:{inline_keyboard:[
       [{text:"🧰 تعمیر همه اجزا",callback_data:"bot:admin:repair_all"}],
       [{text:"✅ بستن خطاهای فعلی",callback_data:"bot:admin:errors:resolve"}],
@@ -17831,7 +17879,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.3.55';
+const BLUEPANEL_CORE_VERSION = '3.3.56';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {

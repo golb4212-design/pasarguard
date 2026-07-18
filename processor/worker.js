@@ -1,11 +1,11 @@
 /* BLUEPANEL_PROCESSOR_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.55
+ * Version: 3.3.56
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 88954 bytes.
  */
 
-const APP_VERSION = '3.3.55';
+const APP_VERSION = '3.3.56';
 
 const RESELLER_BACKUP_FIELDS = Object.freeze([
   "brand_name","welcome_text","support_username","card_holder","card_number","bank_name","iban",
@@ -2653,11 +2653,13 @@ async function processSalesServiceNotifications(env, limit = 30) {
     JOIN sales_customers c ON c.id=o.customer_id
     JOIN reseller_bots rb ON rb.id=o.bot_id
     WHERE o.status='delivered' AND o.order_type='new' AND o.target_order_id IS NULL
-      AND o.remote_username IS NOT NULL AND rb.status='active' AND COALESCE(rb.notifications_enabled,1)=1
+      AND o.remote_username IS NOT NULL AND COALESCE(o.remote_status,'')<>'remote_missing'
+      AND rb.status='active' AND COALESCE(rb.notifications_enabled,1)=1
     ORDER BY COALESCE(o.remote_last_synced_at,o.updated_at) ASC
     LIMIT ?
   `).bind(Math.max(1, Math.min(100, Number(limit || 30)))).all();
-  let checked = 0, created = 0, failed = 0;
+  let checked = 0, created = 0, failed = 0, missing = 0;
+  const seenBots = new Set(), failedBots = new Set();
   for (const row of result.results || []) {
     checked++;
     try {
@@ -2667,6 +2669,7 @@ async function processSalesServiceNotifications(env, limit = 30) {
       const settings=await getSettings(env);
       if(provider==='marzban'&&!sharedMarzbanEnabled(settings,env)) continue;
       if(provider==='pasarguard'&&bot.agency_status!=='active') continue;
+      seenBots.add(String(row.bot_id));
       const customer = { id: row.customer_id, telegram_id: row.telegram_id, first_name: row.first_name, username: row.username };
       const agency = { id: bot.agency_id, panel_username: bot.panel_username, panel_password_enc: bot.panel_password_enc };
       const remote = await servicePanelRequestForProvider(env, agency, provider, 'GET', '/api/user/' + encodeURIComponent(row.remote_username));
@@ -2679,7 +2682,6 @@ async function processSalesServiceNotifications(env, limit = 30) {
         WHERE id=? AND bot_id=?
       `).bind(subscriptionUrl, subscriptionUrl, snapshot.status, snapshot.dataLimit, snapshot.usedTraffic, snapshot.expire,
         snapshot.onlineAt, snapshot.syncedAt, row.id, bot.id).run();
-
       const threshold = Math.max(1, Math.min(100, Number(bot.usage_reminder_percent || 80)));
       if (snapshot.dataLimit > 0) {
         const usagePercent = Math.floor(snapshot.usedTraffic * 100 / snapshot.dataLimit);
@@ -2703,11 +2705,25 @@ async function processSalesServiceNotifications(env, limit = 30) {
         }
       }
     } catch (error) {
-      failed++;
+      if (isRemoteUserNotFoundError(error)) {
+        missing++;
+        const ts = nowIso();
+        try {
+          await env.PASARGUARD_DB.batch([
+            env.PASARGUARD_DB.prepare("UPDATE sales_orders SET remote_status='remote_missing',remote_last_synced_at=?,updated_at=? WHERE id=? AND bot_id=?")
+              .bind(ts,ts,row.id,row.bot_id),
+            env.PASARGUARD_DB.prepare("UPDATE sales_service_preferences SET health_monitor_enabled=0,last_health_status='missing',last_health_at=?,updated_at=? WHERE bot_id=? AND customer_id=? AND LOWER(remote_username)=LOWER(?)")
+              .bind(ts,ts,row.bot_id,row.customer_id,row.remote_username)
+          ]);
+        } catch (_) {}
+        continue;
+      }
+      failed++; failedBots.add(String(row.bot_id));
       try { await recordSystemError(env,'service_notifications',row.bot_id,'SERVICE_NOTIFICATION_SYNC_FAILED',error.message,{orderId:row.id,provider:row.service_provider}); } catch (_) {}
     }
   }
-  return { checked, created, failed };
+  for (const botId of seenBots) if (!failedBots.has(botId)) await resolveProcessorSystemError(env,'service_notifications',botId,'SERVICE_NOTIFICATION_SYNC_FAILED');
+  return { checked, created, failed, missing };
 }
 
 async function processSalesTicketAutoClose(env, limit = 100) {
@@ -3518,7 +3534,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_PROCESSOR_VERSION='3.3.55';
+const BLUEPANEL_PROCESSOR_VERSION='3.3.56';
 let processorSchemaPromise=null;
 function processorJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 
@@ -3544,6 +3560,24 @@ async function recordSystemError(env, scope, botId, errorCode, message, context 
   } catch (error) {
     console.error("processor error center write skipped", error);
   }
+}
+
+async function resolveProcessorSystemError(env, scope, botId, errorCode) {
+  const ts = nowIso();
+  try {
+    await env.PASARGUARD_DB.prepare(`UPDATE system_error_center SET
+      status='resolved',resolved_at=?,last_seen_at=?
+      WHERE status='open' AND scope=? AND bot_id=? AND error_code=?`)
+      .bind(ts,ts,cleanText(scope||"processor",80),cleanText(botId||"",120),cleanText(errorCode||"UNKNOWN_ERROR",120)).run();
+  } catch (error) {
+    console.error("processor error center resolve skipped", error);
+  }
+}
+
+function isRemoteUserNotFoundError(error) {
+  const status = Number(error?.status || error?.httpStatus || 0);
+  const message = String(error?.message || error || "").trim().toLowerCase();
+  return status === 404 || /(^|\b)user not found(\b|$)|کاربر[^\n]{0,40}پیدا نشد|کاربر[^\n]{0,40}وجود ندارد/.test(message);
 }
 
 function resellerTierForRevenue(revenue) {
@@ -3742,9 +3776,11 @@ async function processServiceHealthAndFailover(env, limit = 40) {
     ORDER BY COALESCE(pref.last_health_at,pref.created_at) ASC LIMIT ?
   `).bind(cutoff,Math.max(1,Math.min(120,Number(limit||40)))).all();
   let checked=0,healthy=0,failed=0,failovers=0;
+  const seenBots=new Set(),failedBots=new Set();
   for(const row of rows.results||[]){
     checked++;
     const started=Date.now();
+    seenBots.add(String(row.bot_id));
     let status="error",score=0,details={},consecutive=0;
     try{
       const provider=normalizeServiceProvider(row.service_provider);
@@ -3753,10 +3789,23 @@ async function processServiceHealthAndFailover(env, limit = 40) {
       details={remote_status:remote?.status||"",expire:salesRemoteExpireValue(remote?.expire)};
       consecutive=0;
     }catch(error){
-      failed++;details={error:cleanText(error.message,800)};
-      const prev=await env.PASARGUARD_DB.prepare("SELECT consecutive_failures FROM sales_service_health WHERE bot_id=? AND remote_username=? ORDER BY checked_at DESC LIMIT 1").bind(row.bot_id,row.remote_username).first();
-      consecutive=Math.max(0,Number(prev?.consecutive_failures||0))+1;
-      await recordSystemError(env,"service_health",row.bot_id,"SERVICE_HEALTH_FAILED",error.message,{username:row.remote_username,consecutive});
+      if(isRemoteUserNotFoundError(error)){
+        status="missing";score=0;consecutive=0;details={remote_missing:true,error:cleanText(error.message,800)};
+        const ts=nowIso();
+        try{
+          await env.PASARGUARD_DB.batch([
+            env.PASARGUARD_DB.prepare("UPDATE sales_orders SET remote_status='remote_missing',remote_last_synced_at=?,updated_at=? WHERE id=? AND bot_id=?")
+              .bind(ts,ts,row.root_order_id,row.bot_id),
+            env.PASARGUARD_DB.prepare("UPDATE sales_service_preferences SET health_monitor_enabled=0,last_health_status='missing',last_health_at=?,updated_at=? WHERE bot_id=? AND customer_id=? AND LOWER(remote_username)=LOWER(?)")
+              .bind(ts,ts,row.bot_id,row.customer_id,row.remote_username)
+          ]);
+        }catch(_){}
+      }else{
+        failed++;failedBots.add(String(row.bot_id));details={error:cleanText(error.message,800)};
+        const prev=await env.PASARGUARD_DB.prepare("SELECT consecutive_failures FROM sales_service_health WHERE bot_id=? AND remote_username=? ORDER BY checked_at DESC LIMIT 1").bind(row.bot_id,row.remote_username).first();
+        consecutive=Math.max(0,Number(prev?.consecutive_failures||0))+1;
+        await recordSystemError(env,"service_health",row.bot_id,"SERVICE_HEALTH_FAILED",error.message,{username:row.remote_username,consecutive});
+      }
     }
     await env.PASARGUARD_DB.prepare(`INSERT INTO sales_service_health(
       id,bot_id,customer_id,root_order_id,remote_username,status,score,latency_ms,consecutive_failures,details_json,checked_at
@@ -3767,6 +3816,7 @@ async function processServiceHealthAndFailover(env, limit = 40) {
       const f=await tryServiceFailover(env,row,consecutive);if(f.completed)failovers++;
     }
   }
+  for(const botId of seenBots) if(!failedBots.has(botId)) await resolveProcessorSystemError(env,"service_health",botId,"SERVICE_HEALTH_FAILED");
   return {checked,healthy,failed,failovers};
 }
 
