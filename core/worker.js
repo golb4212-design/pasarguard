@@ -1,15 +1,25 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.54
+ * Version: 3.3.55
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.54';
+const APP_VERSION = '3.3.55';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.55": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🖥", text: "نمایش واضح و مستقل مصرف PasarGuard و مرزبان در مینی‌اپ مدیریت مرکزی" },
+      { emoji: "🧮", text: "PasarGuard از مصرف ادمین‌های متصل و مرزبان از مجموع اشتراک‌های ساخته‌شده محاسبه می‌شود" },
+      { emoji: "🔄", text: "نمایش زمان آخرین همگام‌سازی و بروزرسانی بدون کش صفحه مدیریت مرکزی" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "📊", text: "تفکیک مبنای مصرف Providerها در گزارش مرکزی بدون تغییر صورتحساب نماینده" }
+    ])
+  }),
   "3.3.54": Object.freeze({
     central: Object.freeze([
       { emoji: "🧭", text: "محاسبه هم‌زمان مصرف: PasarGuard از ادمین متصل و مرزبان از مجموع اشتراک‌های ساخته‌شده" },
@@ -17006,7 +17016,13 @@ async function centralAdminBootstrap(request, env) {
       (SELECT COALESCE(SUM(total_charged),0) FROM agencies) AS total_usage_revenue,
       (SELECT COALESCE(SUM(amount_toman),0) FROM payment_invoices WHERE credited_at IS NOT NULL) AS total_recharge,
       (SELECT COALESCE(SUM(amount_toman),0) FROM payment_invoices WHERE credited_at IS NOT NULL AND created_at>=?) AS today_recharge,
-      (SELECT COALESCE(SUM(amount_toman),0) FROM sales_orders WHERE status='delivered') AS reseller_total_sales
+      (SELECT COALESCE(SUM(amount_toman),0) FROM sales_orders WHERE status='delivered') AS reseller_total_sales,
+      (SELECT COALESCE(SUM(last_usage_bytes),0) FROM agencies) AS pasarguard_admin_usage_bytes,
+      (SELECT COUNT(*) FROM agencies) AS pasarguard_admin_count,
+      (SELECT COALESCE(SUM(last_usage_bytes),0) FROM shared_backend_accounts) AS marzban_subscription_usage_bytes,
+      (SELECT COALESCE(SUM(service_count),0) FROM shared_backend_accounts) AS marzban_subscription_count,
+      (SELECT MAX(updated_at) FROM agencies) AS pasarguard_last_synced_at,
+      (SELECT MAX(last_synced_at) FROM shared_backend_accounts) AS marzban_last_synced_at
     `).bind(today.toISOString()).first(),
     env.PASARGUARD_DB.prepare(`SELECT a.id,a.title,a.panel_username,a.status,a.last_usage_bytes,a.total_charged,a.provisioning_source,a.runtime_version,a.created_at,a.updated_at,
       u.id AS owner_id,u.telegram_id,u.username,u.first_name,u.last_name,u.wallet_balance,u.status AS owner_status,
@@ -17054,18 +17070,30 @@ async function centralAdminBootstrap(request, env) {
     const marzbanUsage=Math.max(0,Number(row.marzban_usage_bytes||0));
     const marzbanServices=Math.max(0,Number(row.marzban_service_count||0));
     const totalUsage=pasarguardUsage+marzbanUsage;
-    const pasarguardSource=child?'pasarguard_downline_subscriptions':'pasarguard_admin';
+    const pasarguardSource=child?'pasarguard_master_subscriptions':'pasarguard_admin';
+    const pasarguardLabel=pasarguardSource==='pasarguard_admin'?'مصرف ادمین PasarGuard':'مصرف اشتراک‌های این ربات روی ادمین مستر PasarGuard';
     const provider=pasarguardUsage>0&&marzbanUsage>0?'mixed':(marzbanUsage>0?'marzban':'pasarguard');
-    return { ...row,service_provider:provider,provider_usage_bytes:totalUsage,provider_usage_source:'provider_split',provider_usage_label:'مصرف کل PasarGuard و مرزبان',provider_service_count:marzbanServices,provider_last_synced_at:row.marzban_last_synced_at||row.updated_at||'',
-      pasarguard_usage_bytes:pasarguardUsage,pasarguard_usage_source:pasarguardSource,pasarguard_usage_label:pasarguardSource==='pasarguard_admin'?'مصرف ادمین PasarGuard':'مصرف اشتراک‌های PasarGuard زیرمجموعه',
-      marzban_usage_bytes:marzbanUsage,marzban_usage_source:'marzban_subscriptions',marzban_usage_label:'مجموع اشتراک‌های مرزبان',marzban_service_count:marzbanServices,
-      provider_usage:{total_bytes:totalUsage,pasarguard:{bytes:pasarguardUsage,source:pasarguardSource},marzban:{bytes:marzbanUsage,source:'marzban_subscriptions',service_count:marzbanServices}},
+    return { ...row,service_provider:provider,provider_usage_bytes:totalUsage,provider_usage_source:'provider_split',provider_usage_label:'جمع مصرف دو Provider',provider_service_count:marzbanServices,provider_last_synced_at:row.marzban_last_synced_at||row.updated_at||'',
+      pasarguard_usage_bytes:pasarguardUsage,pasarguard_usage_source:pasarguardSource,pasarguard_usage_label:pasarguardLabel,
+      marzban_usage_bytes:marzbanUsage,marzban_usage_source:'marzban_subscriptions',marzban_usage_label:'مصرف اشتراک‌های مرزبان ساخته‌شده توسط این ربات',marzban_service_count:marzbanServices,
+      provider_usage:{total_bytes:totalUsage,pasarguard:{bytes:pasarguardUsage,source:pasarguardSource,label:pasarguardLabel},marzban:{bytes:marzbanUsage,source:'marzban_subscriptions',label:'مصرف اشتراک‌های ساخته‌شده',service_count:marzbanServices}},
       license: resellerLicenseState(row), management_url: resellerManagementUrl(row, settings, origin), customer_url: row.bot_username ? "https://t.me/" + String(row.bot_username).replace(/^@/, "") : "" };
   });
   return json({
     success: true, version: APP_VERSION,
     admin: { id: auth.user.id, telegram_id: auth.user.telegram_id, username: auth.user.username, first_name: auth.user.first_name, last_name: auth.user.last_name },
     stats: stats || {}, configuration,
+    usage_summary: {
+      pasarguard_admin_bytes: Math.max(0, Number(stats?.pasarguard_admin_usage_bytes || 0)),
+      pasarguard_admin_count: Math.max(0, Number(stats?.pasarguard_admin_count || 0)),
+      pasarguard_last_synced_at: stats?.pasarguard_last_synced_at || "",
+      marzban_subscription_bytes: Math.max(0, Number(stats?.marzban_subscription_usage_bytes || 0)),
+      marzban_subscription_count: Math.max(0, Number(stats?.marzban_subscription_count || 0)),
+      marzban_last_synced_at: stats?.marzban_last_synced_at || "",
+      total_bytes: Math.max(0, Number(stats?.pasarguard_admin_usage_bytes || 0)) + Math.max(0, Number(stats?.marzban_subscription_usage_bytes || 0)),
+      pasarguard_basis: "admin_used_traffic",
+      marzban_basis: "created_subscription_used_traffic"
+    },
     sales: { agency_enabled: agencySalesOpen(settings), reseller_bot_enabled: resellerBotSalesOpen(settings) },
     agencies: agencies.results || [], bots: botRows, users: users.results || [], payments: payments.results || [], audit_logs: logs.results || [],
     links: { customer_app: origin + "/app", advanced_control: origin + "/control-advanced", central_bot: settings.central_bot_username ? "https://t.me/" + String(settings.central_bot_username).replace(/^@/, "") : "" },
@@ -17357,12 +17385,25 @@ async function centralAdminAction(request, env) {
       return json({ success: true, message: "موجودی کاربر بروزرسانی شد", user });
     }
     if (action === "sync_usage") {
-      const downline = await syncDownlineUsage(env, null, 400);
-      const central = await syncUsage(env, 250);
+      const providerSync = await syncDownlineUsage(env, null, 400);
+      const pasarguardAdmins = await syncUsage(env, 250);
       await reconcileAllAgencyBalanceStates(env, 500);
-      const result = { downline, central };
+      const summary = await env.PASARGUARD_DB.prepare(`SELECT
+        COALESCE((SELECT SUM(last_usage_bytes) FROM agencies),0) AS pasarguard_admin_bytes,
+        COALESCE((SELECT SUM(last_usage_bytes) FROM shared_backend_accounts),0) AS marzban_subscription_bytes,
+        COALESCE((SELECT SUM(service_count) FROM shared_backend_accounts),0) AS marzban_subscription_count`).first();
+      const result = {
+        pasarguard_admins: pasarguardAdmins,
+        marzban_subscriptions: providerSync?.marzban || null,
+        provider_sync: providerSync,
+        usage_summary: {
+          pasarguard_admin_bytes: Number(summary?.pasarguard_admin_bytes || 0),
+          marzban_subscription_bytes: Number(summary?.marzban_subscription_bytes || 0),
+          marzban_subscription_count: Number(summary?.marzban_subscription_count || 0)
+        }
+      };
       await audit(env, auth.user.id, "central_dashboard_usage_sync", result);
-      return json({ success: true, message: "مصرف نمایندگان زیرمجموعه و پنل‌های مرکزی همگام شد", result });
+      return json({ success: true, message: "مصرف ادمین‌های PasarGuard و اشتراک‌های ساخته‌شده مرزبان همگام شد", result });
     }
     if (action === "sync_payments") {
       const result = await pollPendingPayments(env, 200); await audit(env, auth.user.id, "central_dashboard_payment_sync", result); return json({ success: true, message: "پرداخت‌ها استعلام شدند", result });
@@ -17790,7 +17831,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.3.54';
+const BLUEPANEL_CORE_VERSION = '3.3.55';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {

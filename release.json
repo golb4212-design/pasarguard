@@ -1,9 +1,9 @@
 {
-  "version": "3.3.54",
-  "release_id": "3.3.54-provider-split-admin-and-subscription-usage",
-  "architecture": "fully-split-three-worker-simultaneous-provider-accounting",
-  "title": "تفکیک صحیح مصرف PasarGuard و مرزبان",
-  "summary": "مصرف PasarGuard از شمارنده جاری ادمین متصل و مصرف مرزبان از مجموع اشتراک‌های مرزبانی ساخته‌شده توسط همان ربات محاسبه می‌شود؛ هر دو Provider هم‌زمان فعال و جداگانه نمایش داده می‌شوند.",
+  "version": "3.3.55",
+  "release_id": "3.3.55-central-miniapp-provider-usage-visibility",
+  "architecture": "fully-split-three-worker-central-usage-dashboard",
+  "title": "نمایش واقعی تفکیک مصرف در مینی‌اپ مرکزی",
+  "summary": "داشبورد مدیریت مرکزی اکنون مصرف PasarGuard را بر پایه used_traffic ادمین‌های متصل و مصرف مرزبان را بر پایه مجموع used_traffic اشتراک‌های ساخته‌شده نشان می‌دهد؛ اعداد در نمای کلی و کارت هر ربات به‌صورت جدا و واضح نمایش داده می‌شوند.",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -11,28 +11,28 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "keeps PasarGuard and Marzban accounting active simultaneously instead of selecting one exclusive provider",
-    "reads PasarGuard current usage from the connected reseller admin account used_traffic counter",
-    "uses lifetime_used_traffic only as diagnostic metadata or compatibility fallback when the current counter is absent",
-    "calculates Marzban usage as the deduplicated sum of current used_traffic for subscriptions created by the same reseller bot",
-    "includes both delivered normal orders and delivered trial subscriptions in the Marzban aggregate",
-    "stores Marzban aggregate bytes and service count for central and reseller dashboards",
-    "shows total combined usage plus separate PasarGuard and Marzban cards",
-    "keeps provider billing ledgers separate and delta-based to prevent duplicate charging",
-    "excludes README files"
+    "adds a dedicated provider usage summary to the central management mini-app",
+    "shows total PasarGuard admin used_traffic across connected agency admins",
+    "shows total Marzban used_traffic across subscriptions created by reseller bots",
+    "shows provider usage and Marzban service count separately on every reseller bot card",
+    "shows the exact calculation basis in the central dashboard",
+    "adds provider sync controls to both overview and reseller-bot pages",
+    "forces central service-worker refresh and disables stale navigation cache",
+    "keeps PasarGuard and Marzban billing ledgers unchanged"
   ],
   "changes": [
-    "PasarGuard: مصرف جاری ادمین متصل مستقیماً از used_traffic خوانده می‌شود.",
-    "مرزبان: مصرف اشتراک‌های ساخته‌شده توسط همان ربات، شامل سفارش‌ها و تست‌های تحویل‌شده، جمع زده می‌شود.",
-    "نام کاربری‌های تکراری مرزبان یک‌بار محاسبه می‌شوند.",
-    "مصرف کل برابر مجموع دو بخش است، اما صورتحساب هر Provider جداگانه باقی می‌ماند.",
-    "داشبورد نماینده و داشبورد مرکزی تفکیک مصرف و تعداد اشتراک مرزبان را نشان می‌دهند.",
-    "ستون‌های تجمیع مرزبان به‌صورت خودکار به D1 اضافه می‌شوند و SQL دستی لازم نیست."
+    "نمای کلی مدیریت مرکزی سه کارت جدید برای مصرف PasarGuard، مصرف مرزبان و جمع دو Provider دارد.",
+    "مصرف PasarGuard از جمع last_usage_bytes ادمین‌های متصل خوانده می‌شود که از used_traffic پنل به‌روز می‌گردد.",
+    "مصرف مرزبان از shared_backend_accounts و مجموع اشتراک‌های ساخته‌شده هر ربات خوانده می‌شود.",
+    "کارت هر ربات، دو Provider را در باکس‌های جدا با مبنای محاسبه و زمان آخرین همگام‌سازی نشان می‌دهد.",
+    "صفحه پنل‌های نمایندگی صریحاً مصرف ادمین PasarGuard را نمایش می‌دهد.",
+    "دکمه همگام‌سازی مرکزی هر دو مسیر را اجرا و سپس خلاصه جدید را بازخوانی می‌کند.",
+    "نسخه Service Worker به 3.3.55 ارتقا یافته تا رابط قدیمی از کش باقی نماند."
   ],
   "deployment": {
     "automatic_provisioning": "upload ZIP through the central bot",
-    "db_schema_revision": "3.3.54-shared-marzban-aggregate-columns",
-    "automatic_migration": "adds shared_backend_accounts.last_usage_bytes and shared_backend_accounts.service_count with default zero; no manual SQL required",
+    "db_schema_revision": "unchanged-from-3.3.54",
+    "automatic_migration": "no new schema change and no manual SQL required",
     "required_bindings": [
       "Core: PASARGUARD_DB, EDGE_WORKER, PROCESSOR_WORKER and LIVE_USAGE_COORDINATOR",
       "Processor: EDGE_WORKER and CORE_WORKER",
@@ -42,28 +42,28 @@
   },
   "validation": {
     "worker_syntax": "passed: node --check for core, edge and processor",
-    "embedded_dashboard_scripts": "passed: extracted browser scripts parse successfully",
-    "pasarguard_counter_selection": "passed: current used_traffic is preferred and reset history does not inflate current usage",
-    "marzban_aggregate": "passed: orders plus trials, bot/provider/status scoping, case-insensitive username deduplication and counter reset behavior",
-    "billing_safety": "passed: separate delta ledgers and no duplicate charge from lifetime traffic",
-    "sql_bindings": "passed: changed shared_backend_accounts update statements have matching placeholders and bindings",
-    "zip_integrity": "passed: clean six-entry archive structure and unzip CRC validation",
+    "embedded_central_dashboard_script": "passed: extracted inline management script parses successfully",
+    "central_dashboard_dom_bindings": "passed: new provider metric IDs and JavaScript bindings are present",
+    "provider_summary_contract": "passed: bootstrap exposes separate PasarGuard admin and Marzban subscription totals",
+    "bot_card_rendering": "passed: sample card renders separate provider values, total and service count",
+    "release_notes": "passed: unique 3.3.55 and preserved 3.3.54 entries",
+    "zip_integrity": "passed: clean six-entry archive structure and CRC validation",
     "live_api": "not run; requires production PasarGuard, Marzban and Cloudflare credentials"
   },
   "limitations": [
-    "Production verification requires deployment because real PasarGuard, Marzban, Cloudflare and Telegram credentials are unavailable offline.",
-    "The displayed value can advance only after the upstream panel updates its used_traffic counter."
+    "Upstream usage can change only as quickly as PasarGuard or Marzban updates its used_traffic counter.",
+    "Production values must be confirmed after deployment because real panel credentials are unavailable offline."
   ],
   "sha256": {
-    "core/worker.js": "0e1c3480ca2f251a6d111d09dc07eb1801cfdde1621b3ac6af39f9f6ebcd48f9",
-    "edge/worker.js": "edeed597155b26bd233a102facabbe795c38a2f6de1d9b8d5839fc62da4d3819",
-    "processor/worker.js": "4fd621801ee8eb366425859d402c843a7d7645805cd7d3d99f6e50f1389cbfd3",
+    "core/worker.js": "851a438b39ad608f66853a240f9aa326ee2f6ad07ef038e9035899fa2b19fa7f",
+    "edge/worker.js": "b8bd97dc0b0753bbb64a6f4cb8ea163a5d7dba3a71fbab28a58ae37efb7c3abc",
+    "processor/worker.js": "68ca1d5453ac5b2f26fe1e14c2b5fae06a5031224bdc1a267e10a839a7b7486c",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "0e1c3480ca2f251a6d111d09dc07eb1801cfdde1621b3ac6af39f9f6ebcd48f9",
-    "edge/worker.js": "edeed597155b26bd233a102facabbe795c38a2f6de1d9b8d5839fc62da4d3819",
-    "processor/worker.js": "4fd621801ee8eb366425859d402c843a7d7645805cd7d3d99f6e50f1389cbfd3",
+    "core/worker.js": "851a438b39ad608f66853a240f9aa326ee2f6ad07ef038e9035899fa2b19fa7f",
+    "edge/worker.js": "b8bd97dc0b0753bbb64a6f4cb8ea163a5d7dba3a71fbab28a58ae37efb7c3abc",
+    "processor/worker.js": "68ca1d5453ac5b2f26fe1e14c2b5fae06a5031224bdc1a267e10a839a7b7486c",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }
