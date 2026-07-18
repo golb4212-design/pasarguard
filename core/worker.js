@@ -1,15 +1,25 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.49
+ * Version: 3.3.50
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.49';
+const APP_VERSION = '3.3.50';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.50": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🎯", text: "هماهنگ‌سازی اجباری مصرف مینی‌اپ با عدد لحظه‌ای PasarGuard در هر بروزرسانی Live" },
+      { emoji: "🧹", text: "حذف کش از درخواست‌های مصرف و استفاده از مسیر مستقیم مدیر پیش از فهرست مدیران" },
+      { emoji: "🔄", text: "تازه‌سازی هم‌زمان مصرف، هزینه و موجودی در یک Snapshot واحد" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "📊", text: "رفع اختلاف عدد مصرف بین کارت پنل BluePanel و داشبورد PasarGuard" }
+    ])
+  }),
   "3.3.49": Object.freeze({
     central: Object.freeze([
       { emoji: "📡", text: "ترمیم محاسبه Live مصرف پس از بروزرسانی و جلوگیری از حذف Binding مربوط به Durable Object" },
@@ -4669,10 +4679,19 @@ async function getPasarguardToken(env, forceRefresh = false, suppliedSettings = 
 
 async function pasarguardHttpRequest(settings, authHeaders, method, path, body, timeoutMs = 12000) {
   try {
-    return await fetchWithTimeout(pasarguardBaseUrl(settings) + path, {
-      method,
+    const upperMethod = String(method || "GET").toUpperCase();
+    const target = new URL(pasarguardBaseUrl(settings) + path);
+    // PasarGuard and reverse proxies may cache the admin list for a short period.
+    // Live billing must always read the newest counter, so every GET receives a
+    // unique query marker and explicit no-cache directives.
+    if (upperMethod === "GET") target.searchParams.set("_bp_live", String(Date.now()));
+    return await fetchWithTimeout(target.toString(), {
+      method: upperMethod,
+      cache: "no-store",
       headers: {
         "accept": "application/json",
+        "cache-control": "no-cache, no-store, max-age=0",
+        "pragma": "no-cache",
         ...authHeaders,
         ...(body === undefined ? {} : { "content-type": "application/json" })
       },
@@ -4973,9 +4992,14 @@ async function pasargadDeleteManager(env, remoteId) {
 }
 
 function extractUsageBytes(data) {
-  const direct = data?.used_traffic ?? data?.usage_bytes ?? data?.used_bytes ?? data?.data?.used_traffic;
+  const source = data?.admin || data;
+  const nested = source?.data && !Array.isArray(source.data) ? source.data : null;
+  const direct = source?.used_traffic ?? source?.usage_bytes ?? source?.used_bytes ??
+    source?.total_used_traffic ?? source?.traffic_used ?? source?.data_usage ??
+    nested?.used_traffic ?? nested?.usage_bytes ?? nested?.used_bytes ??
+    nested?.total_used_traffic ?? nested?.traffic_used ?? nested?.data_usage;
   if (direct !== undefined && direct !== null) return Math.max(0, Number(direct) || 0);
-  throw new Error("فیلد used_traffic در پاسخ PasarGuard پیدا نشد");
+  throw new Error("فیلد مصرف در پاسخ PasarGuard پیدا نشد");
 }
 
 async function pasargadGetManager(env, remoteId) {
@@ -4986,11 +5010,25 @@ async function pasargadGetManager(env, remoteId) {
     throw error;
   }
 
+  let lastError = null;
+
+  // Prefer the single-manager endpoint. It is the same resource used for status
+  // updates and is less likely than the paginated list to contain a cached usage
+  // counter. Older PasarGuard builds may not support GET on this route, so the
+  // list endpoints remain safe fallbacks.
+  try {
+    const direct = await pasarguardRequest(env, "GET", "/api/admin/by-id/" + encodeURIComponent(remoteKey));
+    const candidate = direct?.admin || (direct?.data && !Array.isArray(direct.data) ? direct.data : direct);
+    if (candidate && String(candidate.id || "") === remoteKey) return candidate;
+  } catch (error) {
+    lastError = error;
+    if ([401, 403].includes(Number(error?.status || 0))) throw error;
+  }
+
   const attempts = [
     new URLSearchParams({ ids: remoteKey, limit: "1" }),
     new URLSearchParams({ offset: "0", limit: "100" })
   ];
-  let lastError = null;
   for (let index = 0; index < attempts.length; index++) {
     try {
       const data = await pasarguardRequest(env, "GET", "/api/admins?" + attempts[index].toString());
@@ -5701,6 +5739,8 @@ async function liveUsageSnapshot(request, env) {
   if (auth.response) return auth.response;
   await ensureDb(env);
 
+  const liveUrl = new URL(request.url);
+  const forceFresh = liveUrl.searchParams.get("force") === "1";
   const settings = await getSettings(env);
   const pricePerGb = clampInt(settings.price_per_gb, 0, 1000000000);
   const agencyRows = await env.PASARGUARD_DB.prepare(
@@ -5716,7 +5756,7 @@ async function liveUsageSnapshot(request, env) {
   if (settings.usage_sync_enabled === "true") {
     for (const agency of agencyRows.results || []) {
       const updatedAt = Date.parse(agency.updated_at || "") || 0;
-      if (updatedAt > cutoff) continue;
+      if (!forceFresh && updatedAt > cutoff) continue;
       try {
         let usage;
         if (isManualAgency(agency)) {
@@ -5770,6 +5810,7 @@ async function liveUsageSnapshot(request, env) {
   return json({
     success: true,
     live: settings.usage_sync_enabled === "true",
+    force_fresh: forceFresh,
     interval_seconds: LIVE_USAGE_MIN_INTERVAL_SECONDS,
     server_time: nowIso(),
     processed,
@@ -17617,7 +17658,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.3.49';
+const BLUEPANEL_CORE_VERSION = '3.3.50';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {

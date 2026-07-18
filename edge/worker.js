@@ -1,11 +1,11 @@
 /* BLUEPANEL_EDGE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.49
+ * Version: 3.3.50
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 877880 bytes.
  */
 
-const APP_VERSION = '3.3.49';
+const APP_VERSION = '3.3.50';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
@@ -13410,7 +13410,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
 (function(){
   var CONTROL_MODE=__CONTROL_MODE__;
   var tg=window.Telegram&&window.Telegram.WebApp,isTelegram=!!(tg&&tg.initData);if(tg){tg.ready();tg.expand();try{tg.setHeaderColor('#07111f');tg.setBackgroundColor('#07111f')}catch(_){}}document.body.classList.toggle('web-browser',!isTelegram);document.body.classList.toggle('control-mode',CONTROL_MODE);
-  var initData=isTelegram?tg.initData:'',state=null,liveUsageTimer=null,liveUsageBusy=false,LIVE_USAGE_INTERVAL=10000;
+  var initData=isTelegram?tg.initData:'',state=null,liveUsageTimer=null,liveUsageBusy=false,LIVE_USAGE_INTERVAL=15000;
   function el(id){return document.getElementById(id)}
   function money(n){return Number(n||0).toLocaleString('fa-IR')}
   function rial(n){return Number(n||0).toLocaleString('fa-IR')+' ریال'}
@@ -13477,7 +13477,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
     liveUsageBusy=true;
     setLiveUsageStatus('syncing','در حال بروزرسانی','در حال دریافت مصرف تازه از PasarGuard…');
     try{
-      var d=await api('/api/usage/live');
+      var d=await api('/api/usage/live?force=1');
       state.user.wallet_balance=Number(d.wallet_balance||0);
       state.agencies=d.agencies||[];
       state.ledger=d.ledger||state.ledger||[];
@@ -13633,7 +13633,7 @@ async function ensureDb(env) {
   return true;
 }
 
-const BLUEPANEL_EDGE_VERSION='3.3.49';
+const BLUEPANEL_EDGE_VERSION='3.3.50';
 function bluePanelEdgeJson(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
 function bluePanelEdgeInternal(request){try{return new URL(request.url).hostname.endsWith('.internal')}catch(_){return false}}
 function bluePanelEdgeRuntimeBinding(env,name){const value=env?.[name];return{name,exact_key_present:Object.prototype.hasOwnProperty.call(env||{},name),value_present:value!==undefined&&value!==null,fetch_callable:Boolean(value&&typeof value.fetch==='function'),constructor_name:value?.constructor?.name||''}}
