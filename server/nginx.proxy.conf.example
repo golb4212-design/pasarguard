@@ -1,0 +1,13 @@
+# Optional aaPanel/Nginx reverse proxy. The BluePanel Server works outbound-only
+# and does not require a public port. Add this only when a public health URL is wanted.
+location ^~ /bluepanel-server/ {
+    proxy_pass http://127.0.0.1:8787/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_connect_timeout 10s;
+    proxy_read_timeout 60s;
+    proxy_send_timeout 60s;
+}
