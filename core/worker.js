@@ -1,15 +1,36 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.3.47
+ * Version: 3.3.49
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.3.47';
+const APP_VERSION = '3.3.49';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.3.49": Object.freeze({
+    central: Object.freeze([
+      { emoji: "📡", text: "ترمیم محاسبه Live مصرف پس از بروزرسانی و جلوگیری از حذف Binding مربوط به Durable Object" },
+      { emoji: "🛟", text: "افزودن چرخه جایگزین امن برای ادامه محاسبه مصرف در صورت قطع موقت LIVE_USAGE_COORDINATOR" },
+      { emoji: "🔁", text: "راه‌اندازی مجدد خودکار محاسبه مصرف از مسیر Webhook، Cron و پس از استقرار نسخه جدید" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "✅", text: "محاسبه مصرف ربات‌های نماینده و زیرمجموعه در حالت قطع موقت هماهنگ‌کننده Live متوقف نمی‌شود" }
+    ])
+  }),
+  "3.3.48": Object.freeze({
+    central: Object.freeze([
+      { emoji: "⌨️", text: "افزودن مدیریت کامل چیدمان کلیدهای منوی مشتری در داشبورد نماینده" },
+      { emoji: "↕️", text: "تغییر ترتیب، عنوان، نمایش یا مخفی‌سازی و عرض نیمه یا تمام‌ردیف هر کلید" },
+      { emoji: "👁", text: "پیش‌نمایش زنده چیدمان پیش از ذخیره و امکان بازنشانی به حالت استاندارد" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "🧩", text: "بخش جدید «مدیریت کلیدها» در پنل مدیریت نماینده" },
+      { emoji: "🛡", text: "کلیدهای مدیریتی مالک ثابت می‌مانند تا دسترسی مدیریت به‌طور تصادفی قفل نشود" }
+    ])
+  }),
   "3.3.47": Object.freeze({
     central: Object.freeze([
       { emoji: "↩️", text: "بازگردانی ایموجی دوم کلیدهایی که عمداً یک ایموجی را در دو طرف متن دارند" },
@@ -9374,14 +9395,26 @@ async function deploySelfFromGithub(env, force = false, prechecked = null) {
   const apiBase = "https://api.cloudflare.com/client/v4/accounts/" + settings.cf_account_id + "/workers/scripts/" + encodeURIComponent(settings.cf_worker_name);
   let keepBindings = [];
   let currentWorkerSettings = {};
-  try {
+  let liveUsageBindingWasPresent = false;
+  {
     const settingsResponse = await fetch(apiBase + "/settings", {
-      headers: { authorization: "Bearer " + settings.cf_api_token }
+      headers: { authorization: "Bearer " + settings.cf_api_token, accept:"application/json" }
     });
-    const current = await settingsResponse.json();
-    currentWorkerSettings = current?.result || {};
-    keepBindings = Array.from(new Set((currentWorkerSettings.bindings || []).map(x => x.type).filter(Boolean)));
-  } catch (_) {}
+    const raw = await settingsResponse.text().catch(() => "");
+    let current = {};
+    try { current = raw ? JSON.parse(raw) : {}; } catch (_) {}
+    if (!settingsResponse.ok || current?.success === false || !current?.result) {
+      const error = new Error("خواندن Bindingهای Worker پیش از بروزرسانی ناموفق بود؛ برای جلوگیری از حذف اتصال مصرف زنده، انتشار متوقف شد");
+      error.code = "WORKER_BINDINGS_READ_FAILED";
+      error.httpStatus = settingsResponse.status;
+      error.cloudflareResponse = raw.slice(0,1200);
+      throw error;
+    }
+    currentWorkerSettings = current.result;
+    const currentBindings = Array.isArray(currentWorkerSettings.bindings) ? currentWorkerSettings.bindings : [];
+    liveUsageBindingWasPresent = currentBindings.some(binding => binding?.type === "durable_object_namespace" && binding?.name === "LIVE_USAGE_COORDINATOR");
+    keepBindings = Array.from(new Set(currentBindings.map(x => x?.type).filter(Boolean)));
+  }
 
   const metadata = {
     main_module: "worker.js",
@@ -9406,6 +9439,18 @@ async function deploySelfFromGithub(env, force = false, prechecked = null) {
   });
   const { response, data } = upload;
   const subrequest_limit = await tryConfigureWorkerSubrequestLimit(settings, settings.cf_worker_name, 50000);
+  let live_usage_repair = { preserved:liveUsageBindingWasPresent, started:false };
+  try {
+    if (liveUsageBindingWasPresent && liveUsageNamespaceAvailable(env)) {
+      const started = await callLiveUsageCoordinator(env,"start");
+      live_usage_repair = { preserved:true, started:started?.success !== false, result:started };
+    } else {
+      const provisioned = await provisionLiveUsageDurableObject(env,{ force:true });
+      live_usage_repair = { preserved:false, provisioned:provisioned?.success !== false, result:provisioned };
+    }
+  } catch (error) {
+    live_usage_repair = { preserved:liveUsageBindingWasPresent, started:false, error:cleanText(error?.message || error,700) };
+  }
   await setSettings(env, {
     auto_update_last_worker_sha: codeSha,
     auto_update_last_version: check.latest || APP_VERSION,
@@ -9413,7 +9458,7 @@ async function deploySelfFromGithub(env, force = false, prechecked = null) {
     auto_update_last_status: "deployed",
     auto_update_last_error: ""
   });
-  return { ...check, worker_sha: codeSha, deployed: true, subrequest_limit };
+  return { ...check, worker_sha: codeSha, deployed: true, subrequest_limit, live_usage_repair };
 }
 
 async function ensureDeploymentTrackingTables(env) {
@@ -17318,6 +17363,55 @@ function liveUsageRuntimeConfig(settings = {}) {
   };
 }
 
+async function claimLiveUsageFallbackCycle(env, intervalSeconds) {
+  const nowEpoch = Math.floor(Date.now() / 1000);
+  const cutoff = nowEpoch - Math.max(LIVE_USAGE_MIN_INTERVAL_SECONDS, Number(intervalSeconds || LIVE_USAGE_DEFAULT_INTERVAL_SECONDS));
+  const result = await env.PASARGUARD_DB.prepare(`
+    INSERT INTO app_settings(key,value,updated_at)
+    VALUES('live_usage_fallback_claim_epoch',?,?)
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
+    WHERE CAST(app_settings.value AS INTEGER) <= ?
+  `).bind(String(nowEpoch), nowIso(), String(cutoff)).run();
+  return Number(result?.meta?.changes || 0) > 0;
+}
+
+async function runLiveUsageFallbackCycle(env, source = "binding_fallback") {
+  await ensureDb(env);
+  const settings = await getSettings(env);
+  const config = liveUsageRuntimeConfig(settings);
+  if (!config.enabled) return { success:true, enabled:false, source, skipped:true, reason:"usage_sync_disabled" };
+  const claimed = await claimLiveUsageFallbackCycle(env, config.intervalSeconds);
+  if (!claimed) return { success:true, enabled:true, source, skipped:true, reason:"fallback_throttled" };
+  const startedAt = nowIso();
+  const startedMs = Date.now();
+  try {
+    const downline = await syncDownlineUsage(env, null, config.downlineBatch, { sync:true, serviceLimit:config.serviceBatch });
+    const central = await syncUsage(env, config.centralBatch);
+    const balance = await reconcileAllAgencyBalanceStates(env, Math.max(30, config.centralBatch * 2));
+    const finishedAt = nowIso();
+    const result = {
+      success:true, enabled:true, fallback:true, source,
+      started_at:startedAt, finished_at:finishedAt,
+      duration_ms:Date.now() - startedMs, config, central, downline, balance
+    };
+    await env.PASARGUARD_DB.batch([
+      env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_live_usage_at',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(finishedAt,finishedAt),
+      env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('last_live_usage_result',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(JSON.stringify({ fallback:true, source, central, downline, duration_ms:result.duration_ms }),finishedAt),
+      env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('live_usage_fallback_status',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(JSON.stringify({ success:true, finished_at:finishedAt, duration_ms:result.duration_ms }),finishedAt)
+    ]);
+    return result;
+  } catch (error) {
+    const failedAt = nowIso();
+    const result = { success:false, enabled:true, fallback:true, source, started_at:startedAt, failed_at:failedAt, duration_ms:Date.now()-startedMs, error:String(error?.message || error), config };
+    try {
+      await env.PASARGUARD_DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES('live_usage_fallback_status',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at")
+        .bind(JSON.stringify(result),failedAt).run();
+      await audit(env,null,"live_usage_fallback_failed",result);
+    } catch (_) {}
+    return result;
+  }
+}
+
 function liveUsageNamespaceAvailable(env) {
   return Boolean(env?.LIVE_USAGE_COORDINATOR && typeof env.LIVE_USAGE_COORDINATOR.idFromName === "function" && typeof env.LIVE_USAGE_COORDINATOR.get === "function");
 }
@@ -17344,16 +17438,26 @@ let liveUsageBootstrapNextAt = 0;
 function scheduleLiveUsageBootstrap(env, ctx, force = false) {
   if (!ctx || typeof ctx.waitUntil !== "function") return;
   const now = Date.now();
+  const bindingReady = liveUsageNamespaceAvailable(env);
+  const cooldown = bindingReady ? 60000 : LIVE_USAGE_MIN_INTERVAL_SECONDS * 1000;
   if (!force && now < liveUsageBootstrapNextAt) return;
-  liveUsageBootstrapNextAt = now + 60000;
-  if (liveUsageNamespaceAvailable(env)) {
+  liveUsageBootstrapNextAt = now + cooldown;
+  if (bindingReady) {
     ctx.waitUntil(callLiveUsageCoordinator(env, "start").catch(error => console.error("live usage bootstrap error", error)));
     return;
   }
-  ctx.waitUntil(provisionLiveUsageDurableObject(env).catch(async error => {
-    console.error("live usage auto-provision error", error);
-    try { await audit(env, null, "live_usage_auto_provision_failed", { message:String(error?.message || error) }); } catch (_) {}
-  }));
+  // Fail open: billing must continue even when a deployment temporarily loses
+  // the Durable Object binding. The D1 lease prevents duplicate fallback cycles.
+  ctx.waitUntil((async () => {
+    const fallback = await runLiveUsageFallbackCycle(env, "missing_binding").catch(error => ({ success:false,error:String(error?.message || error) }));
+    if (fallback?.success === false) console.error("live usage fallback error", fallback.error || fallback);
+    try {
+      await provisionLiveUsageDurableObject(env);
+    } catch (error) {
+      console.error("live usage auto-provision error", error);
+      try { await audit(env, null, "live_usage_auto_provision_failed", { message:String(error?.message || error), fallback_success:fallback?.success !== false }); } catch (_) {}
+    }
+  })());
 }
 
 async function adminLiveUsageControl(request, env) {
@@ -17513,7 +17617,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.3.17';
+const BLUEPANEL_CORE_VERSION = '3.3.49';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
@@ -17659,7 +17763,7 @@ export default {
   async fetch(request,env,ctx){
     const url=new URL(request.url),path=url.pathname.replace(/\/+$/,'')||'/';
     try {
-      if(path!=='/telegram/webhook') scheduleLiveUsageBootstrap(env,ctx);
+      scheduleLiveUsageBootstrap(env,ctx);
       scheduleRequestTriggeredUpdate(env,ctx,path);
       if(request.method==='OPTIONS') return new Response(null,{status:204,headers:{'access-control-allow-origin':'*','access-control-allow-methods':'GET,POST,OPTIONS','access-control-allow-headers':'content-type,x-telegram-init-data,x-web-session,authorization,x-bluepanel-public-origin'}});
       if(path==='/__bluepanel/internal/d1'&&request.method==='POST') return bluePanelCoreD1Rpc(request,env);

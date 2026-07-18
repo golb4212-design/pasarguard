@@ -1,7 +1,7 @@
 {
-  "version": "3.3.47",
-  "release_id": "3.3.47-preserve-duplicate-button-emoji",
-  "architecture": "fully-split-three-worker-premium-emoji-preserve-label-duplicates",
+  "version": "3.3.49",
+  "release_id": "3.3.49-live-usage-self-healing",
+  "architecture": "fully-split-three-worker-live-usage-self-healing",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -9,58 +9,58 @@
     "durable_object_config": "core/wrangler.live-usage.example.toml"
   },
   "features": [
-    "restores the second ordinary emoji in button labels that intentionally repeat the same emoji",
-    "replaces exactly one ordinary emoji occurrence with the single Telegram icon_custom_emoji_id",
-    "preserves all additional repeated emoji in the visible button label instead of deleting them",
-    "keeps premium custom emoji rendering for every mapped occurrence inside message text and captions",
-    "keeps smart button colours and the reseller premium emoji picker",
-    "does not change the database schema",
-    "README files are excluded"
+    "repairs live usage calculation after a release deployment",
+    "prevents core self-update when current Cloudflare bindings cannot be read safely",
+    "preserves the LIVE_USAGE_COORDINATOR Durable Object binding during core deployment",
+    "automatically starts or provisions the live usage coordinator after deployment",
+    "adds a D1-leased fallback usage cycle while the Durable Object binding is temporarily unavailable",
+    "runs live usage bootstrap from Telegram webhook traffic as well as web requests and Cron",
+    "keeps the reseller menu layout manager introduced in 3.3.48",
+    "does not change the database schema and excludes README files"
   ],
   "deployment": {
     "automatic_provisioning": "upload ZIP through the central bot",
     "db_schema_revision": "3.3.40-reseller-webhook-ui-fail-open",
     "automatic_migration": "no database schema change",
     "required_bindings": [
-      "Core: PROCESSOR_WORKER",
+      "Core: PASARGUARD_DB, EDGE_WORKER, PROCESSOR_WORKER and LIVE_USAGE_COORDINATOR",
       "Processor: EDGE_WORKER and CORE_WORKER",
-      "Edge: CORE_WORKER"
-    ]
+      "Edge: CORE_WORKER and PROCESSOR_WORKER"
+    ],
+    "durable_object": "LiveUsageCoordinator with migration tag v3.1.9-live-usage"
   },
   "validation": {
     "worker_syntax": "passed: node --check for core, edge and processor",
-    "button_duplicate_preservation": "passed: exactly one repeated emoji is replaced and the other remains in the label",
-    "variation_selector_fallback": "passed: FE0F/plain fallback removes only one visual occurrence",
-    "message_text_renderer": "unchanged from 3.3.45: repeated message emoji can render as separate custom_emoji entities",
+    "binding_preservation": "passed: deployment now fails closed when Cloudflare Worker settings cannot be read",
+    "webhook_bootstrap": "passed: live usage bootstrap is no longer skipped for /telegram/webhook",
+    "fallback_lease": "passed: fallback uses an atomic app_settings lease to prevent duplicate cycles",
     "database_schema": "unchanged from 3.3.40",
-    "zip_integrity": "pending build validation",
-    "live_api": "not run; requires production Telegram and Cloudflare credentials"
+    "zip_integrity": "pending final package validation",
+    "live_api": "not run; requires production PasarGuard, Cloudflare and Telegram credentials"
   },
   "limitations": [
-    "Telegram exposes only one icon_custom_emoji_id per keyboard button and renders it before the label.",
-    "Therefore, when the same emoji is shown twice on one button, one can be the premium button icon and the other remains an ordinary emoji in the text.",
-    "Multiple premium custom emojis remain supported in normal message text and captions through custom_emoji entities.",
-    "Custom emoji rendering depends on Telegram eligibility and the Telegram client."
+    "The Durable Object is still the preferred 8–300 second scheduler; the fallback depends on incoming requests or Cron while the binding is being repaired.",
+    "Production verification requires deployment because Cloudflare bindings and PasarGuard usage APIs are not available offline."
   ],
-  "title": "بازگردانی ایموجی دوم کلیدها",
-  "summary": "ایموجی دوم کلیدهای دوطرفه دیگر حذف نمی‌شود؛ فقط یک نمونه با آیکن پرمیوم جایگزین می‌شود و نمونه دیگر مطابق متن اصلی باقی می‌ماند.",
+  "title": "ترمیم محاسبه Live مصرف",
+  "summary": "Binding محاسبه زنده هنگام بروزرسانی حفظ و پس از استقرار دوباره راه‌اندازی می‌شود؛ در قطع موقت نیز چرخه جایگزین مصرف را ادامه می‌دهد.",
   "changes": [
-    "بازگردانی رفتار نسخه 3.3.45 برای کلیدهایی که یک ایموجی را چند بار دارند.",
-    "حذف فقط یک نمونه از متن کلید در مقابل یک icon_custom_emoji_id.",
-    "حفظ نمونه‌های تکراری دیگر در متن کلید.",
-    "حفظ تبدیل همه تکرارهای ایموجی در متن و کپشن پیام‌ها.",
-    "بدون ستون یا Migration جدید."
+    "جلوگیری از انتشار Core با keep_bindings خالی در صورت خطای خواندن تنظیمات Cloudflare.",
+    "حفظ و راه‌اندازی مجدد LIVE_USAGE_COORDINATOR پس از بروزرسانی.",
+    "فعال‌کردن Bootstrap مصرف زنده روی ترافیک Webhook تلگرام.",
+    "افزودن محاسبه جایگزین دارای قفل D1 هنگام نبود موقت Durable Object.",
+    "حفظ کامل مدیریت چیدمان کلیدهای نسخه 3.3.48."
   ],
   "sha256": {
-    "core/worker.js": "af524016d59646edc83b2557becd5290a366f1ce4f318b7762c425572b349a6d",
-    "edge/worker.js": "890710acf57b2618e9d11c905e589e86b8723cb99720316366efce44fb831da6",
-    "processor/worker.js": "2329713ff2c36e169ef8de6534a659c7fdae78ffdd512d0e732894ce62297f91",
+    "core/worker.js": "e09b2d65af6189398b7f7b4ccf18f6a0a0e27382d75395a2f4611cc75f0419be",
+    "edge/worker.js": "344f083b9b2b73ec626f2163df815beb7411e22b2c848f05b9987e87cda6ca0f",
+    "processor/worker.js": "e22c7b3346061c95c313fb12f64dcb54dee21f234fdc9b7bf4f9b686a5bde61a",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   },
   "hashes": {
-    "core/worker.js": "af524016d59646edc83b2557becd5290a366f1ce4f318b7762c425572b349a6d",
-    "edge/worker.js": "890710acf57b2618e9d11c905e589e86b8723cb99720316366efce44fb831da6",
-    "processor/worker.js": "2329713ff2c36e169ef8de6534a659c7fdae78ffdd512d0e732894ce62297f91",
+    "core/worker.js": "e09b2d65af6189398b7f7b4ccf18f6a0a0e27382d75395a2f4611cc75f0419be",
+    "edge/worker.js": "344f083b9b2b73ec626f2163df815beb7411e22b2c848f05b9987e87cda6ca0f",
+    "processor/worker.js": "e22c7b3346061c95c313fb12f64dcb54dee21f234fdc9b7bf4f9b686a5bde61a",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907"
   }
 }
