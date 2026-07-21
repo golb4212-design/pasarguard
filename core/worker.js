@@ -1,15 +1,35 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.4.0
+ * Version: 3.4.2
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.4.0';
+const APP_VERSION = '3.4.2';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.4.2": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🛟", text: "جداشدن بروزرسانی مصرف مینی‌اپ از Invocation پاسخ HTTP و حذف خطای Failed to fetch" },
+      { emoji: "📡", text: "ارسال درخواست تازه‌سازی به Durable Object و بازخوانی Snapshot بدون اجرای هم‌زمان همه Providerها" },
+      { emoji: "🧯", text: "مسیر جایگزین محدود به یک پنل هنگام نبودن LIVE_USAGE_COORDINATOR برای جلوگیری از سقف Subrequest" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "⚡", text: "داشبورد فوراً با اطلاعات ذخیره‌شده باز می‌شود و مصرف تازه در پس‌زمینه جایگزین می‌گردد" }
+    ])
+  }),
+  "3.4.1": Object.freeze({
+    central: Object.freeze([
+      { emoji: "📦", text: "تشخیص خودکار ZIP آپلودشده دستی در GitHub و استخراج آن پیش از نصب سرور" },
+      { emoji: "🖥", text: "جداشدن نصب BluePanel Server از منطق وجود نسخه جدید Worker؛ نسخه برابر نیز قابل نصب است" },
+      { emoji: "🧰", text: "آماده‌سازی خودکار server/ و Workflow روی Branch و نمایش خطای دقیق بسته نصب" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "🚀", text: "نصب هماهنگ‌کننده سروری بدون نیاز به افزایش شماره نسخه Worker انجام می‌شود" }
+    ])
+  }),
   "3.4.0": Object.freeze({
     central: Object.freeze([
       { emoji: "🖥", text: "نصب و اتصال خودکار BluePanel Server فقط با مشخصات SSH از مینی‌اپ مرکزی" },
@@ -20,7 +40,7 @@ const RELEASE_NOTES = Object.freeze({
       { emoji: "🚀", text: "پردازش‌های دوره‌ای با هماهنگ‌کننده سروری اجرا می‌شوند و Worker در زمان قطع سرور مسیر پشتیبان می‌ماند" }
     ])
   }),
-  "3.4.0": Object.freeze({
+  "3.3.58": Object.freeze({
     central: Object.freeze([
       { emoji: "🧯", text: "تقسیم کامل Cron مرکزی به هشت Invocation سبک برای حذف خطای Too many subrequests" },
       { emoji: "🛟", text: "ارسال پیام تلگرام از مسیر اضطراری Processor وقتی بودجه درخواست Core تمام شده باشد" },
@@ -745,6 +765,8 @@ const LIVE_USAGE_DEFAULT_CENTRAL_BATCH = 20;
 const LIVE_USAGE_DEFAULT_DOWNLINE_BATCH = 2;
 const LIVE_USAGE_DEFAULT_SERVICE_BATCH = 24;
 const LIVE_USAGE_COORDINATOR_NAME = "bluepanel-live-usage-v1";
+const LIVE_USAGE_UI_FALLBACK_BATCH = 1;
+const LIVE_USAGE_UI_POLL_HINT_MS = 2500;
 
 const RESELLER_LICENSE_DAYS = 30;
 
@@ -773,7 +795,7 @@ let errorCenterSchemaPromise = null;
 
 // Persistent schema marker: avoids replaying the full D1 migration sweep whenever
 // Cloudflare starts a fresh isolate after an idle period.
-const DB_SCHEMA_REVISION = "3.4.0-server-bootstrap";
+const DB_SCHEMA_REVISION = "3.4.1-server-package-discovery";
 
 let settingsCache = null;
 
@@ -808,6 +830,9 @@ const TELEGRAM_GITHUB_ZIP_MAX_BYTES = 20 * 1024 * 1024;
 const GITHUB_ZIP_MAX_UNCOMPRESSED_BYTES = 30 * 1024 * 1024;
 const GITHUB_ZIP_MAX_FILE_BYTES = 10 * 1024 * 1024;
 const GITHUB_ZIP_MAX_FILES = 200;
+const GITHUB_MANUAL_ZIP_SOURCE_PREFIX = "github-zip:";
+const GITHUB_MANUAL_ZIP_SCAN_PATHS = Object.freeze(["", "updates"]);
+const githubManualZipProjectCache = new Map();
 const GITHUB_ZIP_REQUIRED_PATHS = Object.freeze([
   "core/worker.js", "edge/worker.js", "processor/worker.js", "version", "release.json"
 ]);
@@ -5962,7 +5987,37 @@ async function syncUsageForUser(env, userId, limit = 30, minIntervalSeconds = LI
   return { processed, charged, collected, errors };
 }
 
-async function liveUsageSnapshot(request, env) {
+async function resolveCentralMiniAppLiveUsageFetchErrors(env) {
+  try {
+    await migrateSystemErrorCenterSchema(env);
+    const ts = nowIso();
+    await env.PASARGUARD_DB.prepare(`UPDATE system_error_center
+      SET status='resolved',resolved_at=?,last_seen_at=?
+      WHERE status='open' AND scope='client_central_miniapp'
+        AND error_code LIKE 'CLIENT_CENTRAL_MINIAPP_FETCH_REJECTED_%'
+        AND context_json LIKE '%/api/usage/live%'`).bind(ts,ts).run();
+  } catch (_) {}
+}
+
+function queueUserLiveUsageRefresh(env, ctx, userId) {
+  if (!ctx || typeof ctx.waitUntil !== "function") return { queued:false, mode:"unavailable" };
+  if (liveUsageNamespaceAvailable(env)) {
+    ctx.waitUntil(callLiveUsageCoordinator(env, "start").catch(async error => {
+      console.error("ui live usage coordinator error", error);
+      await reportCoreRuntimeError(env,"live_usage","UI_COORDINATOR_TRIGGER_ERROR",error,{user_id:userId});
+    }));
+    return { queued:true, mode:"durable_object" };
+  }
+  // The emergency path intentionally refreshes only one central agency. It keeps
+  // the HTTP request free of a full provider fan-out and stays below Worker limits.
+  ctx.waitUntil(syncUsageForUser(env, userId, LIVE_USAGE_UI_FALLBACK_BATCH, 0).catch(async error => {
+    console.error("ui live usage bounded fallback error", error);
+    await reportCoreRuntimeError(env,"live_usage","UI_BOUNDED_FALLBACK_ERROR",error,{user_id:userId,batch:LIVE_USAGE_UI_FALLBACK_BATCH});
+  }));
+  return { queued:true, mode:"bounded_core_fallback" };
+}
+
+async function liveUsageSnapshot(request, env, ctx = null) {
   const auth = await requireAuth(request, env);
   if (auth.response) return auth.response;
   await ensureDb(env);
@@ -5970,56 +6025,9 @@ async function liveUsageSnapshot(request, env) {
   const liveUrl = new URL(request.url);
   const forceFresh = liveUrl.searchParams.get("force") === "1";
   const settings = await getSettings(env);
-  const pricePerGb = clampInt(settings.price_per_gb, 0, 1000000000);
-  const agencyRows = await env.PASARGUARD_DB.prepare(
-    "SELECT * FROM agencies WHERE user_id=? ORDER BY created_at DESC"
-  ).bind(auth.user.id).all();
-
-  let processed = 0;
-  let charged = 0;
-  let collected = 0;
-  const errors = [];
-  const cutoff = Date.now() - LIVE_USAGE_MIN_INTERVAL_SECONDS * 1000;
-
-  if (settings.usage_sync_enabled === "true") {
-    for (const agency of agencyRows.results || []) {
-      const updatedAt = Date.parse(agency.updated_at || "") || 0;
-      if (!forceFresh && updatedAt > cutoff) continue;
-      try {
-        let usageSnapshot;
-        if (isManualAgency(agency)) {
-          const refreshed = await refreshImportedAgency(env, agency);
-          usageSnapshot = refreshed.usageSnapshot || { bytes: refreshed.usage, billing_bytes: refreshed.billingUsage };
-        } else {
-          usageSnapshot = await pasargadGetUsage(env, agency);
-        }
-        const bill = await billAgency(env, agency, usageSnapshot, pricePerGb);
-        processed += 1;
-        charged += Number(bill.charged || 0);
-        collected += Number(bill.collected || 0);
-      } catch (error) {
-        const message = cleanText(error?.message || error, 500);
-        errors.push({
-          agencyId: agency.id,
-          agencyTitle: cleanText(agency.title || agency.panel_username || agency.id, 100),
-          message,
-          code: cleanText(error?.code || (error?.status ? "HTTP_" + error.status : "USAGE_SYNC_FAILED"), 80),
-          status: Number(error?.status || 0),
-          retryable: error?.retryable === true
-        });
-        await audit(env, auth.user.id, "live_usage_sync_failed", {
-          agencyId: agency.id,
-          agencyTitle: agency.title || agency.panel_username || "",
-          code: error?.code || "",
-          status: Number(error?.status || 0),
-          message
-        });
-        await incrementSystemErrorCenter(env,"live_usage",agency.id,cleanText(error?.code||"LIVE_USAGE_SYNC_FAILED",120),message,{userId:auth.user.id,agencyId:agency.id,agencyTitle:agency.title||agency.panel_username||"",status:Number(error?.status||0),retryable:error?.retryable===true});
-      }
-    }
-  }
-
-  await reconcileUserAgencies(env, auth.user.id);
+  const refresh = forceFresh && settings.usage_sync_enabled === "true"
+    ? queueUserLiveUsageRefresh(env, ctx, auth.user.id)
+    : { queued:false, mode:"snapshot_only" };
 
   const user = await env.PASARGUARD_DB.prepare(
     "SELECT wallet_balance FROM users WHERE id=?"
@@ -6036,16 +6044,22 @@ async function liveUsageSnapshot(request, env) {
   `).bind(auth.user.id).all();
 
   const list = agencies.results || [];
+  const lastLiveUsageAt = cleanText(settings.last_live_usage_at || "", 80);
+  if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(resolveCentralMiniAppLiveUsageFetchErrors(env));
   return json({
     success: true,
     live: settings.usage_sync_enabled === "true",
     force_fresh: forceFresh,
+    refresh_queued: refresh.queued === true,
+    refresh_mode: refresh.mode,
+    poll_after_ms: refresh.queued === true ? LIVE_USAGE_UI_POLL_HINT_MS : 0,
     interval_seconds: LIVE_USAGE_MIN_INTERVAL_SECONDS,
     server_time: nowIso(),
-    processed,
-    charged,
-    collected,
-    errors,
+    last_live_usage_at: lastLiveUsageAt,
+    processed: 0,
+    charged: 0,
+    collected: 0,
+    errors: [],
     wallet_balance: Number(user?.wallet_balance || 0),
     agencies: list,
     ledger: ledger.results || [],
@@ -8356,28 +8370,116 @@ async function githubApiRequest(env, suppliedSettings, method, path, body = unde
   return data;
 }
 
-function githubBase64Text(value) {
+function githubBase64Bytes(value) {
   const compact = String(value || "").replace(/\s+/g, "");
   const binary = atob(compact);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  return bytes;
 }
-
+function githubBase64Text(value) {
+  return new TextDecoder("utf-8", { fatal: false }).decode(githubBase64Bytes(value));
+}
+function githubManualZipSourceRef(path, sha = "") {
+  return GITHUB_MANUAL_ZIP_SOURCE_PREFIX + encodeURIComponent(String(path || "")) + "@" + encodeURIComponent(String(sha || ""));
+}
+function githubParseManualZipSourceRef(value) {
+  const raw = String(value || "");
+  if (!raw.startsWith(GITHUB_MANUAL_ZIP_SOURCE_PREFIX)) return null;
+  const payload = raw.slice(GITHUB_MANUAL_ZIP_SOURCE_PREFIX.length);
+  const at = payload.lastIndexOf("@");
+  const path = decodeURIComponent(at >= 0 ? payload.slice(0, at) : payload);
+  const sha = decodeURIComponent(at >= 0 ? payload.slice(at + 1) : "");
+  return path ? { path, sha } : null;
+}
+async function githubReadRepositoryBlobBytes(env, settings, sha) {
+  const blobSha = String(sha || "").trim();
+  if (!/^[0-9a-f]{40}$/i.test(blobSha)) throw new Error("SHA فایل ZIP در GitHub معتبر نیست");
+  const data = await githubApiRequest(env, settings, "GET", githubRepoApiPath(settings.github_repo) + "/git/blobs/" + encodeURIComponent(blobSha));
+  if (String(data?.encoding || "").toLowerCase() === "base64" && data?.content) return githubBase64Bytes(data.content);
+  throw new Error("Blob فایل ZIP از GitHub دریافت نشد");
+}
+async function githubReadRepositoryBytes(env, settings, file, ref = "") {
+  const branchRef = String(ref || settings.github_branch || "main").trim();
+  const path = githubRepoApiPath(settings.github_repo) + "/contents/" +
+    String(file || "").split("/").map(encodeURIComponent).join("/") +
+    "?ref=" + encodeURIComponent(branchRef);
+  const data = await githubApiRequest(env, settings, "GET", path);
+  if (Array.isArray(data)) throw new Error("مسیر GitHub فایل نیست: " + file);
+  if (String(data?.encoding || "").toLowerCase() === "base64" && data?.content) return githubBase64Bytes(data.content);
+  if (data?.download_url) {
+    const response = await githubFetch(env, data.download_url, settings);
+    return new Uint8Array(await response.arrayBuffer());
+  }
+  if (data?.git_url) {
+    const blob = await githubFetch(env, data.git_url, settings, { api:true });
+    const parsed = await blob.json();
+    if (String(parsed?.encoding || "").toLowerCase() === "base64" && parsed?.content) return githubBase64Bytes(parsed.content);
+  }
+  throw new Error("محتوای فایل " + file + " از GitHub دریافت نشد");
+}
+async function githubListRepositoryDirectory(env, settings, directory = "", ref = "") {
+  const branchRef = String(ref || settings.github_branch || "main").trim();
+  const suffix = directory ? "/contents/" + String(directory).split("/").map(encodeURIComponent).join("/") : "/contents";
+  const path = githubRepoApiPath(settings.github_repo) + suffix + "?ref=" + encodeURIComponent(branchRef);
+  try {
+    const data = await githubApiRequest(env, settings, "GET", path);
+    return Array.isArray(data) ? data : [];
+  } catch (error) {
+    if (Number(error?.status || 0) === 404) return [];
+    throw error;
+  }
+}
+function githubVersionFromArchiveName(name) {
+  const match = String(name || "").match(/(?:^|[-_v])(\d+\.\d+\.\d+(?:\.\d+)?)/i);
+  return match ? match[1] : "0.0.0";
+}
+async function githubLoadManualZipProject(env, settings, path, sha = "") {
+  const key = normalizeGithubRepo(settings.github_repo) + "|" + String(settings.github_branch || "main") + "|" + path + "|" + sha;
+  if (githubManualZipProjectCache.has(key)) return githubManualZipProjectCache.get(key);
+  const bytes = sha && /^[0-9a-f]{40}$/i.test(String(sha))
+    ? await githubReadRepositoryBlobBytes(env,settings,sha)
+    : await githubReadRepositoryBytes(env, settings, path, settings.github_branch || "main");
+  if (bytes.byteLength > TELEGRAM_GITHUB_ZIP_MAX_BYTES) throw new Error("حجم ZIP دستی GitHub بیشتر از ۲۰ مگابایت است");
+  const files = await unzipProjectArchive(bytes);
+  const project = await validateGithubProjectFiles(files,{allowOlder:true,minVersion:"3.4.0"});
+  const enriched = { ...project, archive_path:path, archive_sha:sha, source_ref:githubManualZipSourceRef(path,sha), source:"github_manual_zip" };
+  githubManualZipProjectCache.set(key,enriched);
+  while (githubManualZipProjectCache.size > 2) githubManualZipProjectCache.delete(githubManualZipProjectCache.keys().next().value);
+  return enriched;
+}
+async function githubDiscoverManualZipProject(env, settings) {
+  const candidates = [];
+  for (const directory of GITHUB_MANUAL_ZIP_SCAN_PATHS) {
+    const rows = await githubListRepositoryDirectory(env, settings, directory, settings.github_branch || "main");
+    for (const row of rows) {
+      if (String(row?.type || "") !== "file" || !/\.zip$/i.test(String(row?.name || ""))) continue;
+      if (Number(row?.size || 0) <= 0 || Number(row?.size || 0) > TELEGRAM_GITHUB_ZIP_MAX_BYTES) continue;
+      const path = String(row.path || (directory ? directory + "/" + row.name : row.name));
+      candidates.push({ path, sha:String(row.sha || ""), name:String(row.name || ""), version:githubVersionFromArchiveName(row.name) });
+    }
+  }
+  candidates.sort((a,b) => semverCompare(b.version,a.version) || b.name.localeCompare(a.name));
+  let lastError = null;
+  for (const candidate of candidates.slice(0,5)) {
+    try { return await githubLoadManualZipProject(env, settings, candidate.path, candidate.sha); }
+    catch (error) { lastError = error; }
+  }
+  if (candidates.length && lastError) throw new Error("ZIP دستی GitHub پیدا شد اما بسته معتبر نبود: " + cleanText(lastError?.message || lastError,700));
+  return null;
+}
 async function githubReadProjectText(env, settings, file, preferredRef = "") {
   const ref = String(preferredRef || "").trim();
+  const manual = githubParseManualZipSourceRef(ref);
+  if (manual) {
+    const project = await githubLoadManualZipProject(env, settings, manual.path, manual.sha);
+    const found = project.files.find(item => item.path === String(file || ""));
+    if (!found) throw new Error("فایل " + file + " داخل ZIP دستی GitHub وجود ندارد");
+    return new TextDecoder("utf-8", { fatal:false }).decode(found.bytes);
+  }
   if (ref && String(settings.github_token || "").trim()) {
-    const path = githubRepoApiPath(settings.github_repo) + "/contents/" +
-      String(file || "").split("/").map(encodeURIComponent).join("/") +
-      "?ref=" + encodeURIComponent(ref);
-    const data = await githubApiRequest(env, settings, "GET", path);
-    if (String(data?.encoding || "").toLowerCase() === "base64" && data?.content) {
-      return githubBase64Text(data.content);
-    }
-    if (data?.download_url) {
-      return await (await githubFetch(env, data.download_url, settings)).text();
-    }
-    throw new Error("محتوای فایل " + file + " از Commit دقیق GitHub دریافت نشد");
+    const bytes = await githubReadRepositoryBytes(env, settings, file, ref);
+    return new TextDecoder("utf-8", { fatal:false }).decode(bytes);
   }
   return await (await githubFetch(env, githubRawUrl(settings.github_repo, settings.github_branch || "main", file, true), settings)).text();
 }
@@ -8386,11 +8488,14 @@ async function githubConnectionInfo(env, suppliedSettings = null) {
   const settings = suppliedSettings || await getSettings(env);
   const repoPath = githubRepoApiPath(settings.github_repo);
   const repo = await githubApiRequest(env, settings, "GET", repoPath);
-  const branch = String(settings.github_branch || repo.default_branch || "main").trim();
-  await githubApiRequest(env, settings, "GET", repoPath + "/git/ref/heads/" + encodeURIComponent(branch));
+  const defaultBranch = String(repo.default_branch || "main").trim();
+  const branch = String(settings.github_branch || defaultBranch).trim();
+  const branchRef = await githubApiRequest(env, settings, "GET", repoPath + "/git/ref/heads/" + encodeURIComponent(branch));
   return {
     repository: normalizeGithubRepo(settings.github_repo),
     branch,
+    default_branch: defaultBranch,
+    branch_sha: String(branchRef?.object?.sha || ""),
     private: Boolean(repo.private),
     push_allowed: repo?.permissions?.push !== false,
     html_url: cleanText(repo.html_url || ("https://github.com/" + normalizeGithubRepo(settings.github_repo)), 500)
@@ -8553,7 +8658,7 @@ async function unzipProjectArchive(input) {
   return files;
 }
 
-async function validateGithubProjectFiles(files) {
+async function validateGithubProjectFiles(files, options = {}) {
   const byPath = new Map(files.map(file => [file.path, file]));
   for (const required of GITHUB_ZIP_REQUIRED_PATHS) {
     if (!byPath.has(required)) throw new Error("فایل ضروری داخل ZIP وجود ندارد: " + required);
@@ -8561,7 +8666,8 @@ async function validateGithubProjectFiles(files) {
   const decoder = new TextDecoder("utf-8", { fatal: false });
   const version = decoder.decode(byPath.get("version").bytes).trim();
   if (!/^\d+(?:\.\d+){2,3}(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) throw new Error("محتوای فایل version معتبر نیست");
-  if (semverCompare(version, APP_VERSION) < 0) throw new Error("نسخه داخل ZIP قدیمی‌تر از نسخه فعال ربات است: " + version);
+  if (!options.allowOlder && semverCompare(version, APP_VERSION) < 0) throw new Error("نسخه داخل ZIP قدیمی‌تر از نسخه فعال ربات است: " + version);
+  if (options.minVersion && semverCompare(version, String(options.minVersion)) < 0) throw new Error("بسته برای نصب سرور بیش از حد قدیمی است: " + version);
   let release;
   try { release = JSON.parse(decoder.decode(byPath.get("release.json").bytes)); }
   catch (_) { throw new Error("فایل release.json معتبر نیست"); }
@@ -8590,13 +8696,14 @@ async function validateGithubProjectFiles(files) {
   return {
     files,
     version,
+    release,
     release_id: cleanText(release?.release_id || release?.build_id || version, 160) || version
   };
 }
 
-async function githubCommitProjectFiles(env, settings, project, progress = null) {
+async function githubCommitProjectFiles(env, settings, project, progress = null, targetBranch = "") {
   const repo = normalizeGithubRepo(settings.github_repo);
-  const branch = String(settings.github_branch || "main").trim();
+  const branch = String(targetBranch || settings.github_branch || "main").trim();
   const repoPath = githubRepoApiPath(repo);
   const refPath = repoPath + "/git/ref/heads/" + encodeURIComponent(branch);
   if (progress) await progress("🔗 اتصال به مخزن <code>" + botEscape(repo) + "</code> و Branch <code>" + botEscape(branch) + "</code>…");
@@ -8640,7 +8747,7 @@ async function githubCommitProjectFiles(env, settings, project, progress = null)
     };
   }
   const commit = await githubApiRequest(env, settings, "POST", repoPath + "/git/commits", {
-    message: "PasarGuard " + project.version + " — uploaded by central Telegram bot",
+    message: "BluePanel " + project.version + " — materialized package files",
     tree: treeSha,
     parents: [headSha]
   });
@@ -8813,12 +8920,29 @@ async function githubReleaseManifest(env, settings) {
     return parseRelease(await response.text(), "release.json", "");
   } catch (error) {
     if (error?.code === "GITHUB_RATE_LIMIT") throw error;
-    const versionFile = settings.github_version_file || "version";
-    const latest = (await (await githubFetch(env, githubRawUrl(repo, branch, versionFile, bucket), settings)).text()).trim();
-    if (!/^v?\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?$/.test(latest)) {
-      throw new Error("محتوای فایل version معتبر نیست: " + latest.slice(0, 50));
+    try {
+      const versionFile = settings.github_version_file || "version";
+      const latest = (await (await githubFetch(env, githubRawUrl(repo, branch, versionFile, bucket), settings)).text()).trim();
+      if (!/^v?\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?$/.test(latest)) throw new Error("محتوای فایل version معتبر نیست");
+      return { latest, release_id: latest, files: {}, hashes: {}, source: "version", ref: "" };
+    } catch (versionError) {
+      const project = await githubDiscoverManualZipProject(env, settings);
+      if (project) {
+        const release = project.release || {};
+        return {
+          latest: project.version,
+          release_id: project.release_id || project.version,
+          files: release.files && typeof release.files === "object" ? release.files : {},
+          hashes: release.sha256 && typeof release.sha256 === "object" ? release.sha256 : {},
+          source: "github_manual_zip",
+          ref: project.source_ref,
+          archive_path: project.archive_path
+        };
+      }
+      const combined = new Error("release.json و version در ریشه مخزن پیدا نشد و ZIP معتبر BluePanel نیز برای نصب وجود ندارد");
+      combined.code = "GITHUB_RELEASE_PACKAGE_NOT_FOUND";
+      throw combined;
     }
-    return { latest, release_id: latest, files: {}, hashes: {}, source: "version", ref: "" };
   }
 }
 
@@ -9144,7 +9268,7 @@ async function resolveProcessorScriptNameFromCoreBinding(settings) {
   }
 }
 
-async function triggerProcessorBusinessJobs(env, source = "core") {
+async function triggerProcessorBusinessJobs(env, source = "core", options = {}) {
   if (!env?.PROCESSOR_WORKER || typeof env.PROCESSOR_WORKER.fetch !== "function") {
     return { success: false, skipped: true, error: "PROCESSOR_WORKER متصل نیست" };
   }
@@ -9152,7 +9276,7 @@ async function triggerProcessorBusinessJobs(env, source = "core") {
   try {
     const response = await env.PROCESSOR_WORKER.fetch(new Request("https://bluepanel-processor.internal/__bluepanel/service/process?_bp_repair=" + Date.now(), {
       method: "POST",
-      headers: { "content-type": "application/json", "cache-control": "no-cache", "x-bluepanel-service-hop": "core-to-processor", "x-bluepanel-process-source": cleanText(source, 80), "x-bluepanel-live-usage-active": liveUsageNamespaceAvailable(env) ? "true" : "false" },
+      headers: { "content-type": "application/json", "cache-control": "no-cache", "x-bluepanel-service-hop": "core-to-processor", "x-bluepanel-process-source": cleanText(source, 80), "x-bluepanel-live-usage-active": options.forceUsage === true ? "false" : (liveUsageNamespaceAvailable(env) ? "true" : "false"), ...(Number.isFinite(Number(options.phase)) ? { "x-bluepanel-business-phase": String(Math.trunc(Number(options.phase))) } : {}) },
       body: "{}"
     }));
     const raw = await response.text();
@@ -17423,7 +17547,7 @@ async function centralAdminBootstrap(request, env) {
     edge: { enabled: liveEdge.connected === true && settings.edge_worker_manual_disabled !== "true", binding_detected: liveEdge.binding_detected === true, core_binding_detected: liveEdge.core_binding_detected === true, processor_binding_detected: liveEdge.processor_binding_detected === true, core_ok: liveEdge.core_ok === true, processor_ok: liveEdge.processor_ok === true, database_query_ok: liveEdge.database_query_ok !== false, mode: "service_binding", status: settings.edge_worker_manual_disabled === "true" ? "disabled" : (liveEdge.status || "disconnected"), script_name: liveEdge.script_name || settings.edge_worker_script_name || "", last_check_at: liveEdge.diagnostics?.checked_at || settings.edge_worker_last_check_at || "", last_error: settings.edge_worker_manual_disabled === "true" ? "تقسیم بار از پنل غیرفعال شده است" : (liveEdge.error || settings.edge_worker_last_error || ""), version: liveEdge.version || settings.edge_worker_last_version || "", pending_jobs: Number(liveEdge.pending_jobs || 0), last_deployed_at: settings.edge_worker_last_deployed_at || "", probe: liveEdge.probe || null, core_probe: liveEdge.core_probe || liveEdge.diagnostics?.edge_to_core || null, processor_probe: liveEdge.processor_probe || liveEdge.diagnostics?.edge_to_processor || null, runtime_bindings: liveEdge.runtime_bindings || liveEdge.diagnostics?.runtime_bindings || null, diagnostics: liveEdge.diagnostics || null },
     processor: { enabled: liveProcessor.connected === true && settings.processor_worker_manual_disabled !== "true", binding_detected: liveProcessor.binding_detected === true, core_binding_detected: liveProcessor.core_binding_detected === true, edge_binding_detected: liveProcessor.edge_binding_detected === true, core_ok: liveProcessor.core_ok === true, edge_ok: liveProcessor.edge_ok === true, database_query_ok: liveProcessor.database_query_ok !== false, mode: "service_binding", status: settings.processor_worker_manual_disabled === "true" ? "disabled" : (liveProcessor.status || "disconnected"), script_name: liveProcessor.script_name || settings.processor_worker_script_name || "", last_check_at: liveProcessor.diagnostics?.checked_at || settings.processor_worker_last_check_at || "", last_error: settings.processor_worker_manual_disabled === "true" ? "پردازش Worker سوم از پنل غیرفعال شده است" : (liveProcessor.error || settings.processor_worker_last_error || ""), version: liveProcessor.version || settings.processor_worker_last_version || "", pending_jobs: Number(liveProcessor.pending_jobs || 0), processed_jobs: Number(liveProcessor.processed_jobs || 0), last_deployed_at: settings.processor_worker_last_deployed_at || "", probe: liveProcessor.probe || null, core_probe: liveProcessor.core_probe || liveProcessor.diagnostics?.processor_to_core || null, edge_probe: liveProcessor.edge_probe || liveProcessor.diagnostics?.processor_to_edge || null, runtime_bindings: liveProcessor.runtime_bindings || liveProcessor.diagnostics?.runtime_bindings || null, diagnostics: liveProcessor.diagnostics || null },
     live_usage: liveUsage,
-    server_runtime: { enabled: Boolean(activeServer), mode: activeServer ? "server_coordinator" : "worker_fallback", active_server_id: activeServer?.id || "", heartbeat_age_ms: Number(activeServer?.heartbeat_age_ms || 0), workflow_ready: Boolean(settings.github_repo && settings.github_token), workflow_file: BLUEPANEL_SERVER_WORKFLOW_FILE },
+    server_runtime: { enabled: Boolean(activeServer), mode: activeServer ? "server_coordinator" : "worker_fallback", active_server_id: activeServer?.id || "", heartbeat_age_ms: Number(activeServer?.heartbeat_age_ms || 0), workflow_ready: Boolean(settings.github_repo && settings.github_token), workflow_file: BLUEPANEL_SERVER_WORKFLOW_FILE, package_version:settings.server_package_last_version || "", package_source:settings.server_package_last_source || "", package_ref:settings.server_package_last_ref || "", package_checked_at:settings.server_package_last_checked_at || "", package_error:settings.server_package_last_error || "", install_independent_of_worker_update:true },
     servers: serverRows.results || [],
     server_bootstrap_jobs: serverJobRows.results || [],
     health: {
@@ -17743,7 +17867,7 @@ async function centralAdminAction(request, env) {
     }
     if (action === "server_bootstrap_create") {
       const result = await bluePanelCreateServerBootstrap(request, env, auth, body);
-      return json({ success:true, message:"نصب خودکار سرور در GitHub Actions آغاز شد؛ اطلاعات SSH پس از Claim حذف می‌شود", result });
+      return json({ success:true, message:"بسته سرور نسخه " + (result?.package?.version || "جاری") + " آماده و نصب SSH آغاز شد؛ نصب به وجود نسخه جدید Worker وابسته نیست", result });
     }
     if (action === "server_disable") {
       const serverId=cleanText(body.id||"",120); const row=await env.PASARGUARD_DB.prepare("SELECT id,label FROM bluepanel_servers WHERE id=?").bind(serverId).first();
@@ -17819,7 +17943,7 @@ async function routeApiUnsafe(request, env, path, ctx = null) {
   if (path === "/api/bootstrap" && request.method === "GET") return bootstrap(request, env);
   if (path === "/api/admin/control/bootstrap" && request.method === "GET") return centralAdminBootstrap(request, env);
   if (path === "/api/admin/control/action" && request.method === "POST") return centralAdminAction(request, env);
-  if (path === "/api/usage/live" && request.method === "GET") return liveUsageSnapshot(request, env);
+  if (path === "/api/usage/live" && request.method === "GET") return liveUsageSnapshot(request, env, ctx);
   if (path === "/api/payments/blupal/create" && request.method === "POST") return createPaymentInvoice(request, env);
   if (path === "/api/payments/plisio/create" && request.method === "POST") return createPlisioPaymentInvoice(request, env, ctx);
   if (path === "/api/payments/cubepay/create" && request.method === "POST") return createCubepayPaymentInvoice(request, env, ctx);
@@ -18030,16 +18154,16 @@ function scheduleLiveUsageBootstrap(env, ctx, force = false) {
     ctx.waitUntil(callLiveUsageCoordinator(env, "start").catch(async error => { console.error("live usage bootstrap error", error); await reportCoreRuntimeError(env,'live_usage','LIVE_USAGE_BOOTSTRAP_ERROR',error); }));
     return;
   }
-  // Fail open: billing must continue even when a deployment temporarily loses
-  // the Durable Object binding. The D1 lease prevents duplicate fallback cycles.
+  // Missing binding must never fan out across every provider inside a page request.
+  // Refresh one central record and delegate downline work to Processor in separate invocations.
   ctx.waitUntil((async () => {
-    const fallback = await runLiveUsageFallbackCycle(env, "missing_binding").catch(error => ({ success:false,error:String(error?.message || error) }));
-    if (fallback?.success === false) { console.error("live usage fallback error", fallback.error || fallback); await reportCoreRuntimeError(env,'live_usage','LIVE_USAGE_FALLBACK_ERROR',new Error(String(fallback.error||'Live usage fallback failed'))); }
-    try {
-      await provisionLiveUsageDurableObject(env);
-    } catch (error) {
-      console.error("live usage auto-provision error", error); await reportCoreRuntimeError(env,'live_usage','LIVE_USAGE_PROVISION_ERROR',error);
-      try { await audit(env, null, "live_usage_auto_provision_failed", { message:String(error?.message || error), fallback_success:fallback?.success !== false }); } catch (_) {}
+    const central = await syncUsage(env, LIVE_USAGE_UI_FALLBACK_BATCH).catch(error => ({ processed:0, errors:[{ error:String(error?.message || error) }] }));
+    let processor = { success:false, skipped:true, error:"PROCESSOR_WORKER متصل نیست" };
+    if (env?.PROCESSOR_WORKER && typeof env.PROCESSOR_WORKER.fetch === "function") {
+      processor = await triggerProcessorBusinessJobs(env, "live_usage_missing_binding", { phase:1, forceUsage:true }).catch(error => ({ success:false,error:String(error?.message || error) }));
+    }
+    if (central?.errors?.length || processor?.success === false) {
+      console.error("bounded live usage fallback incomplete", { central, processor });
     }
   })());
 }
@@ -18201,7 +18325,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.4.0';
+const BLUEPANEL_CORE_VERSION = '3.4.2';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
@@ -18364,17 +18488,91 @@ async function bluePanelActiveServer(env, maxAgeMs = BLUEPANEL_SERVER_ONLINE_WIN
   const age = Date.now() - Date.parse(row.last_heartbeat_at);
   return Number.isFinite(age) && age >= 0 && age <= maxAgeMs ? { ...row, heartbeat_age_ms: age } : null;
 }
-async function bluePanelDispatchServerBootstrap(env, settings, payload) {
+async function bluePanelRepositoryPackageStatus(env, settings, branch) {
+  const required = ["version","server/install.sh","server/src/server.js","server/docker-compose.yml",".github/workflows/" + BLUEPANEL_SERVER_WORKFLOW_FILE];
+  const decoder = new TextDecoder("utf-8",{fatal:false});
+  try {
+    const versionBytes = await githubReadRepositoryBytes(env,settings,"version",branch);
+    const version = decoder.decode(versionBytes).trim();
+    if (!/^\d+(?:\.\d+){2,3}(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) throw new Error("version نامعتبر است");
+    for (const file of required.slice(1)) await githubReadRepositoryBytes(env,settings,file,branch);
+    return { ready:true,version,source:"extracted_repository",branch };
+  } catch (error) {
+    return { ready:false,version:"",source:"missing_repository_files",branch,error:cleanText(error?.message || error,700) };
+  }
+}
+async function bluePanelEnsureWorkflowOnDefaultBranch(env, settings, project, defaultBranch) {
+  const workflowPath = ".github/workflows/" + BLUEPANEL_SERVER_WORKFLOW_FILE;
+  const workflowFile = project.files.find(file => file.path === workflowPath);
+  if (!workflowFile) throw new Error("Workflow نصب داخل بسته وجود ندارد");
+  try {
+    const existing = await githubReadRepositoryBytes(env,settings,workflowPath,defaultBranch);
+    if (await sha256BytesHex(existing) === await sha256BytesHex(workflowFile.bytes)) return { updated:false,branch:defaultBranch };
+  } catch (_) {}
+  const result = await githubCommitProjectFiles(env,settings,{version:project.version,release_id:project.release_id,files:[workflowFile]},null,defaultBranch);
+  return { updated:!result.no_change,branch:defaultBranch,commit_sha:result.commit_sha };
+}
+async function bluePanelPrepareServerBootstrapSource(env, settings) {
+  const connection = await githubConnectionInfo(env,settings);
+  const branch = connection.branch || "main";
+  let status = await bluePanelRepositoryPackageStatus(env,settings,branch);
+  let project = null, materialized = null;
+  if (!status.ready) {
+    project = await githubDiscoverManualZipProject(env,settings);
+    if (!project) {
+      const error = new Error("بسته نصب سرور پیدا نشد؛ ZIP کامل BluePanel را در ریشه مخزن یا پوشه updates آپلود کنید. لازم نیست شماره نسخه از Worker بیشتر باشد");
+      error.code = "SERVER_PACKAGE_NOT_FOUND";
+      throw error;
+    }
+    const serverFiles = project.files.filter(file => file.path === "version" || file.path === "release.json" || file.path.startsWith("server/") || file.path === ".github/workflows/" + BLUEPANEL_SERVER_WORKFLOW_FILE);
+    const serverProject = { ...project, files:serverFiles };
+    materialized = await githubCommitProjectFiles(env,settings,serverProject,null,branch);
+    project = serverProject;
+    status = { ready:true,version:project.version,source:"manual_zip_materialized",branch,archive_path:project.archive_path };
+  }
+  if (!project) {
+    const files = [];
+    for (const path of [".github/workflows/" + BLUEPANEL_SERVER_WORKFLOW_FILE]) files.push({path,bytes:await githubReadRepositoryBytes(env,settings,path,branch),mode:"100644"});
+    project = { version:status.version,release_id:status.version,files };
+  }
+  const workflow = await bluePanelEnsureWorkflowOnDefaultBranch(env,settings,project,connection.default_branch || branch);
+  const targetRef = materialized?.commit_sha || connection.branch_sha || branch;
+  const prepared = {
+    ready:true,
+    version:status.version,
+    source:status.source,
+    archive_path:status.archive_path || "",
+    package_branch:branch,
+    target_ref:targetRef,
+    workflow_branch:connection.default_branch || branch,
+    workflow_updated:Boolean(workflow.updated),
+    repository:connection.repository
+  };
+  await setSettings(env,{
+    server_package_last_version:prepared.version,
+    server_package_last_source:prepared.source,
+    server_package_last_archive:prepared.archive_path,
+    server_package_last_ref:prepared.target_ref,
+    server_package_last_checked_at:nowIso(),
+    server_package_last_error:""
+  });
+  return prepared;
+}
+async function bluePanelDispatchServerBootstrap(env, settings, payload, prepared) {
   const repo = normalizeGithubRepo(settings.github_repo);
   if (!repo) throw new Error("مخزن GitHub تنظیم نشده است");
-  const branch = cleanText(settings.github_branch || "main", 120) || "main";
+  const workflowBranch = cleanText(prepared?.workflow_branch || settings.github_branch || "main",120) || "main";
+  const targetRef = cleanText(prepared?.target_ref || settings.github_branch || "main",200) || "main";
   const path = githubRepoApiPath(repo) + "/actions/workflows/" + encodeURIComponent(BLUEPANEL_SERVER_WORKFLOW_FILE) + "/dispatches";
-  await githubApiRequest(env, settings, "POST", path, { ref: branch, inputs: { core_url: payload.core_url, job_id: payload.job_id, claim_token: payload.claim_token, target_ref: branch } });
-  return { repository: repo, branch, workflow: BLUEPANEL_SERVER_WORKFLOW_FILE };
+  await githubApiRequest(env, settings, "POST", path, { ref: workflowBranch, inputs: { core_url: payload.core_url, job_id: payload.job_id, claim_token: payload.claim_token, target_ref: targetRef } });
+  return { repository: repo, branch: prepared?.package_branch || settings.github_branch || "main", target_ref:targetRef, workflow_branch:workflowBranch, workflow: BLUEPANEL_SERVER_WORKFLOW_FILE, package_version:prepared?.version || "" };
 }
 async function bluePanelCreateServerBootstrap(request, env, auth, body) {
   const settings = await getSettings(env);
   if (!String(settings.github_token || "").trim() || !String(settings.github_repo || "").trim()) throw new Error("ابتدا اتصال GitHub و توکن دارای Actions را تنظیم کنید");
+  let prepared;
+  try { prepared = await bluePanelPrepareServerBootstrapSource(env,settings); }
+  catch (error) { await setSettings(env,{server_package_last_error:cleanText(error?.message || error,900),server_package_last_checked_at:nowIso()}); throw error; }
   const encryptionSource = String(settings.app_encryption_key || "").trim();
   if (encryptionSource.length < 24 || encryptionSource === "change-me") throw new Error("APP_ENCRYPTION_KEY امن تنظیم نشده است؛ پیش از ثبت SSH کلید رمزنگاری برنامه را تنظیم کنید");
   const host = bluePanelServerSafeHost(body.ssh_host);
@@ -18395,10 +18593,10 @@ async function bluePanelCreateServerBootstrap(request, env, auth, body) {
   ).run();
   const coreUrl = new URL(request.url).origin;
   try {
-    const dispatch = await bluePanelDispatchServerBootstrap(env, settings, { core_url: coreUrl, job_id: jobId, claim_token: claimToken });
+    const dispatch = await bluePanelDispatchServerBootstrap(env, settings, { core_url: coreUrl, job_id: jobId, claim_token: claimToken }, prepared);
     await env.PASARGUARD_DB.prepare("UPDATE server_bootstrap_jobs SET status='dispatched',progress=?,updated_at=? WHERE id=?").bind("Workflow نصب در GitHub Actions آغاز شد",nowIso(),jobId).run();
-    await audit(env, auth.user.id, "server_bootstrap_dispatched", { job_id: jobId, host, port, username, auth_type: authType, domain, repository: dispatch.repository, branch: dispatch.branch });
-    return { job_id: jobId, status: "dispatched", expires_at: expiresAt, dispatch };
+    await audit(env, auth.user.id, "server_bootstrap_dispatched", { job_id: jobId, host, port, username, auth_type: authType, domain, repository: dispatch.repository, branch: dispatch.branch, package_version:prepared.version, package_source:prepared.source });
+    return { job_id: jobId, status: "dispatched", expires_at: expiresAt, package:prepared, dispatch };
   } catch (error) {
     await env.PASARGUARD_DB.prepare("UPDATE server_bootstrap_jobs SET status='failed',error=?,ssh_credential_enc=NULL,registration_code_enc=NULL,claim_token_hash=NULL,finished_at=?,updated_at=? WHERE id=?").bind(cleanText(error?.message || error,1000),nowIso(),nowIso(),jobId).run();
     throw error;
@@ -18546,7 +18744,7 @@ export default {
   async fetch(request,env,ctx){
     const url=new URL(request.url),path=url.pathname.replace(/\/+$/,'')||'/';
     try {
-      scheduleLiveUsageBootstrap(env,ctx);
+      if(path!=='/api/usage/live')scheduleLiveUsageBootstrap(env,ctx);
       scheduleRequestTriggeredUpdate(env,ctx,path);
       if(request.method==='OPTIONS') return new Response(null,{status:204,headers:{'access-control-allow-origin':'*','access-control-allow-methods':'GET,POST,OPTIONS','access-control-allow-headers':'content-type,x-telegram-init-data,x-web-session,authorization,x-bluepanel-public-origin'}});
       if(path==='/__bluepanel/internal/d1'&&request.method==='POST') return bluePanelCoreD1Rpc(request,env);
