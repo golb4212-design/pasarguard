@@ -1,15 +1,26 @@
 /* BLUEPANEL_CORE_WORKER
  * Fully split BluePanel runtime.
- * Version: 3.4.2
+ * Version: 3.4.3
  * Generated from the last stable 2.9.0 codebase.
  * Extracted application declarations: 544411 bytes.
  */
 
-const APP_VERSION = '3.4.2';
+const APP_VERSION = '3.4.3';
 
 const RESELLER_BOT_VERSION = APP_VERSION;
 
 const RELEASE_NOTES = Object.freeze({
+  "3.4.3": Object.freeze({
+    central: Object.freeze([
+      { emoji: "🧩", text: "تکمیل تابع حذف‌شده ساخت ربات زیرمجموعه و رفع خطای createDownlineResellerBot is not defined" },
+      { emoji: "🔐", text: "اعتبارسنجی توکن، مالک، موجودی، نام کاربری و تراکنش اتمیک پیش از فعال‌شدن ربات" },
+      { emoji: "🧯", text: "بستن خودکار خطای فعال پنل نماینده پس از اولین ساخت موفق زیرمجموعه" }
+    ]),
+    reseller: Object.freeze([
+      { emoji: "🤖", text: "ساخت ربات نماینده از پنل وب و فرمان تلگرام مستر دوباره فعال شد" },
+      { emoji: "💳", text: "انتقال موجودی اولیه و هزینه ساخت با چهار ردیف شفاف در گردش کیف پول ثبت می‌شود" }
+    ])
+  }),
   "3.4.2": Object.freeze({
     central: Object.freeze([
       { emoji: "🛟", text: "جداشدن بروزرسانی مصرف مینی‌اپ از Invocation پاسخ HTTP و حذف خطای Failed to fetch" },
@@ -18325,7 +18336,7 @@ export class LiveUsageCoordinator {
 }
 
 
-const BLUEPANEL_CORE_VERSION = '3.4.2';
+const BLUEPANEL_CORE_VERSION = '3.4.3';
 function bluePanelInternalHost(request) { try { return new URL(request.url).hostname.endsWith('.internal'); } catch (_) { return false; } }
 function bluePanelCoreJson(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers } }); }
 async function bluePanelCoreD1Rpc(request, env) {
