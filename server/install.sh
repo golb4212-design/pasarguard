@@ -108,7 +108,7 @@ aapanel_proxy(){
   [[ -f "$vhost" ]] || return 1
   mkdir -p "$proxy_dir"
   cat > "${proxy_dir}/bluepanel-server.conf" <<PROXY
-# BluePanel Server 3.4.0 - generated automatically
+# BluePanel Server 3.4.2 - generated automatically
 location ^~ /bluepanel-server/ {
     proxy_pass http://127.0.0.1:${PORT}/;
     proxy_http_version 1.1;
