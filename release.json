@@ -1,9 +1,9 @@
 {
-  "version": "3.4.2",
-  "release_id": "3.4.2-central-live-usage-fetch-isolation",
+  "version": "3.4.3",
+  "release_id": "3.4.3-downline-create-function-restoration",
   "architecture": "cloudflare-control-plane-plus-bluepanel-server-coordinator",
-  "title": "رفع Failed to fetch در بروزرسانی مصرف مینی‌اپ مرکزی",
-  "summary": "مسیر /api/usage/live دیگر هم‌زمان همه پنل‌ها و Providerها را در Invocation پاسخ HTTP استعلام نمی‌کند. درخواست تازه‌سازی به Durable Object یا مسیر محدود جایگزین سپرده می‌شود و مینی‌اپ ابتدا Snapshot ذخیره‌شده را نمایش می‌دهد و سپس خودکار بازخوانی می‌کند.",
+  "title": "رفع ساخت ربات زیرمجموعه در پنل نماینده",
+  "summary": "تابع createDownlineResellerBot که دو مسیر پنل وب و مدیریت تلگرامی آن را فراخوانی می‌کردند در Edge تعریف نشده بود. این نسخه تابع کامل ساخت، اعتبارسنجی، ثبت مالی اتمیک، تنظیم Webhook و بستن خودکار خطای فعال را اضافه می‌کند.",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -15,85 +15,87 @@
     "bootstrap_workflow": ".github/workflows/bluepanel-server-bootstrap.yml"
   },
   "features": [
-    "returns the central mini app usage snapshot from D1 without provider fan-out in the HTTP response invocation",
-    "queues forced refreshes through LIVE_USAGE_COORDINATOR and polls the refreshed snapshot after a short delay",
-    "uses a one-agency bounded fallback when the Durable Object binding is unavailable",
-    "delegates downline usage fallback to Processor phase 1 in a separate invocation",
-    "automatically resolves the matching client fetch-rejected error after a successful usage response",
-    "refreshes browser and service-worker cache keys to 3.4.2"
+    "restores createDownlineResellerBot for both reseller-control web actions and Telegram owner sessions",
+    "validates master ownership, active license, token uniqueness, owner uniqueness, control credentials, pricing and wallet balance",
+    "configures Telegram webhook and commands before committing financial changes",
+    "creates the child bot without an independent PasarGuard panel and inherits the master service agency",
+    "records initial balance transfer and setup fee income transparently in wallet_ledger",
+    "resolves matching CLIENT_RESELLER_CONTROL_UNHANDLED_REJECTION records after a successful creation",
+    "refreshes reseller-control browser and service-worker cache keys to 3.4.3"
   ],
   "changes": [
-    "فراخوانی مستقیم و کامل همه پنل‌ها از /api/usage/live?force=1 حذف شد.",
-    "بازشدن مینی‌اپ با Snapshot ذخیره‌شده فوری انجام می‌شود و تازه‌سازی در Invocation مستقل ادامه پیدا می‌کند.",
-    "در نبود Durable Object فقط یک پنل مرکزی در مسیر اضطراری بررسی می‌شود تا سقف Subrequest پر نشود.",
-    "تازه‌سازی خودکار اولیه یک‌بار اجباری است؛ Pollهای بعدی فقط Snapshot را می‌خوانند.",
-    "خطای CLIENT_CENTRAL_MINIAPP_FETCH_REJECTED مربوط به همین مسیر بعد از پاسخ موفق بسته می‌شود."
+    "خطای createDownlineResellerBot is not defined حذف شد.",
+    "ساخت ربات زیرمجموعه از صفحه Downline و دستور تلگرام مستر به یک تابع مشترک و کامل متصل شد.",
+    "Webhook و توکن قبل از برداشت موجودی بررسی می‌شوند تا ربات نیمه‌ساخته پولی ایجاد نشود.",
+    "موجودی اولیه از مستر منتقل و هزینه ساخت از حساب زیرمجموعه به درآمد مستر ثبت می‌شود.",
+    "خطای فعال مربوط به همین نقص پس از اولین ساخت موفق به resolved تغییر می‌کند."
   ],
   "deployment": {
-    "automatic_provisioning": "upload the ZIP to the central bot or GitHub, then deploy the cluster update normally",
+    "automatic_provisioning": "upload the ZIP to the central bot or GitHub, then deploy Core, Edge and Processor together",
     "server_install_version_rule": "server provisioning remains independent of Worker update availability; equal versions are valid",
     "compatible_manual_server_packages": [
       "3.4.0",
       "3.4.1",
-      "3.4.2"
+      "3.4.2",
+      "3.4.3"
     ],
     "db_schema_revision": "3.4.1-server-package-discovery",
     "automatic_migration": "no manual SQL is required",
-    "worker_fallback": "bounded to one central agency plus isolated Processor phase when LIVE_USAGE_COORDINATOR is unavailable"
+    "critical_component": "Edge must be deployed because the missing function is in edge/worker.js"
   },
   "security": {
-    "credentials": "no new secrets or credentials are introduced",
-    "client_error_resolution": "only matching open central mini-app fetch-rejected records for /api/usage/live are resolved",
+    "credentials": "bot tokens remain encrypted; control passwords are salted and hashed",
+    "financial_consistency": "Telegram configuration is verified before D1 wallet mutations and the D1 batch is conditional on master balance",
     "agent_network_mode": "outbound-only by default"
   },
   "validation": {
     "worker_syntax": "passed: node --check for core, edge and processor",
     "server_agent_syntax": "passed: node --check for server/src/server.js",
     "shell_syntax": "passed: bash -n for installer scripts",
-    "static_regression": "passed: live endpoint has no provider loop, route passes execution context, forced refresh is isolated, interval polling is snapshot-only",
+    "static_regression": "passed: one shared createDownlineResellerBot definition, two call sites, 30 SQL placeholders matched to 30 bind values, happy-path and insufficient-wallet mock tests passed",
     "archive_integrity": "passed: ZIP created with expected 23 entries and verified with unzip -t",
-    "live_cloudflare_test": "not run; requires the deployed Cloudflare account and production bindings"
+    "live_cloudflare_test": "not run; requires the deployed Cloudflare account, Telegram bot tokens and production bindings"
   },
   "limitations": [
-    "The first refreshed number may appear a few seconds after the initial cached snapshot.",
-    "If LIVE_USAGE_COORDINATOR is missing, central usage is intentionally refreshed one agency at a time until the binding is restored.",
-    "Production behavior must be confirmed after deploying Core, Edge and Processor 3.4.2 together."
+    "A real Telegram getMe, setWebhook and D1 transaction can only be confirmed after deployment.",
+    "The representative bot owner must have started the new Telegram bot before it can send direct messages.",
+    "Core, Edge and Processor should be deployed together, with Edge being mandatory for this fix."
   ],
   "sha256": {
-    "core": "dca8130c3787d93ab494fb44ef71bfc0ba1d955588b8df2b0361dc0f3dc34e45",
-    "edge": "de3fcd93409813c50b8063168e4aa736aef4c0e8a53fbcee26119ffeb517b740",
-    "processor": "19ddf15952330c5c9226b6b4fb75dd8a15e97af27993b4a8da95ed8c15a3bb55",
+    "core": "c5da5538f5a71bd61b4f46d1f4571ca35091c637800dd69b923122ac352f395f",
+    "edge": "9904a3180c6240656eaee10475eaa5e93cf8f3bdfabf45e0f7e7df0161cc599f",
+    "processor": "b3310bc7f3ccd74da8b39af0a3ebde70b0e68122518ac561cbbbdfe0819c6a67",
     ".github/workflows/bluepanel-server-bootstrap.yml": "daa1d429d81fd72dd13560013d4c7db0a9c09c8edfe669ad8c092ff5b6b6fc32",
-    "core/worker.js": "dca8130c3787d93ab494fb44ef71bfc0ba1d955588b8df2b0361dc0f3dc34e45",
+    "core/worker.js": "c5da5538f5a71bd61b4f46d1f4571ca35091c637800dd69b923122ac352f395f",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907",
-    "edge/worker.js": "de3fcd93409813c50b8063168e4aa736aef4c0e8a53fbcee26119ffeb517b740",
-    "processor/worker.js": "19ddf15952330c5c9226b6b4fb75dd8a15e97af27993b4a8da95ed8c15a3bb55",
+    "edge/worker.js": "9904a3180c6240656eaee10475eaa5e93cf8f3bdfabf45e0f7e7df0161cc599f",
+    "processor/worker.js": "b3310bc7f3ccd74da8b39af0a3ebde70b0e68122518ac561cbbbdfe0819c6a67",
     "server/.env.example": "545b4e30e95501ecf867213b79c3cf785ace61631dc2e6065ad01f0605887e43",
     "server/Dockerfile": "2459f001cd77cdf54db383ae7fba13503f1d56da4ecf17beb072e831a1ead1b7",
     "server/docker-compose.yml": "e591bc2f9c44cc2f4db62b0312cb4cb36abd5e83cf03317ac0e34fe949ccf9a1",
-    "server/install.sh": "44b68e20e21b73f285b29534b18f7a7eac4a47d550316355937c01bfd9d44204",
+    "server/install.sh": "5074455bdb86aa9360e37723e425ead452b269f8ee1a52a3dedb19e224f8a45c",
     "server/nginx.proxy.conf.example": "db40eb51388ce19125b26221582e79d526edfb71f9b6e4e3d1f42fa34a38f6b2",
     "server/package.json": "9aaebc8e59ae986fad6a7bfd0a720cb9fa9cdd71740626bf8c1df8634617fec3",
     "server/src/server.js": "07350f2119979d9cdaec6eb0b0d54a255704422347203d76b12287e5ad5e834d",
     "server/uninstall.sh": "d5dc8120e2c381104258f5b9685715387cea11aaf106c7a4373146cae0975558",
     "server/update.sh": "54ab0fda74bf43bcd2e14c41c5237da57f0def3394c508c8df751807478143df",
-    "version": "68ec10d7aa58f8cc2cc4636c9ea52e6fc13299fc121387bc5ce30665c576b3e6"
+    "version": "0ca6c7591d8ed155ad3e925e2279149da5c782c0b57266a016fdd862dcc647da"
   },
   "hashes": {
     ".github/workflows/bluepanel-server-bootstrap.yml": "daa1d429d81fd72dd13560013d4c7db0a9c09c8edfe669ad8c092ff5b6b6fc32",
-    "core/worker.js": "dca8130c3787d93ab494fb44ef71bfc0ba1d955588b8df2b0361dc0f3dc34e45",
+    "core/worker.js": "c5da5538f5a71bd61b4f46d1f4571ca35091c637800dd69b923122ac352f395f",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907",
-    "edge/worker.js": "de3fcd93409813c50b8063168e4aa736aef4c0e8a53fbcee26119ffeb517b740",
-    "processor/worker.js": "19ddf15952330c5c9226b6b4fb75dd8a15e97af27993b4a8da95ed8c15a3bb55",
+    "edge/worker.js": "9904a3180c6240656eaee10475eaa5e93cf8f3bdfabf45e0f7e7df0161cc599f",
+    "processor/worker.js": "b3310bc7f3ccd74da8b39af0a3ebde70b0e68122518ac561cbbbdfe0819c6a67",
     "server/.env.example": "545b4e30e95501ecf867213b79c3cf785ace61631dc2e6065ad01f0605887e43",
     "server/Dockerfile": "2459f001cd77cdf54db383ae7fba13503f1d56da4ecf17beb072e831a1ead1b7",
     "server/docker-compose.yml": "e591bc2f9c44cc2f4db62b0312cb4cb36abd5e83cf03317ac0e34fe949ccf9a1",
-    "server/install.sh": "44b68e20e21b73f285b29534b18f7a7eac4a47d550316355937c01bfd9d44204",
+    "server/install.sh": "5074455bdb86aa9360e37723e425ead452b269f8ee1a52a3dedb19e224f8a45c",
     "server/nginx.proxy.conf.example": "db40eb51388ce19125b26221582e79d526edfb71f9b6e4e3d1f42fa34a38f6b2",
     "server/package.json": "9aaebc8e59ae986fad6a7bfd0a720cb9fa9cdd71740626bf8c1df8634617fec3",
     "server/src/server.js": "07350f2119979d9cdaec6eb0b0d54a255704422347203d76b12287e5ad5e834d",
     "server/uninstall.sh": "d5dc8120e2c381104258f5b9685715387cea11aaf106c7a4373146cae0975558",
     "server/update.sh": "54ab0fda74bf43bcd2e14c41c5237da57f0def3394c508c8df751807478143df",
-    "version": "68ec10d7aa58f8cc2cc4636c9ea52e6fc13299fc121387bc5ce30665c576b3e6"
+    "version": "0ca6c7591d8ed155ad3e925e2279149da5c782c0b57266a016fdd862dcc647da"
   }
 }
