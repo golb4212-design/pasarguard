@@ -1,9 +1,9 @@
 {
-  "version": "3.4.0",
-  "release_id": "3.4.0-server-quick-bootstrap-ssh-github-actions",
+  "version": "3.4.2",
+  "release_id": "3.4.2-central-live-usage-fetch-isolation",
   "architecture": "cloudflare-control-plane-plus-bluepanel-server-coordinator",
-  "title": "نصب سریع BluePanel Server با ثبت SSH در مینی‌اپ مرکزی",
-  "summary": "مدیر فقط مشخصات SSH را در مینی‌اپ مرکزی وارد می‌کند؛ Core اطلاعات را یک‌بارمصرف و رمزگذاری‌شده به GitHub Actions تحویل می‌دهد، بسته server/ روی سرور نصب می‌شود و Agent پس از ثبت و Heartbeat وارد مدار هماهنگ‌کننده می‌شود.",
+  "title": "رفع Failed to fetch در بروزرسانی مصرف مینی‌اپ مرکزی",
+  "summary": "مسیر /api/usage/live دیگر هم‌زمان همه پنل‌ها و Providerها را در Invocation پاسخ HTTP استعلام نمی‌کند. درخواست تازه‌سازی به Durable Object یا مسیر محدود جایگزین سپرده می‌شود و مینی‌اپ ابتدا Snapshot ذخیره‌شده را نمایش می‌دهد و سپس خودکار بازخوانی می‌کند.",
   "files": {
     "core": "core/worker.js",
     "edge": "edge/worker.js",
@@ -15,97 +15,85 @@
     "bootstrap_workflow": ".github/workflows/bluepanel-server-bootstrap.yml"
   },
   "features": [
-    "adds a central dashboard SSH bootstrap form for password or unencrypted private-key authentication",
-    "dispatches a one-time GitHub Actions workflow that securely claims SSH credentials and provisions the target server",
-    "deletes encrypted SSH credentials from D1 immediately after the one-time claim",
-    "installs Docker and Docker Compose automatically on supported apt, dnf and yum distributions",
-    "detects aaPanel and optionally creates an Nginx reverse-proxy path for the server health endpoint",
-    "registers an outbound-only BluePanel Server agent and confirms heartbeat before installation is marked successful",
-    "moves maintenance scheduling to the server coordinator while retaining Worker fallback when the server is offline"
+    "returns the central mini app usage snapshot from D1 without provider fan-out in the HTTP response invocation",
+    "queues forced refreshes through LIVE_USAGE_COORDINATOR and polls the refreshed snapshot after a short delay",
+    "uses a one-agency bounded fallback when the Durable Object binding is unavailable",
+    "delegates downline usage fallback to Processor phase 1 in a separate invocation",
+    "automatically resolves the matching client fetch-rejected error after a successful usage response",
+    "refreshes browser and service-worker cache keys to 3.4.2"
   ],
   "changes": [
-    "سه جدول D1 برای سرورها، نصب‌های SSH و اجرای فازها به‌صورت خودکار ساخته می‌شود.",
-    "رمز یا کلید SSH فقط تا Claim یک‌بارمصرف به‌صورت AES-GCM نگهداری و سپس حذف می‌شود.",
-    "توکن ثبت Agent پس از اتصال از فایل env حذف می‌شود و فقط توکن دائمی اختصاصی سرور باقی می‌ماند.",
-    "Agent هر ۲۰ ثانیه Heartbeat می‌فرستد و هر نوبت فقط یک فاز نگهداری را با Invocation تازه Core اجرا می‌کند.",
-    "در نبود Heartbeat معتبر، Cron قبلی Cloudflare به‌عنوان مسیر پشتیبان ادامه می‌دهد."
+    "فراخوانی مستقیم و کامل همه پنل‌ها از /api/usage/live?force=1 حذف شد.",
+    "بازشدن مینی‌اپ با Snapshot ذخیره‌شده فوری انجام می‌شود و تازه‌سازی در Invocation مستقل ادامه پیدا می‌کند.",
+    "در نبود Durable Object فقط یک پنل مرکزی در مسیر اضطراری بررسی می‌شود تا سقف Subrequest پر نشود.",
+    "تازه‌سازی خودکار اولیه یک‌بار اجباری است؛ Pollهای بعدی فقط Snapshot را می‌خوانند.",
+    "خطای CLIENT_CENTRAL_MINIAPP_FETCH_REJECTED مربوط به همین مسیر بعد از پاسخ موفق بسته می‌شود."
   ],
   "deployment": {
-    "automatic_provisioning": "upload this ZIP through the central bot, then enter SSH details in Central Mini App > System > BluePanel Server",
-    "db_schema_revision": "3.4.0-server-bootstrap",
-    "automatic_migration": "bluepanel_servers, server_bootstrap_jobs and server_phase_runs are created automatically; no manual SQL is required",
-    "github_token_permissions": [
-      "Contents: Read and write",
-      "Actions: Read and write"
+    "automatic_provisioning": "upload the ZIP to the central bot or GitHub, then deploy the cluster update normally",
+    "server_install_version_rule": "server provisioning remains independent of Worker update availability; equal versions are valid",
+    "compatible_manual_server_packages": [
+      "3.4.0",
+      "3.4.1",
+      "3.4.2"
     ],
-    "target_server_requirements": [
-      "publicly reachable SSH",
-      "root user or passwordless sudo",
-      "supported apt/dnf/yum Linux distribution"
-    ],
-    "optional_aapanel": "when aaPanel and the supplied website domain exist, /bluepanel-server/ reverse proxy is installed automatically",
-    "worker_fallback": "enabled when no online server heartbeat is available"
+    "db_schema_revision": "3.4.1-server-package-discovery",
+    "automatic_migration": "no manual SQL is required",
+    "worker_fallback": "bounded to one central agency plus isolated Processor phase when LIVE_USAGE_COORDINATOR is unavailable"
   },
   "security": {
-    "ssh_credential_storage": "AES-GCM encrypted in D1 and deleted on first successful claim",
-    "claim_token": "single-use and valid for up to 60 minutes before claim",
-    "registration_code": "single-use and invalidated after server registration",
-    "agent_network_mode": "outbound-only by default; Docker binds the health API to 127.0.0.1",
-    "github_logs": "SSH secret, report token and registration code are masked and temporary runner files are deleted"
+    "credentials": "no new secrets or credentials are introduced",
+    "client_error_resolution": "only matching open central mini-app fetch-rejected records for /api/usage/live are resolved",
+    "agent_network_mode": "outbound-only by default"
   },
   "validation": {
     "worker_syntax": "passed: node --check for core, edge and processor",
     "server_agent_syntax": "passed: node --check for server/src/server.js",
-    "server_agent_local_contract": "passed: local mock Core confirmed registration, heartbeat, scheduled phase and manual phase execution",
-    "shell_syntax": "passed: bash -n for install, update and uninstall scripts",
-    "installer_local_contract": "passed with mocked Docker and health endpoint; env permissions and registration-code cleanup verified",
-    "workflow_yaml": "passed: YAML parse and bash -n for every workflow run block",
-    "central_miniapp": "passed: embedded script syntax, required server form IDs and no duplicate static HTML IDs",
-    "secret_lifecycle": "passed by static contract: credential ciphertext is nulled on claim and registration code hash is nulled on registration",
-    "live_ssh_install": "not run; requires a real GitHub repository, Actions permission and target SSH server",
-    "live_aapanel_proxy": "not run; requires a real aaPanel website configuration"
+    "shell_syntax": "passed: bash -n for installer scripts",
+    "static_regression": "passed: live endpoint has no provider loop, route passes execution context, forced refresh is isolated, interval polling is snapshot-only",
+    "archive_integrity": "passed: ZIP created with expected 23 entries and verified with unzip -t",
+    "live_cloudflare_test": "not run; requires the deployed Cloudflare account and production bindings"
   },
   "limitations": [
-    "The first server release acts as a coordinator and starts each maintenance phase in a fresh Core invocation; it is not yet a complete rewrite of every provider operation as native server-side code.",
-    "Password-protected private keys are not supported; use SSH password, an unencrypted deployment key, or a root/passwordless-sudo account.",
-    "The GitHub workflow must already exist on the configured branch and GitHub Actions must be enabled.",
-    "Production connectivity and installation must be confirmed after deployment."
+    "The first refreshed number may appear a few seconds after the initial cached snapshot.",
+    "If LIVE_USAGE_COORDINATOR is missing, central usage is intentionally refreshed one agency at a time until the binding is restored.",
+    "Production behavior must be confirmed after deploying Core, Edge and Processor 3.4.2 together."
   ],
   "sha256": {
-    "core": "be56058bf774e67a28c95919cce7337c1d01b9523e42219ac882658fea90d57e",
-    "edge": "f9fe9afb211ad7ac1c30fd5405270616de8bb77a6e8f23dea6debb36a0adf3fd",
-    "processor": "af592ea1748d2721f897e3b664fbaed996c67b7c3ee9fe68cad8ca206c8b38ef",
-    "core/worker.js": "be56058bf774e67a28c95919cce7337c1d01b9523e42219ac882658fea90d57e",
+    "core": "dca8130c3787d93ab494fb44ef71bfc0ba1d955588b8df2b0361dc0f3dc34e45",
+    "edge": "de3fcd93409813c50b8063168e4aa736aef4c0e8a53fbcee26119ffeb517b740",
+    "processor": "19ddf15952330c5c9226b6b4fb75dd8a15e97af27993b4a8da95ed8c15a3bb55",
+    ".github/workflows/bluepanel-server-bootstrap.yml": "daa1d429d81fd72dd13560013d4c7db0a9c09c8edfe669ad8c092ff5b6b6fc32",
+    "core/worker.js": "dca8130c3787d93ab494fb44ef71bfc0ba1d955588b8df2b0361dc0f3dc34e45",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907",
-    "edge/worker.js": "f9fe9afb211ad7ac1c30fd5405270616de8bb77a6e8f23dea6debb36a0adf3fd",
-    "processor/worker.js": "af592ea1748d2721f897e3b664fbaed996c67b7c3ee9fe68cad8ca206c8b38ef",
+    "edge/worker.js": "de3fcd93409813c50b8063168e4aa736aef4c0e8a53fbcee26119ffeb517b740",
+    "processor/worker.js": "19ddf15952330c5c9226b6b4fb75dd8a15e97af27993b4a8da95ed8c15a3bb55",
     "server/.env.example": "545b4e30e95501ecf867213b79c3cf785ace61631dc2e6065ad01f0605887e43",
     "server/Dockerfile": "2459f001cd77cdf54db383ae7fba13503f1d56da4ecf17beb072e831a1ead1b7",
     "server/docker-compose.yml": "e591bc2f9c44cc2f4db62b0312cb4cb36abd5e83cf03317ac0e34fe949ccf9a1",
-    "server/install.sh": "4fff2dfa9c1723967251916cfcff3d6529e31cf816fa613ff42591bbafa958e9",
+    "server/install.sh": "44b68e20e21b73f285b29534b18f7a7eac4a47d550316355937c01bfd9d44204",
     "server/nginx.proxy.conf.example": "db40eb51388ce19125b26221582e79d526edfb71f9b6e4e3d1f42fa34a38f6b2",
-    "server/package.json": "429da5a20de429f7582dbc7eac796a53c69a034ded7f2ae3439a2f52752529c5",
-    "server/src/server.js": "9bc0b8dc958acd47fd117b01897427aa85f8d56f86b67736d7fd00329dafd507",
+    "server/package.json": "9aaebc8e59ae986fad6a7bfd0a720cb9fa9cdd71740626bf8c1df8634617fec3",
+    "server/src/server.js": "07350f2119979d9cdaec6eb0b0d54a255704422347203d76b12287e5ad5e834d",
     "server/uninstall.sh": "d5dc8120e2c381104258f5b9685715387cea11aaf106c7a4373146cae0975558",
     "server/update.sh": "54ab0fda74bf43bcd2e14c41c5237da57f0def3394c508c8df751807478143df",
-    ".github/workflows/bluepanel-server-bootstrap.yml": "daa1d429d81fd72dd13560013d4c7db0a9c09c8edfe669ad8c092ff5b6b6fc32",
-    "version": "f5e3e93e58ffc2a20a3ca53e8025bc50d7c1dccbef4b34e2388aa9bbf8678466"
+    "version": "68ec10d7aa58f8cc2cc4636c9ea52e6fc13299fc121387bc5ce30665c576b3e6"
   },
   "hashes": {
-    "core/worker.js": "be56058bf774e67a28c95919cce7337c1d01b9523e42219ac882658fea90d57e",
+    ".github/workflows/bluepanel-server-bootstrap.yml": "daa1d429d81fd72dd13560013d4c7db0a9c09c8edfe669ad8c092ff5b6b6fc32",
+    "core/worker.js": "dca8130c3787d93ab494fb44ef71bfc0ba1d955588b8df2b0361dc0f3dc34e45",
     "core/wrangler.live-usage.example.toml": "eec49fcaf7b2e27af8890c4da5a022f125fbd109b010390c8dbd44e5aad22907",
-    "edge/worker.js": "f9fe9afb211ad7ac1c30fd5405270616de8bb77a6e8f23dea6debb36a0adf3fd",
-    "processor/worker.js": "af592ea1748d2721f897e3b664fbaed996c67b7c3ee9fe68cad8ca206c8b38ef",
+    "edge/worker.js": "de3fcd93409813c50b8063168e4aa736aef4c0e8a53fbcee26119ffeb517b740",
+    "processor/worker.js": "19ddf15952330c5c9226b6b4fb75dd8a15e97af27993b4a8da95ed8c15a3bb55",
     "server/.env.example": "545b4e30e95501ecf867213b79c3cf785ace61631dc2e6065ad01f0605887e43",
     "server/Dockerfile": "2459f001cd77cdf54db383ae7fba13503f1d56da4ecf17beb072e831a1ead1b7",
     "server/docker-compose.yml": "e591bc2f9c44cc2f4db62b0312cb4cb36abd5e83cf03317ac0e34fe949ccf9a1",
-    "server/install.sh": "4fff2dfa9c1723967251916cfcff3d6529e31cf816fa613ff42591bbafa958e9",
+    "server/install.sh": "44b68e20e21b73f285b29534b18f7a7eac4a47d550316355937c01bfd9d44204",
     "server/nginx.proxy.conf.example": "db40eb51388ce19125b26221582e79d526edfb71f9b6e4e3d1f42fa34a38f6b2",
-    "server/package.json": "429da5a20de429f7582dbc7eac796a53c69a034ded7f2ae3439a2f52752529c5",
-    "server/src/server.js": "9bc0b8dc958acd47fd117b01897427aa85f8d56f86b67736d7fd00329dafd507",
+    "server/package.json": "9aaebc8e59ae986fad6a7bfd0a720cb9fa9cdd71740626bf8c1df8634617fec3",
+    "server/src/server.js": "07350f2119979d9cdaec6eb0b0d54a255704422347203d76b12287e5ad5e834d",
     "server/uninstall.sh": "d5dc8120e2c381104258f5b9685715387cea11aaf106c7a4373146cae0975558",
     "server/update.sh": "54ab0fda74bf43bcd2e14c41c5237da57f0def3394c508c8df751807478143df",
-    ".github/workflows/bluepanel-server-bootstrap.yml": "daa1d429d81fd72dd13560013d4c7db0a9c09c8edfe669ad8c092ff5b6b6fc32",
-    "version": "f5e3e93e58ffc2a20a3ca53e8025bc50d7c1dccbef4b34e2388aa9bbf8678466"
+    "version": "68ec10d7aa58f8cc2cc4636c9ea52e6fc13299fc121387bc5ce30665c576b3e6"
   }
 }
